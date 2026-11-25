@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+<meta name="theme-color" content="#111514">
+<meta name="color-scheme" content="light dark">
+<title>qzu.</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<svg class="sprite" xmlns="http://www.w3.org/2000/svg">
+ <symbol id="logo" viewBox="0 0 157 60">
+  <path fill="currentColor" fill-rule="evenodd" d="M23 3C10 3 2 13 2 26S10 49 23 49C29 49 34 47 38 43V59H51V4H38V9C34 5 29 3 23 3ZM26 15a11 11 0 1 1 0 22 11 11 0 0 1 0-22Z"/>
+  <path fill="currentColor" d="M57 4H94V15L73 36H95V48H56V37L77 16H57Z M101 4H114V29C114 35 117 38 122 38S130 35 130 29V4H143V48H130V43C127 47 122 49 117 49C107 49 101 43 101 32Z"/>
+  <circle cx="149" cy="41" r="7" fill="#70a780"/>
+ </symbol>
+ <symbol id="avatar" viewBox="0 0 48 48"><circle cx="24" cy="24" r="24" fill="#dfe2e2"/><circle cx="24" cy="17" r="9" fill="#989e9f"/><path d="M9 37c0-8 6-13 15-13s15 5 15 13c-8 8-22 8-30 0Z" fill="#989e9f"/></symbol>
+ <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+ <symbol id="settings" viewBox="0 0 24 24"><path d="M10 3h4l.7 2.5 2 .9 2.3-1.2 2.8 2.8-1.2 2.3.9 2L24 13v3l-2.5.7-.9 2 1.2 2.3-2.8 2.8-2.3-1.2-2 .9L14 26h-4l-.7-2.5-2-.9L5 23.8l-2.8-2.8 1.2-2.3-.9-2L0 16v-3l2.5-.7.9-2L2.2 8 5 5.2l2.3 1.2 2-.9Z" transform="translate(2 0) scale(.83)"/><circle cx="12" cy="12" r="3"/></symbol>
+ <symbol id="back" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6M8 12h12"/></symbol>
+ <symbol id="send" viewBox="0 0 24 24"><path d="m3 3 18 9-18 9 3-9-3-9Zm3 9h15"/></symbol>
+ <symbol id="chat" viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8.5 8L4 21l1.5-4A8 8 0 1 1 20 11.5Z"/></symbol>
+ <symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+ <symbol id="copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+ <symbol id="qr" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M4 12h16"/></symbol>
+ <symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+ <symbol id="chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+ <symbol id="moon" viewBox="0 0 24 24"><path d="M20 15A9 9 0 0 1 9 4a9 9 0 1 0 11 11Z"/></symbol>
+ <symbol id="terminal" viewBox="0 0 24 24"><path d="m4 6 6 6-6 6M13 18h7"/></symbol>
+ <symbol id="key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3"/></symbol>
+ <symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></symbol>
+</svg>
+<main id="app" aria-label="qzu messenger">
+ <section id="chatPage" class="chat-page" hidden>
+  <aside class="sidebar">
+   <header class="sidebar-top">
+    <a class="brand" href="/chat" aria-label="qzu."><svg class="wordmark"><use href="#logo"/></svg></a>
+    <a class="icon-button accent" href="/connect" aria-label="Add contact" title="Add contact"><svg><use href="#plus"/></svg></a>
+   </header>
+   <div class="list-head"><h1>Chats</h1><span id="chatCount"></span></div>
+   <div id="contacts" class="contacts"></div>
+   <footer class="side-footer"><a class="settings-link" href="/settings"><svg><use href="#settings"/></svg><span>Settings</span></a></footer>
+  </aside>
+  <section id="thread" class="thread">
+   <div id="emptyThread" class="empty-thread">
+    <div class="empty-icon"><svg><use href="#chat"/></svg></div>
+    <h2>No chat selected</h2><a class="subtle-link" href="/connect">New chat <svg><use href="#plus"/></svg></a>
+   </div>
+   <header id="threadHeader" class="thread-header" hidden>
+    <button id="backToChats" class="icon-button mobile-back" aria-label="Back to chats"><svg><use href="#back"/></svg></button>
+    <svg class="avatar"><use href="#avatar"/></svg><div class="thread-title"><h2 id="threadName">Chat</h2></div>
+    <div class="expiry" title="Chat expires"><svg><use href="#clock"/></svg><span id="chatTimer">30:00</span></div>
+    <button id="deleteChat" class="icon-button" aria-label="Delete chat" title="Delete chat"><svg><use href="#trash"/></svg></button>
+   </header>
+   <div id="messages" class="messages" aria-label="Messages" hidden></div>
+   <form id="composer" class="composer" hidden>
+    <textarea id="message" aria-label="Message" placeholder="Message" rows="1" maxlength="2000" autocomplete="off"></textarea>
+    <button id="send" class="send-button" type="submit" aria-label="Send" disabled><svg><use href="#send"/></svg></button>
+   </form>
+  </section>
+ </section>
+ <section id="connectPage" class="sub-page" hidden>
+  <header class="page-header"><a href="/chat" class="icon-button" aria-label="Back to chats"><svg><use href="#back"/></svg></a><a class="brand" href="/chat" aria-label="qzu."><svg class="wordmark"><use href="#logo"/></svg></a><span class="header-spacer"></span></header>
+  <div class="page-content">
+   <div class="panel connect-panel">
+    <h1>Connect</h1>
+    <div id="qrBox" class="qr-box"><img id="qrImage" alt="Your invite QR code" hidden><svg id="qrPlaceholder"><use href="#qr"/></svg></div>
+    <div class="code-line"><span id="inviteCode">– – – – – –</span><button id="copyCode" class="icon-button" aria-label="Copy code" disabled><svg><use href="#copy"/></svg></button></div>
+    <div id="inviteTimer" class="invite-timer">No active code</div>
+    <button id="newCode" class="primary-button">New code</button>
+    <div class="separator"></div>
+    <form id="connectForm" class="connect-form">
+     <input id="enterCode" aria-label="Enter code" placeholder="Enter code" maxlength="6" autocapitalize="characters" autocomplete="off" spellcheck="false">
+     <button class="primary-button" type="submit">Add</button>
+    </form>
+    <button id="scanCode" class="secondary-button"><svg><use href="#qr"/></svg>Scan QR</button>
+   </div>
+  </div>
+ </section>
+ <section id="settingsPage" class="sub-page" hidden>
+  <header class="page-header"><a href="/chat" class="icon-button" aria-label="Back to chats"><svg><use href="#back"/></svg></a><a class="brand" href="/chat" aria-label="qzu."><svg class="wordmark"><use href="#logo"/></svg></a><span class="header-spacer"></span></header>
+  <div class="page-content">
+   <div class="panel settings-panel">
+    <h1>Settings</h1>
+    <div class="settings-row"><svg><use href="#moon"/></svg><span>Appearance</span><select id="theme" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+    <div class="settings-row"><svg><use href="#clock"/></svg><span>Chat lifetime</span><strong>30 min</strong></div>
+    <button class="settings-row" id="resetPin"><svg><use href="#key"/></svg><span>Request new PIN</span><svg class="chevron"><use href="#chevron"/></svg></button>
+    <button class="settings-row emergency-row" id="emergency"><svg><use href="#terminal"/></svg><span>emg.exe</span><svg class="chevron"><use href="#chevron"/></svg></button>
+   </div>
+  </div>
+ </section>
+ <div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
+</main>
+<dialog id="modal" aria-labelledby="modalTitle">
+ <div class="modal-head"><h2 id="modalTitle"></h2><button id="modalClose" class="icon-button" aria-label="Close"><svg><use href="#close"/></svg></button></div>
+ <div id="modalBody" class="modal-body"></div>
+</dialog>
+</body>
+</html>
