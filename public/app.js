@@ -1795,7 +1795,7 @@ $('submitFeedback').addEventListener('click', () => {
   const label = el('label', 'feedback-confirm');
   const check = el('input');
   check.type = 'checkbox';
-  label.append(check, el('span', '', 'Send this text to the developer via Discord.'));
+  label.append(check, el('span', '', 'Submit your Feedback'));
   const submit = button('Submit', async () => {
     if (!check.checked || !input.value.trim()) return;
     submit.disabled = true;
