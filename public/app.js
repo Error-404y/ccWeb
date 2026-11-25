@@ -1987,15 +1987,12 @@ function showInvoice(secret, initial, renewal) {
         const image = el('img', 'payment-qr');
         image.src = invoice.qr || initial.qr;
         image.alt = 'Litecoin receiving address QR code';
-        const qr = button('', () => {
-          const revealed = qr.classList.toggle('qr-revealed');
-          qr.setAttribute('aria-expanded', String(revealed));
-          qr.setAttribute('aria-label', revealed ? 'Hide payment QR' : 'Reveal payment QR');
-        }, 'payment-qr-wrap');
-        qr.setAttribute('aria-expanded', 'false');
-        qr.setAttribute('aria-label', 'Reveal payment QR');
+        const qr = el('div', 'payment-qr-wrap');
+        qr.setAttribute('aria-label', 'Payment QR not available');
+        image.alt = '';
+        image.setAttribute('aria-hidden', 'true');
         const overlay = el('span', 'payment-qr-lock');
-        overlay.append(svg('lock'), el('span', '', 'Tap to reveal'));
+        overlay.append(svg('lock'), el('span', '', 'Not Available'));
         qr.append(image, overlay);
         details.append(qr);
       }
