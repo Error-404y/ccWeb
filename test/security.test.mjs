@@ -55,7 +55,12 @@ test('Discord reset payload and Swiss time', async() => {
       ok: true
     };
   }, new Date('2026-11-25T20:00:00Z'));
-  assert.equal(payload.content, 'Time: 21:00:00\nReference: ABC123\nApplied');
+  assert.equal(payload.content, undefined);
+  assert.equal(payload.embeds.length, 1);
+  assert.equal(payload.embeds[0].title, 'emg.exe | Reset request');
+  assert.equal(payload.embeds[0].color, 0xBD0000);
+  assert.equal(payload.embeds[0].description, '```\nTime: 21:00:00\nReference: ABC123\nApplied\n```');
+  assert.deepEqual(payload.allowed_mentions, { parse: [] });
   await assert.rejects(sendReset('ABC', 'https://example.com/api/webhooks/123/test', async() => ({
     ok: true
   })));

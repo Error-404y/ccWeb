@@ -37,6 +37,11 @@
       <symbol id="qr" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M4 12h16"/></symbol>
       <symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
       <symbol id="chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+      <symbol id="info" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M12 11v5"/>
+        <circle cx="12" cy="8" r=".7" fill="currentColor" stroke="none"/>
+      </symbol>
       <symbol id="moon" viewBox="0 0 24 24"><path d="M20 15A9 9 0 0 1 9 4a9 9 0 1 0 11 11Z"/></symbol>
       <symbol id="terminal" viewBox="0 0 24 24"><path d="m4 6 6 6-6 6M13 18h7"/></symbol>
       <symbol id="key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3"/></symbol>
@@ -108,6 +113,11 @@
             <div class="settings-row"><svg><use href="#clock"/></svg><span>Chat lifetime</span><strong>30 min</strong></div>
             <button class="settings-row" id="changeLogin"><svg><use href="#key"/></svg><span>Change login PIN</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="resetPin"><svg><use href="#key"/></svg><span id="resetLabel">Request Reset</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row" id="appInfo">
+              <svg><use href="#info"/></svg>
+              <span>Info</span>
+              <svg class="chevron"><use href="#chevron"/></svg>
+            </button>
             <button class="settings-row emergency-row" id="emergency"><svg><use href="#terminal"/></svg><span>emg.exe</span><svg class="chevron"><use href="#chevron"/></svg></button>
           </div>
         </div>

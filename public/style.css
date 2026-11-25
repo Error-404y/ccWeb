@@ -1318,3 +1318,39 @@ dialog {
   width: 16px;
   height: 16px;
 }
+
+.info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding-right: 4px;
+}
+
+.info-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.info-item:first-child {
+  padding-top: 0;
+}
+
+.info-item:last-child {
+  border-bottom: 0;
+}
+
+.info-item h3 {
+  margin: 0 0 3px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.info-item p {
+  font-size: 12px;
+  line-height: 1.55;
+}

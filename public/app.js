@@ -800,6 +800,30 @@ $('scanCode').addEventListener('click', async() => {
     if (modal.open && body.contains(video)) modalError(new Error('Camera unavailable. Enter a code instead.'));
   }
 });
+$('appInfo').addEventListener('click', () => {
+  if (!unlockToken) return;
+
+  const topics = [
+    ['Notifications', 'Stay in qzu. to receive messages. No push or sound notifications.'],
+    ['Temporary chats', 'Conversations and messages are automatically removed from the server 30 minutes after the chat begins. No message backups are created.'],
+    ['Anonymous access', 'No phone number, email address or public username is required.'],
+    ['Connection codes', 'Invite codes expire after 10 minutes. Generate a new code when needed.'],
+    ['Automatic lock', 'Leaving the tab locks qzu. Unlock with your login PIN.'],
+    ['emg.exe', 'Your single-use emergency PIN removes your active chats for all participants. A replacement requires developer approval.'],
+    ['Privacy', 'Messages are not yet end-to-end encrypted. Screenshots and externally saved copies cannot be removed by qzu.']
+  ];
+
+  const list = el('div', 'info-list');
+
+  for (const [title, description] of topics) {
+    const item = el('div', 'info-item');
+    item.append(el('h3', '', title), el('p', '', description));
+    list.append(item);
+  }
+
+  show('Info', [list, button('Close', closeModal)]);
+});
+
 $('resetPin').addEventListener('click', () => {
   if (['new', 'approved'].includes(state.pinState)) {
     offerPin();
