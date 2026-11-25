@@ -1859,7 +1859,7 @@ function forgetInvoice(renewal) {
 
 function showAccess() {
   const plan = el('div', 'access-plan');
-  plan.append(el('strong', 'access-price', '€19.99'), el('span', '', 'Includes your first 5 months of access'), el('p', '', 'Then €2.99/month. 12-month initial commitment. Both prices include 19% tax.'));
+  plan.append(el('strong', 'access-price', '€19.99'), el('span', '', 'Includes your first 5 months of access'), el('p', '', 'Then €2.99/month. 12-month initial term: €40.92 total. Both prices include 19% tax.'));
   const terms = el('label', 'feedback-confirm');
   const check = el('input');
   check.type = 'checkbox';
@@ -1867,7 +1867,7 @@ function showAccess() {
   const purchase = button('Purchase qzu-Access', async () => {
     purchase.disabled = true;
     try {
-      const invoice = await api('access/invoice', { plan: 'monthly' });
+      const invoice = await api('access/invoice', { plan: 'monthly', accepted: true });
       rememberInvoice(invoice.key, false);
       showInvoice(invoice.key, invoice, false);
     } catch (error) {
@@ -1900,9 +1900,9 @@ function showKeyEntry(renewal) {
 }
 
 function showRenewal() {
-  const controls = [el('p', '', 'Renew your account for €2.99 including 19% tax. One additional month.'), button('Create renewal invoice', async () => {
+  const controls = [el('p', '', 'Renew your account for €2.99 including 19% tax. One additional month. Payment is manual.'), button('Create renewal invoice', async () => {
     try {
-      const invoice = await api('access/invoice', { plan: 'renewal' });
+      const invoice = await api('access/invoice', { plan: 'renewal', accepted: true });
       rememberInvoice(invoice.key, true);
       showInvoice(invoice.key, invoice, true);
     } catch (error) { dialogError(error); }
@@ -1933,13 +1933,13 @@ function showInvoice(secret, initial, renewal) {
     controls.replaceChildren();
     if (invoice.amount && !invoice.redeemed) {
       details.append(el('strong', 'access-price', invoice.amount + ' LTC'), el('span', '', '€' + invoice.euro + ' incl. 19% tax'), el('p', 'access-address', invoice.address), el('p', '', 'Send the exact amount. Keep your key until redemption.'));
-      if (initial?.qr && invoice.state === 'pending') {
+      if ((invoice.qr || initial?.qr) && invoice.state === 'pending') {
         const image = el('img', 'payment-qr');
-        image.src = initial.qr;
+        image.src = invoice.qr || initial.qr;
         image.alt = 'Litecoin payment QR';
         details.prepend(image);
       }
-      controls.append(button('Copy address', () => navigator.clipboard.writeText(invoice.address).catch(() => {}), 'secondary-button'), button('Copy exact amount', () => navigator.clipboard.writeText(invoice.amount).catch(() => {}), 'secondary-button'));
+      if (invoice.state === 'pending') controls.append(button('Copy address', () => navigator.clipboard.writeText(invoice.address).catch(() => {}), 'secondary-button'), button('Copy exact amount', () => navigator.clipboard.writeText(invoice.amount).catch(() => {}), 'secondary-button'));
     }
     details.append(el('p', 'access-address', 'Invoice: ' + invoice.id), el('p', 'access-address', secret));
     controls.append(button('Copy access key', () => navigator.clipboard.writeText(secret).catch(() => {}), 'secondary-button'));

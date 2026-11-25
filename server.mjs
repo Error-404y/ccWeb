@@ -97,16 +97,19 @@ app.post('/api/access/invoice', paymentRate('invoice', 5), async (req, res) => {
     if (!req.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')) || req.account.access_plan !== 'monthly') return res.status(403).json({ error: 'Unlock your monthly account first.' });
     account = req.account.id;
   } else if (plan !== 'monthly') return res.status(400).json({ error: 'Choose a plan.' });
+  if (req.body?.accepted !== true) return res.status(400).json({ error: 'Accept the displayed payment terms first.' });
   await checkNode();
   const invoice = createInvoice(db, plan, await liveRate(), account);
   const qr = await QRCode.toDataURL('litecoin:' + invoice.address + '?amount=' + invoice.amount, { width: 320, margin: 3 });
   res.json({ ...invoice, qr });
 });
 
-app.post('/api/access/status', paymentRate('invoice-status', 30), (req, res) => {
+app.post('/api/access/status', paymentRate('invoice-status', 30), async (req, res) => {
   const row = invoiceRow(db, req.body?.key);
   if (row.account && (!req.account || req.account.id !== row.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')))) return res.status(403).json({ error: 'Unlock your account.' });
-  res.json(invoiceStatus(db, req.body.key));
+  const invoice = invoiceStatus(db, req.body.key);
+  const qr = invoice.state === 'pending' && invoice.amount ? await QRCode.toDataURL('litecoin:' + invoice.address + '?amount=' + invoice.amount, { width: 320, margin: 3 }) : null;
+  res.json({ ...invoice, qr });
 });
 
 app.post('/api/access/renew', paymentRate('renewal', 10), (req, res) => {
