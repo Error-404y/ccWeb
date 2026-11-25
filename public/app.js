@@ -51,6 +51,11 @@ let qrPending = '';
 let loopStarted = false;
 let pendingInvite = '';
 let sendingMessage = false;
+let viewOnce = false;
+let mediaRoom = null;
+let mediaUrl = null;
+let recordingCleanup = null;
+const reactions = ['👍', '❤️', '😂', '🔥', '😮', '👎'];
 let privacyMode = false;
 let replyTarget = null;
 let lastTypingAt = 0;
@@ -74,6 +79,8 @@ function navigate(path, push = true) {
   if (push) history.pushState(null, '', path);
   const nextPage = routeName(location.pathname);
   if (page !== nextPage) {
+    resetOnce();
+    closeModal();
     stopTyping();
     clearReply();
     revealedMessages.clear();
@@ -118,6 +125,7 @@ function stopCamera() {
 
 function closeModal() {
   if (modalLocked) return;
+  clearMedia();
   stopCamera();
   if (modal.open) modal.close();
   body.replaceChildren();
@@ -129,6 +137,7 @@ modal.addEventListener('cancel', e => {
 });
 modal.addEventListener('close', () => {
   if (!modal.open) {
+    clearMedia();
     stopCamera();
     body.replaceChildren();
     modalLocked = false;
@@ -136,6 +145,7 @@ modal.addEventListener('close', () => {
 });
 
 function show(title, content, locked = false) {
+  clearMedia();
   stopCamera();
   modalLocked = locked;
   $('modalClose').hidden = locked;
@@ -413,6 +423,11 @@ function lock(reopen = true) {
   const old = unlockToken;
   unlockToken = null;
   sendingMessage = false;
+  resetOnce();
+  clearMedia();
+  $('connectionRequests').hidden = true;
+  $('presenceLabel').hidden = true;
+  $('presenceLabel').textContent = '';
   typingRoom = null;
   lastTypingAt = 0;
   receiptsInFlight = false;
@@ -491,6 +506,7 @@ window.visualViewport?.addEventListener('resize', setViewport);
 
 function selectRoom(id, open = true) {
   if (selected !== id) {
+    resetOnce();
     stopTyping();
     clearReply();
     revealedMessages.clear();
@@ -508,6 +524,7 @@ function renderChat() {
   const now = serverNow(), rooms = state.rooms.filter(r => r.expires > now);
   if (!rooms.some(r => r.id === selected)) {
     if (selected !== null) {
+      resetOnce();
       stopTyping();
       clearReply();
       revealedMessages.clear();
@@ -518,9 +535,10 @@ function renderChat() {
     selected = !mobile.matches ? rooms[0]?.id || null: null;
   }
   const current = rooms.find(r => r.id === selected);
+  renderRequests();
   $('chatPage').classList.toggle('thread-open', Boolean(current && mobileOpen));
   $('chatCount').textContent = rooms.length ? String(rooms.length): '';
-  const key = JSON.stringify([privacyMode, rooms.map(r => [r.id, r.memberCount, r.messages.at(-1)?.id, r.id === selected])]);
+  const key = JSON.stringify([privacyMode, rooms.map(r => [r.id, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -548,7 +566,8 @@ function renderChat() {
         name.append(badge);
       }
 
-      const preview = last ? (privacyMode ? 'Message hidden' : last.text) : r.group ? r.memberCount + ' members' : 'New chat';
+      const preview = last ? (privacyMode ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
+      if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
       content.append(name, el('span', 'contact-preview', preview));
       b.append(svg(r.admin ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       b.addEventListener('click', () => selectRoom(r.id));
@@ -566,6 +585,10 @@ function renderChat() {
   $('threadBadge').hidden = !isAdmin;
   $('threadAvatar').setAttribute('href', isAdmin ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
+  $('chatOptions').hidden = !current || isAdmin;
+  $('presenceLabel').hidden = !current || isAdmin;
+  $('presenceLabel').textContent = current?.group ? (current.activeCount || 0) + ' active' : current?.activeCount ? 'Active' : 'Offline';
+  $('presenceLabel').classList.toggle('online', Boolean(current?.activeCount));
   $('memberCount').hidden = !current?.group;
   $('memberCount').textContent = current?.group ? current.memberCount + ' members' : '';
   $('expiryProgress').hidden = !current;
@@ -584,7 +607,7 @@ function renderChat() {
   $('chatTimer').textContent = clock(current.expires - now);
   updateExpiry(current);
   const container = $('messages');
-  const ids = current.messages.map(message => message.id);
+  const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.reactions, message.reply]));
   const sameRoom = renderedRoom === current.id;
   const appendOnly = sameRoom && renderedMessages.length <= ids.length &&
     renderedMessages.every((id, index) => ids[index] === id);
@@ -633,7 +656,7 @@ function renderMessage(room, message) {
   row.id = 'message-' + message.id;
   const bubble = el('div', 'bubble');
   const content = el('div', 'message-content');
-  const masked = privacyMode && !revealedMessages.has(message.id);
+  const masked = privacyMode && !revealedMessages.has(message.id) && !message.once;
 
   if (room.group && !message.mine) content.append(el('strong', 'message-author', message.sender));
 
@@ -643,10 +666,21 @@ function renderMessage(room, message) {
     content.append(quote);
   }
 
-  content.append(el('div', 'message-text', message.text));
+  if (message.once) {
+    const label = message.opened ? 'Opened' : message.mine ? 'View-once message' : 'Open once';
+    const open = button(label, () => openOnceMessage(room, message), 'media-message');
+    open.disabled = message.mine || message.opened;
+    content.append(open);
+  } else if (message.kind === 'image' || message.kind === 'audio') {
+    const open = button(message.kind === 'image' ? 'View photo' : 'Play voice message', () => openMedia(room, message), 'media-message');
+    content.append(open);
+  } else {
+    content.append(el('div', 'message-text', message.text));
+  }
   bubble.append(content);
 
   const footer = el('div', 'message-footer');
+  if (message.edited) footer.append(el('span', 'edited-label', 'Edited'));
   footer.append(el('span', 'bubble-time', fmtTime(message.at)));
 
   if (message.mine) {
@@ -670,9 +704,9 @@ function renderMessage(room, message) {
     bubble.append(reveal);
   }
 
-  if (!room.admin) {
+  if (!room.admin && !message.once) {
     const reply = button('', () => {
-      replyTarget = { roomId: room.id, id: message.id, sender: message.sender, text: message.text };
+      replyTarget = { roomId: room.id, id: message.id, sender: message.sender, text: previewText(message) };
       renderReply();
       $('message').focus();
     }, 'reply-action');
@@ -680,6 +714,17 @@ function renderMessage(room, message) {
     reply.setAttribute('aria-label', 'Reply to message');
     reply.append(svg('reply'));
     row.append(reply);
+    const more = button('⋯', () => messageActions(room, message), 'reply-action message-more');
+    more.setAttribute('aria-label', 'Message actions');
+    row.append(more);
+    if (message.reactions?.length) {
+      const bar = el('div', 'message-reactions');
+      for (const reaction of message.reactions) {
+        const chip = button(reaction.emoji + ' ' + reaction.count, () => reactTo(room, message, reaction.emoji), 'reaction-chip' + (reaction.mine ? ' chosen' : ''));
+        bar.append(chip);
+      }
+      bubble.append(bar);
+    }
   }
 
   row.append(bubble);
@@ -743,7 +788,7 @@ async function acknowledgeMessages() {
       const view = $('messages').getBoundingClientRect();
       const rect = node?.getBoundingClientRect();
       const visible = rect && rect.bottom > view.top && rect.top < view.bottom;
-      if (room.id === selected && canReadCurrent() && visible && (!privacyMode || revealedMessages.has(message.id)) && !acknowledgedRead.has(message.id)) read.push(message.id);
+      if (room.id === selected && canReadCurrent() && visible && (!privacyMode || revealedMessages.has(message.id)) && !message.once && !acknowledgedRead.has(message.id)) read.push(message.id);
     }
     if (delivered.length || read.length) entries.push({ id: room.id, delivered, read });
   }
@@ -826,6 +871,7 @@ function render() {
 function purgeExpired() {
   if (!unlockToken) return;
   const now = serverNow();
+  if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && room.expires > now)) closeModal();
   if (state.rooms.some(r => r.expires <= now) || state.invite && state.invite.expires <= now) {
     state.rooms = state.rooms.filter(r => r.expires > now);
     if (state.invite?.expires <= now) state.invite = null;
@@ -862,6 +908,7 @@ async function refresh() {
   online = true;
   offset = data.now - Date.now();
   state = data;
+  if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom)) closeModal();
   if (page === 'chat' && !selected) {
     let target = null;
     try {
@@ -905,6 +952,7 @@ $('changeLogin').addEventListener('click', () => {
   });
 });
 $('backToChats').addEventListener('click', () => {
+  resetOnce();
   stopTyping();
   clearReply();
   revealedMessages.clear();
@@ -940,12 +988,13 @@ async function sendMessage() {
   updateSendButton();
 
   try {
-    await api('message', { id, text, replyTo: replyTarget?.roomId === id ? replyTarget.id : null });
+    await api('message', { id, text, once: viewOnce, replyTo: replyTarget?.roomId === id ? replyTarget.id : null });
 
     if (epoch !== authEpoch) return;
 
     if (selected === id && $('message').value.trim() === text) {
       $('message').value = '';
+      resetOnce();
       clearReply();
       stopTyping();
     }
@@ -1093,7 +1142,8 @@ $('connectForm').addEventListener('submit', async e => {
     await refresh();
     $('enterCode').value = '';
     navigate('/chat');
-    selectRoom(result.id);
+    if (result.id) selectRoom(result.id);
+    else info('Request sent', 'The recipient must accept your connection.');
   } catch (err) {
     showError(err);
   } finally {
@@ -1205,6 +1255,9 @@ $('appInfo').addEventListener('click', () => {
     ['emg.exe', 'Your single-use emergency PIN removes your active chats for all participants. A replacement requires developer approval.'],
     ['Groups', 'Up to 12 anonymous members. Groups expire 30 minutes after creation. New members can see existing group messages.'],
     ['Privacy mode', 'Hide chat previews and blur messages until you reveal them. This is a visual privacy feature, not encryption.'],
+    ['View once', 'Direct-chat messages can be opened once by the recipient. Screenshots and saved copies cannot be prevented.'],
+    ['Media', 'Photos and voice messages are held temporarily in server memory and expire with the chat.'],
+    ['Connections', 'New connections require approval. Blocked accounts cannot reconnect while using the same account.'],
     ['Privacy', 'Messages are not yet end-to-end encrypted. Screenshots and externally saved copies cannot be removed by qzu.']
   ];
 
@@ -1319,3 +1372,306 @@ async function loop() {
 updatePages();
 getSession();
 loop();
+
+
+function previewText(message) {
+  if (message.once) return message.opened ? 'Opened' : 'View-once message';
+  if (message.kind === 'image') return 'Photo';
+  if (message.kind === 'audio') return 'Voice message';
+  return message.text;
+}
+
+function resetOnce() {
+  viewOnce = false;
+  $('attachmentMenu').classList.remove('once-active');
+  $('message').placeholder = 'Message';
+}
+
+function renderRequests() {
+  const requests = state.requests || [];
+  const incoming = requests.filter(request => request.incoming).length;
+  $('connectionRequests').hidden = !requests.length;
+  $('connectionRequests').textContent = incoming ? 'Connection requests (' + incoming + ')' : 'Pending connections (' + requests.length + ')';
+}
+
+$('connectionRequests').addEventListener('click', () => {
+  const list = el('div', 'request-list');
+  for (const request of state.requests || []) {
+    const item = el('div', 'request-item');
+    item.append(el('strong', '', request.incoming ? (request.group ? 'Group join request' : 'Connection request') : 'Awaiting approval'));
+    if (request.incoming) {
+      const actions = el('div', 'request-actions');
+      for (const accept of [false, true]) {
+        actions.append(button(accept ? 'Accept' : 'Decline', async () => {
+          try {
+            const result = await api('connection/respond', { id: request.id, accept });
+            closeModal();
+            await refresh();
+            if (result.id) selectRoom(result.id);
+          } catch (error) { modalError(error); }
+        }, accept ? 'primary-button' : 'secondary-button'));
+      }
+      item.append(actions);
+    }
+    list.append(item);
+  }
+  show('Connections', [list, button('Close', closeModal)]);
+});
+
+async function reactTo(room, message, emoji) {
+  try {
+    await api('message/react', { id: room.id, messageId: message.id, emoji });
+    closeModal();
+    await refresh();
+  } catch (error) { showError(error); }
+}
+
+function messageActions(room, message) {
+  const picker = el('div', 'reaction-picker');
+  for (const emoji of reactions) picker.append(button(emoji, () => reactTo(room, message, emoji), 'reaction-choice'));
+  const controls = [picker];
+
+  if (message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
+    controls.push(button('Edit message', () => {
+      const input = el('textarea', 'edit-input');
+      input.value = message.text;
+      input.maxLength = 2000;
+      input.setAttribute('aria-label', 'Edit message');
+      const save = button('Save', async () => {
+        try {
+          await api('message/edit', { id: room.id, messageId: message.id, text: input.value });
+          closeModal();
+          await refresh();
+        } catch (error) { modalError(error); }
+      });
+      show('Edit message', [input, save, button('Cancel', closeModal, 'secondary-button')]);
+    }, 'secondary-button'));
+  }
+  controls.push(button('Close', closeModal, 'secondary-button'));
+  show('Message', controls);
+  mediaRoom = room.id;
+}
+
+$('chatOptions').addEventListener('click', () => {
+  const room = state.rooms.find(room => room.id === selected);
+  if (!room || room.admin) return;
+  const controls = [];
+  const confirm = member => {
+    show('Block contact?', [
+      el('p', '', 'This prevents new connections with this account and separates you from shared chats.'),
+      button('Block', async () => {
+        try {
+          await api('block', { id: room.id, member });
+          closeModal();
+          await refresh();
+        } catch (error) { modalError(error); }
+      }, 'primary-button danger-button'),
+      button('Cancel', closeModal, 'secondary-button')
+    ]);
+  };
+  if (room.group) {
+    for (const member of room.members || []) controls.push(button('Block ' + member, () => confirm(member), 'secondary-button'));
+  } else controls.push(button('Block contact', () => confirm(null), 'secondary-button'));
+  controls.push(button('Close', closeModal, 'secondary-button'));
+  show('Chat options', controls);
+});
+
+$('blockedContacts').addEventListener('click', async () => {
+  try {
+    const result = await api('blocks');
+    const list = el('div', 'request-list');
+    if (!result.blocks.length) list.append(el('p', '', 'No blocked contacts.'));
+    for (const id of result.blocks) {
+      const item = el('div', 'request-item');
+      item.append(el('strong', '', 'Contact ' + id.slice(0, 4).toUpperCase()), button('Unblock', async () => {
+        try {
+          await api('unblock', { target: id });
+          item.remove();
+        } catch (error) { modalError(error); }
+      }, 'secondary-button'));
+      list.append(item);
+    }
+    show('Blocked contacts', [list, button('Close', closeModal)]);
+  } catch (error) { showError(error); }
+});
+
+const accentChoices = ['green', 'red', 'blue', 'purple', 'gold', 'grey'];
+function applyAccent(value) {
+  if (!accentChoices.includes(value)) value = 'green';
+  document.documentElement.dataset.accent = value;
+  try { localStorage.setItem('qzu-accent', value); } catch {}
+}
+
+try { applyAccent(localStorage.getItem('qzu-accent')); } catch { applyAccent('green'); }
+$('accentSettings').addEventListener('click', () => {
+  const picker = el('div', 'accent-picker');
+  for (const color of accentChoices) {
+    const choice = button(color, () => { applyAccent(color); closeModal(); }, 'accent-choice');
+    choice.dataset.color = color;
+    picker.append(choice);
+  }
+  show('Accent color', [picker, button('Close', closeModal)]);
+});
+
+function clearMedia() {
+  if (recordingCleanup) {
+    const cleanup = recordingCleanup;
+    recordingCleanup = null;
+    cleanup();
+  }
+  if (mediaUrl) URL.revokeObjectURL(mediaUrl);
+  mediaUrl = null;
+  mediaRoom = null;
+}
+
+function showMedia(room, kind, source) {
+  const node = el(kind === 'image' ? 'img' : 'audio', 'temporary-media');
+  if (kind === 'image') node.alt = 'Temporary photo';
+  else node.controls = true;
+  show(kind === 'image' ? 'Photo' : 'Voice message', [node, button('Close', closeModal)]);
+  mediaRoom = room.id;
+  if (source instanceof Blob) {
+    mediaUrl = URL.createObjectURL(source);
+    node.src = mediaUrl;
+  } else node.src = source;
+}
+
+async function openMedia(room, message) {
+  const epoch = authEpoch;
+  try {
+    const response = await fetch('/api/media/' + encodeURIComponent(room.id) + '/' + encodeURIComponent(message.id), {
+      headers: { 'X-QZU-Unlock': unlockToken }, cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) throw new Error('Attachment unavailable.');
+    const blob = await response.blob();
+    if (epoch !== authEpoch || document.hidden || selected !== room.id) return;
+    showMedia(room, message.kind, blob);
+  } catch (error) { if (epoch === authEpoch) showError(error); }
+}
+
+async function openOnceMessage(room, message) {
+  const open = button('Open once', async () => {
+    open.disabled = true;
+    try {
+      const result = await api('message/open', { id: room.id, messageId: message.id });
+      if (selected !== room.id) return;
+      if (result.media) showMedia(room, result.kind, 'data:' + result.media.mime + ';base64,' + result.media.data);
+      else {
+        show('View once', [el('p', 'once-content', result.text), button('Close', closeModal)]);
+        mediaRoom = room.id;
+      }
+      await refresh();
+    } catch (error) { modalError(error); }
+  });
+  show('View once', [el('p', '', 'This message cannot be reopened.'), open, button('Cancel', closeModal, 'secondary-button')]);
+  mediaRoom = room.id;
+}
+
+$('attachmentMenu').addEventListener('click', () => {
+  const room = state.rooms.find(room => room.id === selected);
+  if (!room || room.admin) return;
+  const items = [button('Photo', () => choosePhoto(room), 'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
+  if (!room.group) items.unshift(button(viewOnce ? 'Disable view once' : 'Enable view once', () => {
+    viewOnce = !viewOnce;
+    $('attachmentMenu').classList.toggle('once-active', viewOnce);
+    $('message').placeholder = viewOnce ? 'View-once message' : 'Message';
+    closeModal();
+  }, 'secondary-button'));
+  show('Message options', [...items, button('Close', closeModal)]);
+});
+
+function blobData(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function sendAttachment(room, kind, blob, once) {
+  if (blob.size > 2 * 1024 * 1024 || !blob.size) throw new Error('Attachment must be under 2 MB.');
+  const epoch = authEpoch;
+  const data = await blobData(blob);
+  if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden) throw new Error('Chat unavailable.');
+  await api('message', { id: room.id, kind, mime: blob.type.split(';')[0], data, once });
+  resetOnce();
+  closeModal();
+  await refresh();
+}
+
+function choosePhoto(room) {
+  const input = el('input');
+  input.type = 'file';
+  input.accept = 'image/jpeg,image/png,image/webp';
+  const send = button(viewOnce ? 'Send once' : 'Send photo', async () => {
+    const file = input.files[0];
+    if (!file) return;
+    send.disabled = true;
+    try {
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 2 * 1024 * 1024) throw new Error('Choose a JPG, PNG or WebP image under 2 MB.');
+      await sendAttachment(room, 'image', file, viewOnce);
+    } catch (error) { send.disabled = false; modalError(error); }
+  });
+  show('Send photo', [input, el('p', '', 'JPG, PNG or WebP · Up to 2 MB'), send, button('Cancel', closeModal, 'secondary-button')]);
+  mediaRoom = room.id;
+}
+
+async function recordVoice(room) {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    info('Voice message', 'Recording is unavailable in this browser.');
+    return;
+  }
+  const label = el('p', '', 'Allow microphone access to record.');
+  const stop = button('Stop recording', () => {}, 'secondary-button');
+  stop.disabled = true;
+  show('Voice message', [label, stop, button('Cancel', closeModal, 'secondary-button')]);
+  mediaRoom = room.id;
+  const epoch = authEpoch;
+  try {
+    const microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (epoch !== authEpoch || !body.contains(label) || document.hidden) {
+      microphone.getTracks().forEach(track => track.stop());
+      return;
+    }
+    const mime = ['audio/webm', 'audio/mp4', 'audio/ogg'].find(type => MediaRecorder.isTypeSupported(type));
+    if (!mime) {
+      microphone.getTracks().forEach(track => track.stop());
+      throw new Error('No supported recording format.');
+    }
+    const recorder = new MediaRecorder(microphone, { mimeType: mime, audioBitsPerSecond: 64000 });
+    const chunks = [];
+    let cancelled = false;
+    let timer;
+    recordingCleanup = () => {
+      cancelled = true;
+      clearTimeout(timer);
+      if (recorder.state !== 'inactive') recorder.stop();
+      microphone.getTracks().forEach(track => track.stop());
+    };
+    recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+    recorder.onstop = () => {
+      clearTimeout(timer);
+      microphone.getTracks().forEach(track => track.stop());
+      recordingCleanup = null;
+      if (cancelled || epoch !== authEpoch || !body.contains(label)) return;
+      const blob = new Blob(chunks, { type: mime });
+      const send = button(viewOnce ? 'Send once' : 'Send recording', async () => {
+        send.disabled = true;
+        try { await sendAttachment(room, 'audio', blob, viewOnce); }
+        catch (error) { send.disabled = false; modalError(error); }
+      });
+      const player = el('audio', 'temporary-media');
+      player.controls = true;
+      show('Voice message', [player, send, button('Discard', closeModal, 'secondary-button')]);
+      mediaRoom = room.id;
+      mediaUrl = URL.createObjectURL(blob);
+      player.src = mediaUrl;
+    };
+    stop.disabled = false;
+    stop.addEventListener('click', () => { if (recorder.state !== 'inactive') recorder.stop(); });
+    recorder.start();
+    label.textContent = 'Recording… Maximum 60 seconds.';
+    timer = setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 60_000);
+  } catch (error) { if (epoch === authEpoch && body.contains(label)) modalError(error); }
+}

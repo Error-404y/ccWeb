@@ -65,6 +65,7 @@
             <a class="icon-button accent" href="/connect" aria-label="Add contact" title="Add contact"><svg><use href="#plus"/></svg></a>
           </header>
           <div class="list-head"><h1>Chats</h1><span id="chatCount"></span></div>
+          <button id="connectionRequests" class="request-link" hidden>Connection requests</button>
           <div id="contacts" class="contacts"></div>
           <footer class="side-footer"><a class="settings-link" href="/settings"><svg><use href="#settings"/></svg><span>Settings</span></a></footer>
         </aside>
@@ -77,11 +78,12 @@
             <button id="backToChats" class="icon-button mobile-back" aria-label="Back to chats"><svg><use href="#back"/></svg></button>
             <svg class="avatar"><use id="threadAvatar" href="#avatar"/></svg>
             <div class="thread-title">
-              <div class="thread-name-wrap"><h2 id="threadName">Chat</h2><span id="memberCount" class="member-count" hidden></span></div>
+              <div class="thread-name-wrap"><h2 id="threadName">Chat</h2><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span></div>
               <svg id="threadBadge" class="admin-badge" aria-label="Verified Admin" hidden><use href="#adminBadge"/></svg>
             </div>
             <div class="expiry" title="Chat expires"><svg><use href="#clock"/></svg><span id="chatTimer">30:00</span></div>
             <button id="groupInvite" class="icon-button" aria-label="Group invite" title="Group invite" hidden><svg><use href="#plus"/></svg></button>
+            <button id="chatOptions" class="icon-button" aria-label="Chat options" title="Chat options" hidden>⋯</button>
             <button id="deleteChat" class="icon-button" aria-label="Delete chat" title="Delete chat"><svg><use href="#trash"/></svg></button>
           </header>
           <progress id="expiryProgress" class="expiry-progress" max="1800000" value="1800000" aria-label="Remaining chat lifetime" hidden></progress>
@@ -92,6 +94,7 @@
             <button id="cancelReply" type="button" class="icon-button" aria-label="Cancel reply"><svg><use href="#close"/></svg></button>
           </div>
           <form id="composer" class="composer" hidden>
+            <button id="attachmentMenu" class="icon-button" type="button" aria-label="Message options" title="Message options"><svg><use href="#plus"/></svg></button>
             <textarea id="message" aria-label="Message" placeholder="Message" rows="1" maxlength="2000" autocomplete="off"></textarea>
             <button id="send" class="send-button" type="button" aria-label="Send" disabled><svg><use href="#sendIcon"/></svg></button>
           </form>
@@ -135,6 +138,8 @@
               <svg><use href="#eye"/></svg><span>Privacy mode</span>
               <label class="privacy-switch"><input id="privacyMode" type="checkbox" aria-label="Privacy mode"><span></span></label>
             </div>
+            <button class="settings-row" id="accentSettings"><svg><use href="#moon"/></svg><span>Accent color</span><span id="accentSample" class="accent-sample"></span></button>
+            <button class="settings-row" id="blockedContacts"><svg><use href="#lock"/></svg><span>Blocked contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="appInfo">
               <svg><use href="#info"/></svg>
               <span>Info</span>

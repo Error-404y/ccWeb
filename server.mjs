@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { Chats } from './lib/chats.mjs';
-import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent } from './lib/accounts.mjs';
+import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset } from './lib/discord.mjs';
@@ -12,7 +12,9 @@ import { startAdminSocket } from './lib/admin-socket.mjs';
 
 process.umask(0o077);
 const root = dirname(fileURLToPath(import.meta.url));
-const app = express(), chats = new Chats(), db = openAccounts();
+const app = express(), db = openAccounts();
+const blocks = connectionBlocks(db);
+const chats = new Chats(Date.now, undefined, blocks);
 const unlocks = new Unlocks(), sendingResets = new Map();
 const production = process.env.NODE_ENV === 'production';
 if (production && !process.env.PUBLIC_ORIGIN) throw new Error('Set PUBLIC_ORIGIN to your HTTPS origin.');
@@ -26,15 +28,13 @@ app.use((req, res, next) => {
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
-    'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    'Permissions-Policy': 'camera=(self), microphone=(self), geolocation=()',
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob: data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
   });
   if (production) res.set('Strict-Transport-Security', 'max-age=31536000');
   next();
 });
-app.use(express.json({
-  limit: '12kb'
-}));
+app.use((req, res, next) => express.json({ limit: req.path === '/api/message' ? '3mb' : '12kb' })(req, res, next));
 const cookieName = production ? '__Host-qzu': 'qzu';
 const readToken = req => req.headers.cookie?.split(';').map(x => x.trim()).find(x => x.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
 const limits = new Map();
@@ -162,9 +162,11 @@ app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
 });
 app.get('/api/state', (req, res) => {
   const a = req.account;
+  chats.markPresent(a.id);
   res.json({
     now: Date.now(),
     rooms: chats.snapshot(a.id),
+    requests: chats.connectionRequests(a.id),
     invite: chats.ensureInvite(a.id),
     pinState: a.pin_state,
     resetPending: Boolean(a.request),
@@ -187,16 +189,51 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   if (!/^[A-Z0-9]{6}$/.test(code)) return res.status(400).json({
     error: 'Enter a 6-character code.'
   });
-  res.json({
-    id: chats.connect(req.account.id, code)
-  });
+  res.json(chats.requestConnection(req.account.id, code));
 });
 app.post('/api/message', guard('send', 80, 60_000), (req, res) => {
-  chats.send(req.account.id, req.body?.id, req.body?.text, req.body?.replyTo ?? null);
+  chats.send(req.account.id, req.body?.id, req.body?.text, req.body?.replyTo ?? null, req.body || {});
   res.json({
     ok: true
   });
 });
+app.post('/api/connection/respond', guard('connection-response', 30, 60_000), (req, res) => {
+  res.json(chats.respondConnection(req.account.id, req.body?.id, req.body?.accept === true));
+});
+
+app.post('/api/message/edit', guard('edit', 40, 60_000), (req, res) => {
+  chats.edit(req.account.id, req.body?.id, req.body?.messageId, req.body?.text);
+  res.json({ ok: true });
+});
+
+app.post('/api/message/react', guard('react', 80, 60_000), (req, res) => {
+  chats.react(req.account.id, req.body?.id, req.body?.messageId, req.body?.emoji);
+  res.json({ ok: true });
+});
+
+app.post('/api/message/open', guard('open', 80, 60_000), (req, res) => {
+  res.json(chats.openOnce(req.account.id, req.body?.id, req.body?.messageId));
+});
+
+app.get('/api/media/:room/:message', guard('media', 120, 60_000), (req, res) => {
+  const media = chats.getMedia(req.account.id, req.params.room, req.params.message);
+  res.type(media.mime).send(media.bytes);
+});
+
+app.post('/api/block', guard('block', 20, 60_000), (req, res) => {
+  chats.blockContact(req.account.id, req.body?.id, req.body?.member);
+  res.json({ ok: true });
+});
+
+app.get('/api/blocks', (req, res) => {
+  res.json({ blocks: blocks.list(req.account.id) });
+});
+
+app.post('/api/unblock', guard('unblock', 20, 60_000), (req, res) => {
+  blocks.remove(req.account.id, req.body?.target);
+  res.json({ ok: true });
+});
+
 app.post('/api/group/create', guard('group-create', 10, 60_000), (req, res) => {
   res.json({ id: chats.createGroup(req.account.id) });
 });

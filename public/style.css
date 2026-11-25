@@ -1596,3 +1596,65 @@ dialog {
 @media (prefers-reduced-motion: reduce) {
   .typing-dots i { animation: none; }
 }
+
+.request-link {
+  margin: 5px 12px 8px;
+  padding: 10px;
+  background: var(--active);
+  color: var(--accent);
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.request-list { display: grid; gap: 10px; max-height: 45vh; overflow: auto; }
+.request-item { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
+.request-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.presence-label { display: block; font-size: 11px; color: var(--muted); }
+.presence-label.online { color: #48a66d; }
+.presence-dot { display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: #48a66d; }
+.message-more { font-size: 20px; width: 25px; }
+.message-row.mine .message-more { order: 0; }
+.message-row:not(.mine) .message-more { order: 1; }
+.reaction-picker { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.reaction-choice { font-size: 24px; padding: 7px; border-radius: 8px; background: var(--sub); }
+.message-reactions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.reaction-chip { font-size: 12px; background: var(--sub); border: 1px solid var(--line); border-radius: 20px; padding: 2px 7px; }
+.reaction-chip.chosen { border-color: var(--accent); }
+.edited-label { color: var(--muted); font-size: 10px; }
+.edit-input { min-height: 90px; resize: vertical; border: 1px solid var(--line); background: var(--sub); border-radius: 10px; padding: 10px; }
+.media-message { padding: 12px; background: var(--sub); border-radius: 8px; font-size: 13px; color: var(--accent); }
+.temporary-media { width: 100%; max-height: 52dvh; object-fit: contain; border-radius: 10px; }
+.once-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.once-active { background: var(--active); color: var(--accent); }
+.accent-sample { background: var(--accent); width: 19px; height: 19px; border-radius: 50%; }
+.accent-picker { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+.accent-choice { background: var(--swatch); color: #fff; border-radius: 10px; padding: 12px 4px; text-transform: capitalize; font-size: 12px; }
+.accent-choice[data-color=green] { --swatch: #2d7850; }
+.accent-choice[data-color=red] { --swatch: #ad3434; }
+.accent-choice[data-color=blue] { --swatch: #346cc0; }
+.accent-choice[data-color=purple] { --swatch: #7750ad; }
+.accent-choice[data-color=gold] { --swatch: #956b29; }
+.accent-choice[data-color=grey] { --swatch: #676f75; }
+:root[data-accent=red] { --accent: #ad3434; --accent-ink: #fff; --sent: #f4dddd; --active: #f3dede; }
+:root[data-accent=blue] { --accent: #346cc0; --accent-ink: #fff; --sent: #dce7fa; --active: #dce7fa; }
+:root[data-accent=purple] { --accent: #7750ad; --accent-ink: #fff; --sent: #e9dff5; --active: #e9dff5; }
+:root[data-accent=gold] { --accent: #956b29; --accent-ink: #fff; --sent: #f2e5cf; --active: #f2e5cf; }
+:root[data-accent=grey] { --accent: #676f75; --accent-ink: #fff; --sent: #e3e6e8; --active: #e3e6e8; }
+:root[data-theme=dark][data-accent=red] { --accent: #e87878; --accent-ink: #281010; --sent: #482c2c; --active: #402626; }
+:root[data-theme=dark][data-accent=blue] { --accent: #80adf0; --accent-ink: #10203a; --sent: #243d60; --active: #24344d; }
+:root[data-theme=dark][data-accent=purple] { --accent: #b397e3; --accent-ink: #251738; --sent: #3d2e54; --active: #362b49; }
+:root[data-theme=dark][data-accent=gold] { --accent: #d8b16d; --accent-ink: #2f2010; --sent: #4b3b25; --active: #433622; }
+:root[data-theme=dark][data-accent=grey] { --accent: #acb4bb; --accent-ink: #202428; --sent: #353d42; --active: #30383c; }
+@media (max-width: 700px) {
+  .composer { gap: 5px; }
+  #attachmentMenu { width: 32px; height: 42px; }
+  .thread-header { gap: 4px; }
+  #chatOptions { width: 25px; }
+  .message-row .bubble { max-width: 75%; }
+}
+@media (prefers-color-scheme: dark) { :root[data-theme=system][data-accent=red] { --accent: #e87878; --accent-ink: #281010; --sent: #482c2c; --active: #402626; } }
+@media (prefers-color-scheme: dark) { :root[data-theme=system][data-accent=blue] { --accent: #80adf0; --accent-ink: #10203a; --sent: #243d60; --active: #24344d; } }
+@media (prefers-color-scheme: dark) { :root[data-theme=system][data-accent=purple] { --accent: #b397e3; --accent-ink: #251738; --sent: #3d2e54; --active: #362b49; } }
+@media (prefers-color-scheme: dark) { :root[data-theme=system][data-accent=gold] { --accent: #d8b16d; --accent-ink: #2f2010; --sent: #4b3b25; --active: #433622; } }
+@media (prefers-color-scheme: dark) { :root[data-theme=system][data-accent=grey] { --accent: #acb4bb; --accent-ink: #202428; --sent: #353d42; --active: #30383c; } }
