@@ -20,7 +20,10 @@
     "access-reject": "node --env-file-if-exists=.env scripts/access.mjs reject",
     "mobile:prepare": "node scripts/mobile-prepare.mjs",
     "mobile:ios": "npm run mobile:prepare -- ios && npx cap open ios",
-    "mobile:android": "npm run mobile:prepare -- android && npx cap open android"
+    "mobile:android": "npm run mobile:prepare -- android && npx cap open android",
+    "admin-support-start": "node --env-file-if-exists=.env scripts/admin-support.mjs start",
+    "admin-support-list": "node --env-file-if-exists=.env scripts/admin-support.mjs list",
+    "admin-support-send": "node --env-file-if-exists=.env scripts/admin-support.mjs send"
   },
   "dependencies": {
     "express": "^5.1.0",

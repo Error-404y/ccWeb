@@ -136,7 +136,7 @@ const clock = ms => {
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 };
 const serverNow = () => Date.now() + offset;
-const nameFor = room => room.admin ? 'Admin' : (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
+const nameFor = room => room.admin ? (room.support ? 'Admin' : 'Announcements') : (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
   cancelAnimationFrame(scanFrame);
@@ -639,9 +639,11 @@ function renderChat() {
   for (const id of ['threadHeader', 'messages']) $(id).hidden = !current;
 
   const isAdmin = Boolean(current?.admin);
-  $('composer').hidden = !current || isAdmin;
-  $('adminComposer').hidden = !isAdmin;
-  $('deleteChat').hidden = isAdmin;
+  const readOnly = Boolean(current?.readOnly);
+  $('composer').hidden = !current || readOnly;
+  $('adminComposer').hidden = !readOnly;
+  $('deleteChat').hidden = readOnly;
+  $('attachmentMenu').hidden = Boolean(current?.support);
   $('threadBadge').hidden = !isAdmin;
   $('threadAvatar').setAttribute('href', isAdmin ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
@@ -766,7 +768,7 @@ function renderMessage(room, message) {
     bubble.append(reveal);
   }
 
-  if (!room.admin && !message.once && !message.deleted) {
+  if (!room.readOnly && !message.once && !message.deleted) {
     const reply = button('', () => {
       replyTarget = { roomId: room.id, id: message.id, sender: message.sender, text: previewText(message) };
       renderReply();
@@ -789,7 +791,7 @@ function renderMessage(room, message) {
     }
   }
 
-  if (!room.admin && message.once && message.mine && !message.deleted) {
+  if (!room.readOnly && message.once && message.mine && !message.deleted) {
     const more = button('⋯', () => messageActions(room, message), 'reply-action message-more');
     more.setAttribute('aria-label', 'Message actions');
     row.append(more);
@@ -825,7 +827,7 @@ function stopTyping() {
 
 function reportTyping() {
   const room = state.rooms.find(room => room.id === selected);
-  if (!unlockToken || state.invisible || page !== 'chat' || !room || room.admin || !$('message').value.trim()) {
+  if (!unlockToken || state.invisible || page !== 'chat' || !room || room.readOnly || !$('message').value.trim()) {
     stopTyping();
     return;
   }
@@ -845,7 +847,7 @@ async function acknowledgeMessages() {
   const epoch = authEpoch;
   const entries = [];
   for (const room of state.rooms) {
-    if (room.admin) continue;
+    if (room.readOnly) continue;
     const delivered = [];
     const read = [];
     for (const message of room.messages) {
@@ -1039,7 +1041,7 @@ mobile.addEventListener('change', () => {
 });
 function updateSendButton() {
   const room = state.rooms.find(room => room.id === selected);
-  $('send').disabled = !unlockToken || sendingMessage || !room || room.admin ||
+  $('send').disabled = !unlockToken || sendingMessage || !room || room.readOnly ||
     room.expires <= serverNow() || !$('message').value.trim();
 }
 
@@ -1048,7 +1050,7 @@ async function sendMessage() {
   const text = $('message').value.trim();
   const room = state.rooms.find(room => room.id === id);
 
-  if (!unlockToken || sendingMessage || !room || room.admin || room.expires <= serverNow() || !text) {
+  if (!unlockToken || sendingMessage || !room || room.readOnly || room.expires <= serverNow() || !text) {
     updateSendButton();
     return;
   }
@@ -1104,7 +1106,7 @@ $('deleteChat').addEventListener('click', () => {
   const id = selected;
   if (!id) return;
   const room = state.rooms.find(room => room.id === id);
-  if (!room || room.admin) return;
+  if (!room || room.readOnly) return;
   const leave = room.group && !room.canInvite;
   const confirm = button(leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
     confirm.disabled = true;
