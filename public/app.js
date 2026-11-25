@@ -506,6 +506,7 @@ window.visualViewport?.addEventListener('resize', setViewport);
 
 function selectRoom(id, open = true) {
   if (selected !== id) {
+    if (mediaRoom) closeModal();
     resetOnce();
     stopTyping();
     clearReply();
@@ -1445,6 +1446,7 @@ function messageActions(room, message) {
         } catch (error) { modalError(error); }
       });
       show('Edit message', [input, save, button('Cancel', closeModal, 'secondary-button')]);
+      mediaRoom = room.id;
     }, 'secondary-button'));
   }
   controls.push(button('Close', closeModal, 'secondary-button'));
@@ -1628,8 +1630,9 @@ async function recordVoice(room) {
   show('Voice message', [label, stop, button('Cancel', closeModal, 'secondary-button')]);
   mediaRoom = room.id;
   const epoch = authEpoch;
+  let microphone;
   try {
-    const microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
+    microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (epoch !== authEpoch || !body.contains(label) || document.hidden) {
       microphone.getTracks().forEach(track => track.stop());
       return;
@@ -1643,17 +1646,18 @@ async function recordVoice(room) {
     const chunks = [];
     let cancelled = false;
     let timer;
-    recordingCleanup = () => {
+    const cleanup = () => {
       cancelled = true;
       clearTimeout(timer);
       if (recorder.state !== 'inactive') recorder.stop();
       microphone.getTracks().forEach(track => track.stop());
     };
+    recordingCleanup = cleanup;
     recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
     recorder.onstop = () => {
       clearTimeout(timer);
       microphone.getTracks().forEach(track => track.stop());
-      recordingCleanup = null;
+      if (recordingCleanup === cleanup) recordingCleanup = null;
       if (cancelled || epoch !== authEpoch || !body.contains(label)) return;
       const blob = new Blob(chunks, { type: mime });
       const send = button(viewOnce ? 'Send once' : 'Send recording', async () => {
@@ -1673,5 +1677,8 @@ async function recordVoice(room) {
     recorder.start();
     label.textContent = 'Recording… Maximum 60 seconds.';
     timer = setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 60_000);
-  } catch (error) { if (epoch === authEpoch && body.contains(label)) modalError(error); }
+  } catch (error) {
+    microphone?.getTracks().forEach(track => track.stop());
+    if (epoch === authEpoch && body.contains(label)) modalError(error);
+  }
 }
