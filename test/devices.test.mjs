@@ -25,6 +25,8 @@ test('access key can activate one registered device only', () => {
   const [key, other] = complimentary(db, 2);
   const account = redeemAccess(db, key, Date.now(), 'device-a');
   assert.equal(findDeviceAccount(db, 'device-a').id, account.id);
+  const redeemed = db.prepare('SELECT redeemed_device,redeemed_account FROM access_invoices WHERE redeemed_device=?').get('device-a');
+  assert.equal(redeemed.redeemed_account, account.id);
   assert.equal(findDeviceAccount(db, 'device-b'), null);
   assert.throws(() => redeemAccess(db, key, Date.now(), 'device-b'));
   assert.throws(() => redeemAccess(db, other, Date.now(), 'device-a'));
