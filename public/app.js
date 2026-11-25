@@ -1868,8 +1868,8 @@ function showAccess() {
     purchase.disabled = true;
     try {
       const invoice = await api('access/invoice', { plan: 'monthly', accepted: true });
-      rememberInvoice(invoice.key, false);
-      showInvoice(invoice.key, invoice, false);
+      rememberInvoice(invoice.orderKey, false);
+      showInvoice(invoice.orderKey, invoice, false);
     } catch (error) {
       dialogError(error);
       purchase.disabled = !check.checked;
@@ -1877,22 +1877,22 @@ function showAccess() {
   });
   purchase.disabled = true;
   check.addEventListener('change', () => { purchase.disabled = !check.checked; });
-  const controls = [plan, el('p', '', 'Payment via Litecoin only. Network fees are separate.'), terms, purchase];
+  const controls = [plan, el('p', '', 'Payment via Litecoin only. Manually reviewed by the developer. Network fees are separate.'), terms, purchase];
   const saved = savedInvoice(false);
   if (saved) controls.push(button('Resume purchase', () => showInvoice(saved, null, false), 'secondary-button'));
-  controls.push(button('I have an access key', () => showKeyEntry(false), 'secondary-button'));
+  controls.push(button('I have a key or order reference', () => showKeyEntry(false), 'secondary-button'));
   show('qzu-Access', controls, true);
 }
 
 function showKeyEntry(renewal) {
   const input = el('input', 'access-key-input');
-  input.placeholder = 'QZU-…';
+  input.placeholder = 'QZU-… or QZO-…';
   input.autocomplete = 'off';
   input.spellcheck = false;
   input.maxLength = 52;
   const submit = button('Continue', () => {
     const value = input.value.trim().toUpperCase();
-    if (!/^QZU-[A-F0-9]{48}$/.test(value)) return dialogError(new Error('Enter a valid access key.'));
+    if (!/^QZ[UO]-[A-F0-9]{48}$/.test(value)) return dialogError(new Error('Enter a valid access key or order reference.'));
     rememberInvoice(value, renewal);
     showInvoice(value, null, renewal);
   });
@@ -1903,20 +1903,20 @@ function showRenewal() {
   const controls = [el('p', '', 'Renew your account for €2.99 including 19% tax. One additional month. Payment is manual.'), button('Create renewal invoice', async () => {
     try {
       const invoice = await api('access/invoice', { plan: 'renewal', accepted: true });
-      rememberInvoice(invoice.key, true);
-      showInvoice(invoice.key, invoice, true);
+      rememberInvoice(invoice.orderKey, true);
+      showInvoice(invoice.orderKey, invoice, true);
     } catch (error) { dialogError(error); }
   })];
   const saved = savedInvoice(true);
   if (saved) controls.push(button('Resume renewal', () => showInvoice(saved, null, true), 'secondary-button'));
-  controls.push(button('Enter renewal key', () => showKeyEntry(true), 'secondary-button'));
+  controls.push(button('Enter renewal key or reference', () => showKeyEntry(true), 'secondary-button'));
   controls.push(button(accessDue ? 'Lock' : 'Close', accessDue ? () => lock() : () => { modalLocked = false; closeModal(); }, 'secondary-button'));
   show('qzu-Access renewal', controls, true);
 }
 
 function showInvoice(secret, initial, renewal) {
   const content = el('div', 'access-invoice');
-  const status = el('strong', 'access-status', 'Checking invoice…');
+  const status = el('strong', 'access-status', 'Checking order…');
   const details = el('div', 'access-details');
   const timer = el('span', 'access-timer');
   const controls = el('div', 'access-controls');
@@ -1925,32 +1925,82 @@ function showInvoice(secret, initial, renewal) {
   const ticket = checkoutEpoch;
   let current = null;
   let busy = false;
+  let lastKey = '';
+  let serverOffset = 0;
+
+  function copy(label, value) {
+    return button(label, async () => {
+      try { await navigator.clipboard.writeText(value); }
+      catch { dialogError(new Error('Select and copy the text manually.')); }
+    }, 'secondary-button');
+  }
 
   function renderInvoice(invoice) {
     current = invoice;
-    status.textContent = invoice.redeemed ? 'Already redeemed' : invoice.state === 'confirmed' ? 'Payment confirmed' : invoice.state === 'detected' ? 'Confirmations: ' + invoice.confirmations + '/3' : invoice.state === 'late' ? 'Late payment — developer review required' : invoice.state === 'expired' ? 'Payment window expired — do not send' : 'Awaiting payment';
+    serverOffset = invoice.now - Date.now();
+    const fingerprint = JSON.stringify([invoice.state, invoice.redeemed, invoice.activationKey, invoice.reviewUntil]);
+    if (lastKey === fingerprint) return;
+    lastKey = fingerprint;
+    const approved = invoice.state === 'confirmed' && !invoice.redeemed && invoice.activationKey;
+    status.textContent = invoice.redeemed ? 'Already redeemed' : approved ? 'Payment confirmed' : invoice.state === 'submitted' ? 'Please wait until the Payment has been confirmed' : invoice.state === 'rejected' ? 'Payment not approved — contact the developer' : invoice.state === 'pending' ? 'Awaiting payment' : 'Contact the developer about this order';
     details.replaceChildren();
     controls.replaceChildren();
-    if (invoice.amount && !invoice.redeemed) {
-      details.append(el('strong', 'access-price', invoice.amount + ' LTC'), el('span', '', '€' + invoice.euro + ' incl. 19% tax'), el('p', 'access-address', invoice.address), el('p', '', 'Send the exact amount. Keep your key until redemption.'));
-      if ((invoice.qr || initial?.qr) && invoice.state === 'pending') {
+
+    if (invoice.state === 'pending' && secret.startsWith('QZO-')) {
+      details.append(el('strong', 'access-price', '€' + invoice.euro), el('span', '', 'Including 19% tax'));
+      if (invoice.qr || initial?.qr) {
         const image = el('img', 'payment-qr');
         image.src = invoice.qr || initial.qr;
-        image.alt = 'Litecoin payment QR';
-        details.prepend(image);
+        image.alt = 'Litecoin receiving address QR code';
+        details.append(image);
       }
-      if (invoice.state === 'pending') controls.append(button('Copy address', () => navigator.clipboard.writeText(invoice.address).catch(() => {}), 'secondary-button'), button('Copy exact amount', () => navigator.clipboard.writeText(invoice.amount).catch(() => {}), 'secondary-button'));
+      details.append(el('p', 'access-address', invoice.address), el('p', '', 'Scan using your Litecoin wallet. Enter the LTC equivalent of the displayed EUR price in your wallet. Network fees are separate.'));
+      controls.append(copy('Copy address', invoice.address));
+      const form = el('form', 'access-details');
+      const input = el('input', 'access-key-input');
+      input.placeholder = 'Litecoin transaction ID (TXID)';
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      input.maxLength = 64;
+      input.required = true;
+      const submit = el('button', 'primary-button', 'I have paid');
+      submit.type = 'submit';
+      submit.disabled = true;
+      input.addEventListener('input', () => { submit.disabled = !/^[a-f0-9]{64}$/i.test(input.value.trim()); });
+      form.append(input, submit);
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (busy || submit.disabled) return;
+        busy = true;
+        submit.disabled = true;
+        try {
+          const result = await api('access/submit', { key: secret, txid: input.value.trim() });
+          if (ticket === checkoutEpoch) renderInvoice(result);
+        } catch (error) {
+          if (ticket === checkoutEpoch) dialogError(error);
+          submit.disabled = false;
+        } finally { busy = false; }
+      });
+      controls.append(form);
     }
-    details.append(el('p', 'access-address', 'Invoice: ' + invoice.id), el('p', 'access-address', secret));
-    controls.append(button('Copy access key', () => navigator.clipboard.writeText(secret).catch(() => {}), 'secondary-button'));
-    if (!renewal) details.append(el('p', '', 'Gift access: give the unused confirmed key to one recipient. Anyone with the key can redeem it.'));
-    if (invoice.state === 'confirmed' && !invoice.redeemed) {
+
+    details.append(el('p', 'access-address', 'Order: ' + invoice.id));
+    if (secret.startsWith('QZO-') && !invoice.redeemed) {
+      details.append(el('p', 'access-address', secret), el('p', '', 'Save this private order reference to resume your purchase.'));
+      controls.append(copy('Copy order reference', secret));
+    }
+
+    const keyBox = el('div', 'access-key-box');
+    if (approved) {
+      keyBox.append(el('strong', '', renewal ? 'Your renewal key' : 'Your qzu-Access key'), el('p', 'access-address', invoice.activationKey));
+      controls.append(copy('Copy key', invoice.activationKey));
+      if (!renewal) details.append(el('p', '', 'You may gift this unused key to one person. Keep it private.'));
       controls.append(button(renewal ? 'Apply renewal' : 'Activate account', async () => {
         if (busy) return;
         busy = true;
         try {
           if (renewal) {
-            await api('access/renew', { key: secret });
+            await api('access/renew', { key: invoice.activationKey });
             forgetInvoice(true);
             accessDue = false;
             modalLocked = false;
@@ -1958,7 +2008,7 @@ function showInvoice(secret, initial, renewal) {
             updatePages();
             await refresh();
           } else {
-            const result = await api('session', { accessKey: secret });
+            const result = await api('session', { accessKey: invoice.activationKey });
             if (result.accessRequired) throw new Error('Activation unavailable.');
             forgetInvoice(false);
             sessionReady = true;
@@ -1966,28 +2016,44 @@ function showInvoice(secret, initial, renewal) {
             showLogin();
           }
         } catch (error) {
-          busy = false;
-          dialogError(error);
-        }
+          if (ticket === checkoutEpoch) dialogError(error);
+        } finally { busy = false; }
       }));
+    } else {
+      keyBox.append(svg('lock'), el('strong', '', invoice.redeemed ? 'Key redeemed' : 'Not Available Yet'));
     }
-    timer.textContent = invoice.state === 'pending' ? 'Payment window: ' + clock(invoice.expires - Date.now()) : '';
+    details.append(keyBox);
+    updateTimer();
   }
 
-  async function poll() {
-    if (ticket !== checkoutEpoch || document.hidden || !body.contains(content)) return;
-    try {
-      const result = await api('access/status', { key: secret }, true);
-      if (ticket !== checkoutEpoch || !body.contains(content)) return;
-      renderInvoice(result);
-    } catch (error) {
-      if (ticket === checkoutEpoch) status.textContent = errorMessage(error);
+  function updateTimer() {
+    if (!current || current.state !== 'submitted') {
+      timer.textContent = '';
+      return;
     }
-    if (ticket === checkoutEpoch && !current?.redeemed) accessTimer = setTimeout(poll, 5000);
+    const remaining = current.reviewUntil - (Date.now() + serverOffset);
+    timer.textContent = remaining > 0 ? 'Review window: ' + clock(remaining) : 'Still awaiting manual confirmation.';
+  }
+
+  let nextPoll = 0;
+  async function tick() {
+    if (ticket !== checkoutEpoch || document.hidden || !body.contains(content)) return;
+    updateTimer();
+    if (!busy && Date.now() >= nextPoll) {
+      nextPoll = Date.now() + 5000;
+      try {
+        const result = await api('access/status', { key: secret }, true);
+        if (ticket !== checkoutEpoch || !body.contains(content)) return;
+        renderInvoice(result);
+      } catch (error) {
+        if (ticket === checkoutEpoch) status.textContent = errorMessage(error);
+      }
+    }
+    if (ticket === checkoutEpoch && !current?.redeemed) accessTimer = setTimeout(tick, 1000);
   }
 
   if (initial) renderInvoice(initial);
-  poll();
+  tick();
 }
 
 $('accessSettings').addEventListener('click', () => {

@@ -1,14 +1,14 @@
 # qzu-Access
 
-- Initial access: EUR 19.99 including 19% tax, first five months included.
-- Renewal: EUR 2.99 including 19% tax per additional month.
-- Initial twelve-month price: EUR 40.92. Renewals are manual; the software does not collect debts or automatically debit a wallet.
-- Existing accounts are grandfathered. Complimentary developer keys grant lifetime access.
-- Checkout uses the configured fixed Litecoin address, unique exact amounts, and three confirmations. This is not a unique address per invoice. Wrong amounts, overpayments and late payments require manual reconciliation. Do not accept real funds before testing the full flow.
-- Use a dedicated synced Litecoin Core mainnet watch-only wallet containing the receiving address. Disable private keys in the wallet; keep RPC bound to localhost. Never put a private key or recovery phrase on the web server.
-- Configure .env using .env.example. A CoinGecko Demo API key is required for EUR quotes. A separate Discord webhook enables payment notifications.
-- New account creation is gated by default. Without RPC and exchange-rate credentials, checkout fails closed; developer-issued keys still work.
-- Paid users should keep the access key private until redemption, and keep their account browser cookie after redemption. Clearing that cookie loses access under the existing account design.
-- Start the server, then run npm run access-create -- 1 for a complimentary test key, npm run access-invoices for invoice status, or npm run access-review -- INVOICE_ID to approve a verified late payment with at least three confirmations.
-- Tax display is configurable business information, not an assessment of tax registration or reporting obligations.
-- End-to-end encryption is not included in this release.
+- EUR 19.99 including 19% tax, first five months included; EUR 2.99 per additional month including 19% tax.
+- No Litecoin node, exchange-rate API or automatic transaction detection is required.
+- The QR contains the fixed public Litecoin receiving address only. The customer enters the EUR equivalent in their wallet, sends the payment, then submits the transaction ID.
+- The 30-minute review countdown begins on submission. Expiration never grants access. Approval may arrive sooner or later. Keep the private QZO order reference to resume.
+- Inspect your own wallet and verify the destination, amount, exchange rate, confirmations and that the transaction is not already used before approval. A public transaction ID alone is not proof of payer ownership; resolve disputes manually. There is no automatic conversion, refund, payment verification or recurring debit.
+- Run npm run access-invoices to list orders and submitted transaction IDs. Run npm run access-approve -- INVOICE_ID only after verifying funds. Run npm run access-reject -- INVOICE_ID to reject an invalid submission.
+- Approval generates a separate random single-use QZU activation key that the customer retrieves on the waiting screen. Never send an order reference or activation key to someone you do not trust.
+- The private developer socket is the only approval interface. The external admin website is not implemented.
+- Existing accounts and previously confirmed keys remain valid. Old unconfirmed automatic-checkout orders may require manual reconciliation by the developer.
+- The optional QZU_PAYMENT_WEBHOOK sends a notification after approval. Existing feedback and reset webhooks remain unchanged.
+- npm run access-create -- 1 creates a complimentary lifetime key.
+- Keep .env and the SQLite database private. The existing account design does not recover accounts after losing the browser cookie. Test before accepting payments.

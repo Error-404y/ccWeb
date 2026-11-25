@@ -1685,3 +1685,17 @@ dialog {
 .access-invoice { max-height: 62dvh; overflow-y: auto; }
 .payment-qr { width: 145px; height: 145px; background: #fff; border-radius: 8px; justify-self: center; }
 .access-key-input { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--sub); font-size: 14px; }
+
+.access-key-box {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 7px;
+  background: var(--sub);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  color: var(--muted);
+}
+.access-key-box .access-address { color: var(--ink); }
+.access-status { font-size: 14px; }

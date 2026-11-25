@@ -5,7 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { Chats } from './lib/chats.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
-import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, applyRenewal, liveRate, checkNode, scanPayments } from './lib/access.mjs';
+import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, applyRenewal, submitPayment } from './lib/access.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
 import { handleAdminCommand } from './lib/admin.mjs';
@@ -75,10 +75,9 @@ const accessRequired = process.env.QZU_ACCESS_REQUIRED !== 'false';
 const paymentRate = (name, max) => (req, res, next) => rate(name + ':' + req.ip, max, 60_000) ? next() : res.status(429).json({ error: 'Try again shortly.' });
 let paymentBusy = false;
 async function paymentLoop() {
-  if (paymentBusy || !process.env.QZU_LTC_RPC_USER) return;
+  if (paymentBusy || !process.env.QZU_PAYMENT_WEBHOOK) return;
   paymentBusy = true;
   try {
-    await scanPayments(db);
     if (process.env.QZU_PAYMENT_WEBHOOK) {
       const rows = db.prepare("SELECT id,plan,sats,eur_cents FROM access_invoices WHERE state='confirmed' AND notified=0 LIMIT 20").all();
       for (const row of rows) {
@@ -98,9 +97,8 @@ app.post('/api/access/invoice', paymentRate('invoice', 5), async (req, res) => {
     account = req.account.id;
   } else if (plan !== 'monthly') return res.status(400).json({ error: 'Choose a plan.' });
   if (req.body?.accepted !== true) return res.status(400).json({ error: 'Accept the displayed payment terms first.' });
-  await checkNode();
-  const invoice = createInvoice(db, plan, await liveRate(), account);
-  const qr = await QRCode.toDataURL('litecoin:' + invoice.address + '?amount=' + invoice.amount, { width: 320, margin: 3 });
+  const invoice = createInvoice(db, plan, account);
+  const qr = await QRCode.toDataURL('litecoin:' + invoice.address, { width: 320, margin: 3 });
   res.json({ ...invoice, qr });
 });
 
@@ -108,8 +106,14 @@ app.post('/api/access/status', paymentRate('invoice-status', 30), async (req, re
   const row = invoiceRow(db, req.body?.key);
   if (row.account && (!req.account || req.account.id !== row.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')))) return res.status(403).json({ error: 'Unlock your account.' });
   const invoice = invoiceStatus(db, req.body.key);
-  const qr = invoice.state === 'pending' && invoice.amount ? await QRCode.toDataURL('litecoin:' + invoice.address + '?amount=' + invoice.amount, { width: 320, margin: 3 }) : null;
+  const qr = invoice.state === 'pending' ? await QRCode.toDataURL('litecoin:' + invoice.address, { width: 320, margin: 3 }) : null;
   res.json({ ...invoice, qr });
+});
+
+app.post('/api/access/submit', paymentRate('payment-submit', 8), (req, res) => {
+  const row = invoiceRow(db, req.body?.key);
+  if (row.account && (!req.account || req.account.id !== row.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')))) return res.status(403).json({ error: 'Unlock your account.' });
+  res.json(submitPayment(db, req.body.key, req.body.txid));
 });
 
 app.post('/api/access/renew', paymentRate('renewal', 10), (req, res) => {
