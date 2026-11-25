@@ -1407,3 +1407,7 @@ dialog {
 .emg-actions .secondary-button {
   font-size: 14px;
 }
+
+.send-button svg {
+  pointer-events: none;
+}

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Chats, INVITE_TTL, CHAT_TTL } from '../lib/chats.mjs';
 import { openAccounts, createAccount, issuePin, usePin, requestReset, approveReset, findAccount } from '../lib/accounts.mjs';
 
-test('active codes unique, renewal invalidates old code, expiry is manual', () => {
+test('active codes unique, renewal invalidates old code, expired codes cannot connect', () => {
   let now = 0;
   const seq = ['ABC234', 'ABC234', 'DEF567', 'GHI789'];
   const s = new Chats(() => now, () => seq.shift());
@@ -68,4 +68,26 @@ test('PIN has a persistent retry lock', () => {
   assert.equal(usePin(db, a.id, pin, 101), 'locked');
   assert.equal(usePin(db, a.id, pin, 100 + 15 * 60_000), 'ok');
   db.close();
+});
+
+test('active sessions receive a code automatically, renewed every ten minutes', () => {
+  let now = 0;
+  const codes = ['ABC234', 'ABC234', 'DEF567', 'GHI789'];
+  const chats = new Chats(() => now, () => codes.shift());
+
+  const first = chats.ensureInvite('a');
+  assert.equal(first.code, 'ABC234');
+  assert.equal(chats.ensureInvite('a').code, first.code);
+
+  now = INVITE_TTL - 1;
+  assert.equal(chats.ensureInvite('a').code, first.code);
+
+  now = INVITE_TTL;
+  const renewed = chats.ensureInvite('a');
+  assert.equal(renewed.code, 'DEF567');
+  assert.equal(renewed.expires, now + INVITE_TTL);
+  assert.throws(() => chats.connect('b', first.code));
+
+  const other = chats.ensureInvite('b');
+  assert.notEqual(other.code, renewed.code);
 });

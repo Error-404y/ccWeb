@@ -165,7 +165,7 @@ app.get('/api/state', (req, res) => {
   res.json({
     now: Date.now(),
     rooms: chats.snapshot(a.id),
-    invite: chats.inviteFor(a.id),
+    invite: chats.ensureInvite(a.id),
     pinState: a.pin_state,
     resetPending: Boolean(a.request),
     resetDelivered: Boolean(a.request && a.request_sent)
@@ -173,17 +173,14 @@ app.get('/api/state', (req, res) => {
 });
 app.post('/api/invite', guard('invite', 15, 60_000), (req, res) => res.json(chats.newCode(req.account.id)));
 app.get('/api/qr', async(req, res) => {
-  const inv = chats.inviteFor(req.account.id);
-  if (!inv) return res.sendStatus(404);
+  const inv = chats.ensureInvite(req.account.id);
   const origin = publicOrigin || req.protocol + '://' + req.get('host');
   const image = await QRCode.toDataURL(origin + '/connect#' + inv.code, {
     width: 320,
     margin: 4,
     errorCorrectionLevel: 'M'
   });
-  res.json({
-    image
-  });
+  res.json({ image, code: inv.code, expires: inv.expires });
 });
 app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   const code = typeof req.body?.code === 'string' ? req.body.code.trim().toUpperCase(): '';

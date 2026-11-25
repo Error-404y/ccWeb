@@ -50,6 +50,7 @@ let lockPromptId = 0;
 let qrPending = '';
 let loopStarted = false;
 let pendingInvite = '';
+let sendingMessage = false;
 
 function routeName(path) {
   return path === '/settings' ? 'settings': path === '/connect' ? 'connect': 'chat';
@@ -395,6 +396,7 @@ function lock(reopen = true) {
   sequence++;
   const old = unlockToken;
   unlockToken = null;
+  sendingMessage = false;
   revokeToken(old);
   stopCamera();
   pinPrompt = false;
@@ -528,6 +530,7 @@ function renderChat() {
   $('threadBadge').hidden = !isAdmin;
   $('threadAvatar').setAttribute('href', isAdmin ? '#adminAvatar' : '#avatar');
   $('thread').classList.toggle('admin-thread', isAdmin);
+  updateSendButton();
   if (!current) {
     $('messages').replaceChildren();
     renderedRoom = null;
@@ -559,7 +562,7 @@ function renderConnect() {
   if (page !== 'connect' || !unlockToken) return;
   const inv = state.invite && state.invite.expires > serverNow() ? state.invite: null;
   $('inviteCode').textContent = inv?.code || '– – – – – –';
-  $('inviteTimer').textContent = inv ? clock(inv.expires - serverNow()): 'No active code';
+  $('inviteTimer').textContent = inv ? clock(inv.expires - serverNow()) : 'Generating code…';
   $('copyCode').disabled = !inv;
   const key = inv ? inv.code + ':' + inv.expires: '';
   if (key !== qrKey && key !== qrPending) {
@@ -572,10 +575,9 @@ function renderConnect() {
       return;
     }
     qrPending = key;
-    api('qr').then(({
-      image
-    }) => {
+    api('qr').then(({ image, code, expires }) => {
       if (!unlockToken || qrPending !== key || state.invite?.code !== inv.code || state.invite?.expires !== inv.expires) return;
+      if (code !== inv.code || expires !== inv.expires) return;
       if (typeof image !== 'string' || !image.startsWith('data:image/png;base64,')) return;
       qrKey = key;
       $('qrImage').src = image;
@@ -685,34 +687,61 @@ mobile.addEventListener('change', () => {
   if (!mobile.matches) mobileOpen = false;
   renderChat();
 });
-$('message').addEventListener('input', () => {
-  $('send').disabled = !$('message').value.trim();
-});
-$('message').addEventListener('keydown', e => {
-  if (!mobile.matches && e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-    e.preventDefault();
-    $('composer').requestSubmit();
+function updateSendButton() {
+  const room = state.rooms.find(room => room.id === selected);
+  $('send').disabled = !unlockToken || sendingMessage || !room || room.admin ||
+    room.expires <= serverNow() || !$('message').value.trim();
+}
+
+async function sendMessage() {
+  const id = selected;
+  const text = $('message').value.trim();
+  const room = state.rooms.find(room => room.id === id);
+
+  if (!unlockToken || sendingMessage || !room || room.admin || room.expires <= serverNow() || !text) {
+    updateSendButton();
+    return;
   }
-});
-$('composer').addEventListener('submit', async e => {
-  e.preventDefault();
-  const id = selected, text = $('message').value.trim();
-  if (!id || !text || $('send').disabled || state.rooms.find(room => room.id === id)?.admin) return;
-  $('send').disabled = true;
+
+  const epoch = authEpoch;
+  sendingMessage = true;
+  updateSendButton();
+
   try {
-    await api('message', {
-      id,
-      text
-    });
-    if (selected === id && $('message').value.trim() === text) $('message').value = '';
+    await api('message', { id, text });
+
+    if (epoch !== authEpoch) return;
+
+    if (selected === id && $('message').value.trim() === text) {
+      $('message').value = '';
+    }
+
     await refresh();
-  }
-  catch (err) {
-    showError(err);
+  } catch (error) {
+    if (epoch === authEpoch) showError(error);
   } finally {
-    $('send').disabled = !$('message').value.trim();
+    if (epoch === authEpoch) {
+      sendingMessage = false;
+      updateSendButton();
+    }
+  }
+}
+
+$('message').addEventListener('input', updateSendButton);
+$('send').addEventListener('click', sendMessage);
+
+$('message').addEventListener('keydown', event => {
+  if (!mobile.matches && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    sendMessage();
   }
 });
+
+$('composer').addEventListener('submit', event => {
+  event.preventDefault();
+  sendMessage();
+});
+
 $('deleteChat').addEventListener('click', () => {
   const id = selected;
   if (!id) return;
@@ -769,14 +798,13 @@ $('connectForm').addEventListener('submit', async e => {
     const result = await api('connect', {
       code
     });
-    navigate('/chat');
-    selected = result.id;
-    mobileOpen = true;
-    renderedRoom = null;
     await refresh();
-  }
-  catch (err) {
+    $('enterCode').value = '';
+    navigate('/chat');
+    selectRoom(result.id);
+  } catch (err) {
     showError(err);
+  } finally {
     submit.disabled = false;
   }
 });
