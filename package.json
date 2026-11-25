@@ -1,6 +1,6 @@
 {
   "name": "qzu-messenger",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,7 +12,10 @@
     "reset-pin": "node --env-file-if-exists=.env scripts/reset-pin.mjs",
     "admin-list": "node --env-file-if-exists=.env scripts/admin-list.mjs",
     "admin-message": "node --env-file-if-exists=.env scripts/admin-message.mjs",
-    "admin-announce": "node --env-file-if-exists=.env scripts/admin-announce.mjs"
+    "admin-announce": "node --env-file-if-exists=.env scripts/admin-announce.mjs",
+    "access-create": "node --env-file-if-exists=.env scripts/access.mjs create",
+    "access-invoices": "node --env-file-if-exists=.env scripts/access.mjs invoices",
+    "access-review": "node --env-file-if-exists=.env scripts/access.mjs review"
   },
   "dependencies": {
     "express": "^5.1.0",

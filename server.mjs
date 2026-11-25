@@ -5,14 +5,16 @@ import { resolve, dirname } from 'node:path';
 import { Chats } from './lib/chats.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
+import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, applyRenewal, liveRate, checkNode, scanPayments } from './lib/access.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
-import { sendReset, sendFeedback } from './lib/discord.mjs';
+import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
 import { handleAdminCommand } from './lib/admin.mjs';
 import { startAdminSocket } from './lib/admin-socket.mjs';
 
 process.umask(0o077);
 const root = dirname(fileURLToPath(import.meta.url));
 const app = express(), db = openAccounts();
+initAccess(db);
 const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 const unlocks = new Unlocks(), sendingResets = new Map();
@@ -69,15 +71,56 @@ app.use('/api', (req, res, next) => {
   req.account = findAccount(db, readToken(req));
   next();
 });
+const accessRequired = process.env.QZU_ACCESS_REQUIRED !== 'false';
+const paymentRate = (name, max) => (req, res, next) => rate(name + ':' + req.ip, max, 60_000) ? next() : res.status(429).json({ error: 'Try again shortly.' });
+let paymentBusy = false;
+async function paymentLoop() {
+  if (paymentBusy || !process.env.QZU_LTC_RPC_USER) return;
+  paymentBusy = true;
+  try {
+    await scanPayments(db);
+    if (process.env.QZU_PAYMENT_WEBHOOK) {
+      const rows = db.prepare("SELECT id,plan,sats,eur_cents FROM access_invoices WHERE state='confirmed' AND notified=0 LIMIT 20").all();
+      for (const row of rows) {
+        await sendPayment(row);
+        db.prepare('UPDATE access_invoices SET notified=1 WHERE id=?').run(row.id);
+      }
+    }
+  } catch {} finally { paymentBusy = false; }
+}
+setInterval(paymentLoop, 15_000).unref();
+
+app.post('/api/access/invoice', paymentRate('invoice', 5), async (req, res) => {
+  const plan = req.body?.plan;
+  let account = null;
+  if (plan === 'renewal') {
+    if (!req.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')) || req.account.access_plan !== 'monthly') return res.status(403).json({ error: 'Unlock your monthly account first.' });
+    account = req.account.id;
+  } else if (!['lifetime','monthly'].includes(plan)) return res.status(400).json({ error: 'Choose a plan.' });
+  await checkNode();
+  const invoice = createInvoice(db, plan, await liveRate(), account);
+  const qr = await QRCode.toDataURL('litecoin:' + invoice.address + '?amount=' + invoice.amount, { width: 320, margin: 3 });
+  res.json({ ...invoice, qr });
+});
+
+app.post('/api/access/status', paymentRate('invoice-status', 30), (req, res) => {
+  const row = invoiceRow(db, req.body?.key);
+  if (row.account && (!req.account || req.account.id !== row.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')))) return res.status(403).json({ error: 'Unlock your account.' });
+  res.json(invoiceStatus(db, req.body.key));
+});
+
+app.post('/api/access/renew', paymentRate('renewal', 10), (req, res) => {
+  if (!req.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock'))) return res.status(403).json({ error: 'Unlock your account.' });
+  res.json(applyRenewal(db, req.body?.key, req.account.id));
+});
+
 app.post('/api/session', (req, res) => {
   if (!req.account) {
     if (!rate('new:' + req.ip, 20, 60 * 60_000)) return res.status(429).json({
       error: 'Try again later.'
     });
-    const {
-      token,
-      id
-    } = createAccount(db);
+    if (accessRequired && !req.body?.accessKey) return res.json({ accessRequired: true });
+    const { token, id } = accessRequired ? redeemAccess(db, req.body.accessKey) : createAccount(db);
     res.cookie(cookieName, token, {
       httpOnly: true,
       secure: production,
@@ -119,7 +162,8 @@ app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
   const result = verifyLogin(db, req.account.id, req.body?.pin);
   if (result !== 'ok') return loginError(res, result);
   res.json({
-    token: unlocks.issue(req.account.id)
+    token: unlocks.issue(req.account.id),
+    access: accessStatus(req.account)
   });
 });
 app.post('/api/login/lock', (req, res) => {
@@ -150,6 +194,7 @@ app.use('/api', (req, res, next) => {
   if (!unlocks.check(req.account.id, req.get('x-qzu-unlock'))) return res.status(423).json({
     error: 'Locked.'
   });
+  if (!accessStatus(req.account).active) return res.status(402).json({ error: 'qzu-Access renewal required.' });
   next();
 });
 app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
@@ -165,6 +210,7 @@ app.get('/api/state', (req, res) => {
   chats.markPresent(a.id, Boolean(a.invisible));
   res.json({
     now: Date.now(),
+    access: accessStatus(a),
     rooms: chats.snapshot(a.id),
     requests: chats.connectionRequests(a.id),
     invite: chats.ensureInvite(a.id),
