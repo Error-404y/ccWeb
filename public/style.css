@@ -1699,3 +1699,18 @@ dialog {
 }
 .access-key-box .access-address { color: var(--ink); }
 .access-status { font-size: 14px; }
+
+.access-plan { text-align: center; background: var(--sub); padding: 17px; gap: 6px; }
+.access-mini { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.access-invoice { text-align: center; }
+.access-status { text-align: center; }
+.access-timer { text-align: center; font-size: 25px; font-weight: 650; color: var(--accent); }
+.access-reference { text-align: left; color: var(--muted); font-size: 12px; }
+.access-reference summary { cursor: pointer; padding: 6px 0; }
+.access-reference p { margin: 5px 0; }
+.payment-qr-wrap { position: relative; justify-self: center; display: grid; place-items: center; width: 158px; height: 158px; padding: 6px; overflow: hidden; border-radius: 12px; background: #fff; border: 1px solid var(--line); }
+.payment-qr-wrap .payment-qr { display: block; width: 100%; height: 100%; filter: blur(8px) grayscale(1); opacity: .7; pointer-events: none; }
+.payment-qr-lock { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; background: #0005; color: #fff; font-size: 12px; font-weight: 650; }
+.payment-qr-lock svg { width: 30px; height: 30px; }
+.payment-qr-wrap.qr-revealed .payment-qr { filter: none; opacity: 1; }
+.payment-qr-wrap.qr-revealed .payment-qr-lock { display: none; }

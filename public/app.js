@@ -54,6 +54,8 @@ let sendingMessage = false;
 let accessDue = false;
 let accessTimer = null;
 let checkoutEpoch = 0;
+let resumeCheckout = null;
+let checkoutReturn = null;
 let viewOnce = false;
 let mediaRoom = null;
 let mediaMessage = null;
@@ -131,6 +133,7 @@ function stopCamera() {
 function closeModal() {
   if (modalLocked) return;
   stopCheckout();
+  delete modal.dataset.checkout;
   clearMedia();
   stopCamera();
   if (modal.open) modal.close();
@@ -152,6 +155,7 @@ modal.addEventListener('close', () => {
 
 function show(title, content, locked = false) {
   stopCheckout();
+  delete modal.dataset.checkout;
   clearMedia();
   stopCamera();
   modalLocked = locked;
@@ -198,6 +202,7 @@ function dialogError(error) {
 async function api(path, data, quiet = false) {
   const write = data !== undefined, epoch = authEpoch, token = unlockToken;
   const authRoute = ['session', 'login/setup', 'login/unlock', 'login/emergency'].includes(path) || path.startsWith('access/');
+  const publicPurchase = !token && isPublicCheckout() && (path.startsWith('access/') || path === 'session');
   if (!authRoute && !token) throw new Error('Locked.');
   if (write && !quiet) sequence++;
   const headers = {};
@@ -221,7 +226,7 @@ async function api(path, data, quiet = false) {
     throw new Error('Connection unavailable.');
   }
   const result = await res.json().catch(() => ({}));
-  if (epoch !== authEpoch || document.hidden) {
+  if (epoch !== authEpoch || (document.hidden && !publicPurchase)) {
     if (result.token) revokeToken(result.token);
     throw new Error('Locked.');
   }
@@ -324,9 +329,12 @@ function showLogin() {
     needsSetup = false;
     modalLocked = false;
     closeModal();
-    if (accessDue) {
+    if (accessDue || checkoutReturn) {
       updatePages();
-      showRenewal();
+      const resume = checkoutReturn;
+      checkoutReturn = null;
+      if (resume) resume();
+      else showRenewal();
       return;
     }
     navigate(location.pathname, false);
@@ -415,7 +423,7 @@ function showLockedEmergency() {
 }
 
 async function getSession() {
-  if (authBusy || document.hidden || unlockToken) return;
+  if (authBusy || document.hidden || unlockToken || isPublicCheckout()) return;
   authBusy = true;
   const epoch = authEpoch;
   try {
@@ -423,7 +431,9 @@ async function getSession() {
     if (epoch !== authEpoch) return;
     if (result.accessRequired) {
       sessionReady = false;
-      showAccess();
+      const saved = savedInvoice(false);
+      if (saved) showInvoice(saved, null, false);
+      else showAccess();
       return;
     }
     sessionReady = true;
@@ -442,6 +452,11 @@ async function getSession() {
 }
 
 function lock(reopen = true) {
+  if (isPublicCheckout()) return;
+  if (modal.dataset.checkout === 'renewal') {
+    const saved = savedInvoice(true);
+    checkoutReturn = saved ? () => showInvoice(saved, null, true) : showRenewal;
+  }
   stopCheckout();
   accessDue = false;
   authEpoch++;
@@ -1388,15 +1403,22 @@ window.addEventListener('offline', () => {
   if (unlockToken) lock();
 });
 window.addEventListener('online', () => {
-  if (!unlockToken) getSession();
+  if (isPublicCheckout()) resumeCheckout?.();
+  else if (!unlockToken) getSession();
 });
 document.addEventListener('visibilitychange', () => {
+  if (isPublicCheckout()) {
+    if (!document.hidden) resumeCheckout?.();
+    return;
+  }
   if (document.hidden) lock();
   else if (!unlockToken) getSession();
 });
-window.addEventListener('pagehide', lock);
+window.addEventListener('pagehide', () => { if (!isPublicCheckout()) lock(); });
 window.addEventListener('pageshow', e => {
-  if (e.persisted && !unlockToken) getSession();
+  if (!e.persisted) return;
+  if (isPublicCheckout()) resumeCheckout?.();
+  else if (!unlockToken) getSession();
 });
 setInterval(purgeExpired, 250);
 
@@ -1839,7 +1861,17 @@ $('submitFeedback').addEventListener('click', () => {
   show('Submit feedback', [input, el('p', '', 'Do not include PINs, personal details or private messages.'), label, submit, button('Cancel', closeModal, 'secondary-button')]);
 });
 
+function isPublicCheckout() {
+  return !unlockToken && modal.dataset.checkout === 'public';
+}
+
+function showCheckout(title, content, renewal = false) {
+  show(title, content, true);
+  modal.dataset.checkout = renewal ? 'renewal' : 'public';
+}
+
 function stopCheckout() {
+  resumeCheckout = null;
   checkoutEpoch++;
   clearTimeout(accessTimer);
   accessTimer = null;
@@ -1859,12 +1891,12 @@ function forgetInvoice(renewal) {
 
 function showAccess() {
   const plan = el('div', 'access-plan');
-  plan.append(el('strong', 'access-price', '€19.99'), el('span', '', 'Includes your first 5 months of access'), el('p', '', 'Then €2.99/month. 12-month initial term: €40.92 total. Both prices include 19% tax.'));
+  plan.append(el('strong', 'access-price', '€19.99'), el('span', '', 'First 5 months included'), el('span', 'access-mini', 'Then €2.99/month · Incl. 19% tax'), el('span', 'access-mini', '12 months · €40.92 total'));
   const terms = el('label', 'feedback-confirm');
   const check = el('input');
   check.type = 'checkbox';
-  terms.append(check, el('span', '', 'I accept the pricing and payment terms.'));
-  const purchase = button('Purchase qzu-Access', async () => {
+  terms.append(check, el('span', '', 'I accept the payment terms.'));
+  const purchase = button('Purchase access', async () => {
     purchase.disabled = true;
     try {
       const invoice = await api('access/invoice', { plan: 'monthly', accepted: true });
@@ -1877,11 +1909,11 @@ function showAccess() {
   });
   purchase.disabled = true;
   check.addEventListener('change', () => { purchase.disabled = !check.checked; });
-  const controls = [plan, el('p', '', 'Payment via Litecoin only. Manually reviewed by the developer. Network fees are separate.'), terms, purchase];
+  const controls = [plan, terms, purchase];
   const saved = savedInvoice(false);
   if (saved) controls.push(button('Resume purchase', () => showInvoice(saved, null, false), 'secondary-button'));
-  controls.push(button('I have a key or order reference', () => showKeyEntry(false), 'secondary-button'));
-  show('qzu-Access', controls, true);
+  controls.push(button('Enter key or reference', () => showKeyEntry(false), 'secondary-button'));
+  showCheckout('qzu-Access', controls);
 }
 
 function showKeyEntry(renewal) {
@@ -1896,11 +1928,13 @@ function showKeyEntry(renewal) {
     rememberInvoice(value, renewal);
     showInvoice(value, null, renewal);
   });
-  show('Access key', [input, submit, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], true);
+  showCheckout('Access key', [input, submit, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
 }
 
 function showRenewal() {
-  const controls = [el('p', '', 'Renew your account for €2.99 including 19% tax. One additional month. Payment is manual.'), button('Create renewal invoice', async () => {
+  const plan = el('div', 'access-plan');
+  plan.append(el('strong', 'access-price', '€2.99'), el('span', '', 'One month · Incl. 19% tax'));
+  const controls = [plan, button('Renew access', async () => {
     try {
       const invoice = await api('access/invoice', { plan: 'renewal', accepted: true });
       rememberInvoice(invoice.orderKey, true);
@@ -1910,8 +1944,8 @@ function showRenewal() {
   const saved = savedInvoice(true);
   if (saved) controls.push(button('Resume renewal', () => showInvoice(saved, null, true), 'secondary-button'));
   controls.push(button('Enter renewal key or reference', () => showKeyEntry(true), 'secondary-button'));
-  controls.push(button(accessDue ? 'Lock' : 'Close', accessDue ? () => lock() : () => { modalLocked = false; closeModal(); }, 'secondary-button'));
-  show('qzu-Access renewal', controls, true);
+  controls.push(button(accessDue ? 'Lock' : 'Close', accessDue ? () => { delete modal.dataset.checkout; checkoutReturn = null; lock(); } : () => { modalLocked = false; closeModal(); }, 'secondary-button'));
+  showCheckout('Renew access', controls, true);
 }
 
 function showInvoice(secret, initial, renewal) {
@@ -1921,12 +1955,13 @@ function showInvoice(secret, initial, renewal) {
   const timer = el('span', 'access-timer');
   const controls = el('div', 'access-controls');
   content.append(status, details, timer, controls);
-  show('Litecoin checkout', [content, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], true);
+  showCheckout('Litecoin checkout', [content, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
   const ticket = checkoutEpoch;
   let current = null;
   let busy = false;
   let lastKey = '';
   let serverOffset = 0;
+  let polling = false;
 
   function copy(label, value) {
     return button(label, async () => {
@@ -1942,7 +1977,7 @@ function showInvoice(secret, initial, renewal) {
     if (lastKey === fingerprint) return;
     lastKey = fingerprint;
     const approved = invoice.state === 'confirmed' && !invoice.redeemed && invoice.activationKey;
-    status.textContent = invoice.redeemed ? 'Already redeemed' : approved ? 'Payment confirmed' : invoice.state === 'submitted' ? 'Please wait until the Payment has been confirmed' : invoice.state === 'rejected' ? 'Payment not approved — contact the developer' : invoice.state === 'pending' ? 'Awaiting payment' : 'Contact the developer about this order';
+    status.textContent = invoice.redeemed ? 'Key redeemed' : approved ? 'Payment confirmed' : invoice.state === 'submitted' ? 'Please wait until the Payment has been confirmed' : invoice.state === 'rejected' ? 'Payment not approved' : invoice.state === 'pending' ? 'Pay with Litecoin' : 'Contact the developer';
     details.replaceChildren();
     controls.replaceChildren();
 
@@ -1952,13 +1987,23 @@ function showInvoice(secret, initial, renewal) {
         const image = el('img', 'payment-qr');
         image.src = invoice.qr || initial.qr;
         image.alt = 'Litecoin receiving address QR code';
-        details.append(image);
+        const qr = button('', () => {
+          const revealed = qr.classList.toggle('qr-revealed');
+          qr.setAttribute('aria-expanded', String(revealed));
+          qr.setAttribute('aria-label', revealed ? 'Hide payment QR' : 'Reveal payment QR');
+        }, 'payment-qr-wrap');
+        qr.setAttribute('aria-expanded', 'false');
+        qr.setAttribute('aria-label', 'Reveal payment QR');
+        const overlay = el('span', 'payment-qr-lock');
+        overlay.append(svg('lock'), el('span', '', 'Tap to reveal'));
+        qr.append(image, overlay);
+        details.append(qr);
       }
-      details.append(el('p', 'access-address', invoice.address), el('p', '', 'Scan using your Litecoin wallet. Enter the LTC equivalent of the displayed EUR price in your wallet. Network fees are separate.'));
+      details.append(el('p', 'access-address', invoice.address), el('p', 'access-mini', 'Pay the EUR equivalent in LTC. Network fees extra.'));
       controls.append(copy('Copy address', invoice.address));
       const form = el('form', 'access-details');
       const input = el('input', 'access-key-input');
-      input.placeholder = 'Litecoin transaction ID (TXID)';
+      input.placeholder = 'Transaction ID (TXID)';
       input.autocomplete = 'off';
       input.spellcheck = false;
       input.maxLength = 64;
@@ -1984,17 +2029,17 @@ function showInvoice(secret, initial, renewal) {
       controls.append(form);
     }
 
-    details.append(el('p', 'access-address', 'Order: ' + invoice.id));
     if (secret.startsWith('QZO-') && !invoice.redeemed) {
-      details.append(el('p', 'access-address', secret), el('p', '', 'Save this private order reference to resume your purchase.'));
-      controls.append(copy('Copy order reference', secret));
+      const reference = el('details', 'access-reference');
+      reference.append(el('summary', '', 'Order reference'), el('p', 'access-address', secret), el('p', 'access-mini', 'Keep private to resume your purchase.'), copy('Copy reference', secret));
+      details.append(reference);
     }
 
     const keyBox = el('div', 'access-key-box');
     if (approved) {
       keyBox.append(el('strong', '', renewal ? 'Your renewal key' : 'Your qzu-Access key'), el('p', 'access-address', invoice.activationKey));
       controls.append(copy('Copy key', invoice.activationKey));
-      if (!renewal) details.append(el('p', '', 'You may gift this unused key to one person. Keep it private.'));
+      if (!renewal) details.append(el('p', 'access-mini', 'Keep your key private.'));
       controls.append(button(renewal ? 'Apply renewal' : 'Activate account', async () => {
         if (busy) return;
         busy = true;
@@ -2011,6 +2056,8 @@ function showInvoice(secret, initial, renewal) {
             const result = await api('session', { accessKey: invoice.activationKey });
             if (result.accessRequired) throw new Error('Activation unavailable.');
             forgetInvoice(false);
+            delete modal.dataset.checkout;
+            stopCheckout();
             sessionReady = true;
             needsSetup = result.needsSetup;
             showLogin();
@@ -2032,12 +2079,15 @@ function showInvoice(secret, initial, renewal) {
       return;
     }
     const remaining = current.reviewUntil - (Date.now() + serverOffset);
-    timer.textContent = remaining > 0 ? 'Review window: ' + clock(remaining) : 'Still awaiting manual confirmation.';
+    timer.textContent = remaining > 0 ? clock(remaining) : 'Awaiting confirmation';
   }
 
   let nextPoll = 0;
   async function tick() {
-    if (ticket !== checkoutEpoch || document.hidden || !body.contains(content)) return;
+    if (ticket !== checkoutEpoch || !body.contains(content) || polling) return;
+    clearTimeout(accessTimer);
+    if (document.hidden) return;
+    polling = true;
     updateTimer();
     if (!busy && Date.now() >= nextPoll) {
       nextPoll = Date.now() + 5000;
@@ -2049,9 +2099,11 @@ function showInvoice(secret, initial, renewal) {
         if (ticket === checkoutEpoch) status.textContent = errorMessage(error);
       }
     }
+    polling = false;
     if (ticket === checkoutEpoch && !current?.redeemed) accessTimer = setTimeout(tick, 1000);
   }
 
+  resumeCheckout = () => { nextPoll = 0; tick(); };
   if (initial) renderInvoice(initial);
   tick();
 }
