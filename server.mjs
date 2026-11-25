@@ -96,7 +96,7 @@ app.post('/api/access/invoice', paymentRate('invoice', 5), async (req, res) => {
   if (plan === 'renewal') {
     if (!req.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')) || req.account.access_plan !== 'monthly') return res.status(403).json({ error: 'Unlock your monthly account first.' });
     account = req.account.id;
-  } else if (!['lifetime','monthly'].includes(plan)) return res.status(400).json({ error: 'Choose a plan.' });
+  } else if (plan !== 'monthly') return res.status(400).json({ error: 'Choose a plan.' });
   await checkNode();
   const invoice = createInvoice(db, plan, await liveRate(), account);
   const qr = await QRCode.toDataURL('litecoin:' + invoice.address + '?amount=' + invoice.amount, { width: 320, margin: 3 });
@@ -155,7 +155,8 @@ app.post('/api/login/setup', guard('login-setup', 5, 60_000), (req, res) => {
   });
   if (!chats.inviteFor(req.account.id)) chats.newCode(req.account.id);
   res.json({
-    token: unlocks.issue(req.account.id)
+    token: unlocks.issue(req.account.id),
+    access: accessStatus(req.account)
   });
 });
 app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
