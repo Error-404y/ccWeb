@@ -128,6 +128,24 @@ app.post('/api/login/lock', (req, res) => {
     ok: true
   });
 });
+app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) => {
+  if (req.body?.confirmed !== true) {
+    return res.status(400).json({ error: 'Confirm the deletion first.' });
+  }
+
+  const result = usePin(db, req.account.id, req.body?.pin);
+
+  if (result !== 'ok') {
+    return res.status(result === 'locked' ? 429 : 400).json({
+      error: result === 'locked' ? 'Try again in 15 minutes.' : 'Invalid or unavailable emergency PIN.'
+    });
+  }
+
+  chats.erase(req.account.id);
+  unlocks.revokeAll(req.account.id);
+  res.json({ ok: true });
+});
+
 app.use('/api', (req, res, next) => {
   if (!unlocks.check(req.account.id, req.get('x-qzu-unlock'))) return res.status(423).json({
     error: 'Locked.'

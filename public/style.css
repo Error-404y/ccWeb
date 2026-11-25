@@ -1354,3 +1354,56 @@ dialog {
   font-size: 12px;
   line-height: 1.55;
 }
+
+.login-divider {
+  height: 1px;
+  margin: 5px 0;
+  background: var(--line);
+}
+
+.login-emg {
+  min-height: 42px;
+  color: var(--danger);
+  border-color: var(--danger);
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+}
+
+.login-emg svg {
+  width: 17px;
+  height: 17px;
+}
+
+.emg-warning {
+  padding: 12px;
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.auth-form .emg-confirmation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  font-size: 13px;
+}
+
+.auth-form .emg-confirmation input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--danger);
+}
+
+.emg-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.emg-actions .primary-button,
+.emg-actions .secondary-button {
+  font-size: 14px;
+}

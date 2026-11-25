@@ -163,7 +163,7 @@ function dialogError(error) {
 
 async function api(path, data) {
   const write = data !== undefined, epoch = authEpoch, token = unlockToken;
-  const authRoute = ['session', 'login/setup', 'login/unlock'].includes(path);
+  const authRoute = ['session', 'login/setup', 'login/unlock', 'login/emergency'].includes(path);
   if (!authRoute && !token) throw new Error('Locked.');
   if (write) sequence++;
   const headers = {};
@@ -293,6 +293,79 @@ function showLogin() {
     locked: true,
     auth: true
   });
+
+  if (!setup) {
+    const divider = el('div', 'login-divider');
+    const emergency = button('emg', showLockedEmergency, 'secondary-button login-emg');
+    emergency.prepend(svg('terminal'));
+    const form = body.querySelector('.auth-form');
+    form.append(divider, emergency);
+  }
+}
+
+function showLockedEmergency() {
+  if (unlockToken || document.hidden || !sessionReady || needsSetup) return;
+
+  const form = el('form', 'auth-form');
+  const { wrap, input } = pinField('Emergency PIN', 'Enter PIN');
+  const warning = el('p', 'emg-warning', 'Delete all your active chats for both participants. This cannot be undone.');
+  const confirmation = el('label', 'emg-confirmation');
+  const check = el('input');
+  check.type = 'checkbox';
+  check.required = true;
+  confirmation.append(check, el('span', '', 'I confirm deletion.'));
+
+  const actions = el('div', 'emg-actions');
+  const cancel = button('Cancel', showLogin, 'secondary-button');
+  const execute = el('button', 'primary-button danger-button', 'Execute');
+  execute.type = 'submit';
+  execute.disabled = true;
+  actions.append(cancel, execute);
+  form.append(wrap, warning, confirmation, actions);
+
+  function updateButton() {
+    execute.disabled = input.value.length !== 6 || !check.checked;
+  }
+
+  input.addEventListener('input', updateButton);
+  check.addEventListener('change', updateButton);
+
+  const epoch = authEpoch;
+
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (execute.disabled || epoch !== authEpoch || !check.checked) return;
+
+    execute.disabled = true;
+    cancel.disabled = true;
+
+    try {
+      await api('login/emergency', {
+        pin: input.value,
+        confirmed: true
+      });
+
+      input.value = '';
+      pendingInvite = '';
+      lock(false);
+
+      show('emg.exe', [
+        el('p', '', 'Your active chats have been deleted.'),
+        button('OK', showLogin)
+      ], true);
+    } catch (error) {
+      if (epoch !== authEpoch || !body.contains(form)) return;
+      input.value = '';
+      check.checked = false;
+      cancel.disabled = false;
+      updateButton();
+      dialogError(error);
+      input.focus();
+    }
+  });
+
+  show('emg.exe', [form], true);
+  input.focus();
 }
 
 async function getSession() {
@@ -317,7 +390,7 @@ async function getSession() {
   }
 }
 
-function lock() {
+function lock(reopen = true) {
   authEpoch++;
   sequence++;
   const old = unlockToken;
@@ -359,7 +432,7 @@ function lock() {
   updatePages();
   modalLocked = false;
   closeModal();
-  if (!document.hidden) getSession();
+  if (reopen !== false && !document.hidden) getSession();
 }
 
 function applyTheme(value) {
