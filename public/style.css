@@ -978,7 +978,6 @@ video {
   }
 }
 
-/* v0.2: terminal mark, aligned QR and code, lock screen */
 .wordmark {
   width: 44px;
   height: 31px;
@@ -1067,7 +1066,6 @@ video {
   display: none;
 }
 
-/* Compact interface: keep touch targets large and typography restrained. */
 .sidebar-top {
   height: 68px;
   padding-inline: 18px;
@@ -1252,7 +1250,7 @@ dialog {
     padding-inline: 10px;
   }
 
-  /* 16px input text avoids automatic zoom on iOS Safari. */
+  
   .composer textarea,
   .connect-form input,
   .modal-body .pin-input {
@@ -1264,4 +1262,59 @@ dialog {
   .connect-panel {
     gap: 8px;
   }
+}
+
+.admin-contact .contact-name,
+.thread-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-badge {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.admin-contact.active {
+  background: #f7e9e9;
+}
+
+:root[data-theme=dark] .admin-contact.active {
+  background: #302525;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .admin-contact.active,
+  :root[data-theme=system] .admin-contact.active {
+    background: #302525;
+  }
+}
+
+.admin-composer {
+  flex-shrink: 0;
+  padding: 10px clamp(12px, 3vw, 28px) max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.read-only-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sub);
+  color: var(--muted);
+  font-size: 13px;
+  user-select: none;
+}
+
+.read-only-bar svg {
+  width: 16px;
+  height: 16px;
 }

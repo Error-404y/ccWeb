@@ -25,7 +25,6 @@ let state = {
   resetDelivered: false
 };
 
-// Chat rendering and connection state.
 let offset = 0;
 let selected = null;
 let mobileOpen = false;
@@ -42,7 +41,6 @@ let scannerLoad = null;
 let modalLocked = false;
 let online = true;
 const modal = $('modal'), body = $('modalBody');
-// The unlock token lives only in this tab's memory.
 let unlockToken = null;
 let authEpoch = 0;
 let authBusy = false;
@@ -91,7 +89,7 @@ const clock = ms => {
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 };
 const serverNow = () => Date.now() + offset;
-const nameFor = r => 'Chat ' + r.id.slice(0, 4).toUpperCase();
+const nameFor = room => room.admin ? 'Admin' : 'Chat ' + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
   cancelAnimationFrame(scanFrame);
@@ -319,7 +317,6 @@ async function getSession() {
   }
 }
 
-// Hide private content immediately when the browser loses visibility.
 function lock() {
   authEpoch++;
   sequence++;
@@ -347,6 +344,10 @@ function lock() {
   $('message').value = '';
   $('enterCode').value = '';
   $('threadName').textContent = 'Chat';
+  $('threadBadge').hidden = true;
+  $('threadAvatar').setAttribute('href', '#avatar');
+  $('adminComposer').hidden = true;
+  $('thread').classList.remove('admin-thread');
   $('chatTimer').textContent = '30:00';
   $('chatCount').textContent = '';
   $('inviteCode').textContent = '– – – – – –';
@@ -423,18 +424,37 @@ function renderChat() {
       list.append(box);
     }
     for (const r of rooms) {
-      const last = r.messages.at(-1), b = el('button', 'contact' + (r.id === selected ? ' active': ''));
+      const last = r.messages.at(-1);
+      const classes = 'contact' + (r.admin ? ' admin-contact' : '') + (r.id === selected ? ' active' : '');
+      const b = el('button', classes);
       b.type = 'button';
       const content = el('div', 'contact-body');
-      content.append(el('span', 'contact-name', nameFor(r)), el('span', 'contact-preview', last ? last.text: 'New chat'));
-      b.append(svg('avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
+      const name = el('span', 'contact-name', nameFor(r));
+
+      if (r.admin) {
+        const badge = svg('adminBadge', 'admin-badge');
+        badge.setAttribute('aria-label', 'Verified Admin');
+        badge.removeAttribute('aria-hidden');
+        name.append(badge);
+      }
+
+      content.append(name, el('span', 'contact-preview', last ? last.text : 'New chat'));
+      b.append(svg(r.admin ? 'adminAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       b.addEventListener('click', () => selectRoom(r.id));
       list.append(b);
     }
     list.scrollTop = top;
   }
   $('emptyThread').hidden = Boolean(current);
-  for (const id of ['threadHeader', 'messages', 'composer']) $(id).hidden = !current;
+  for (const id of ['threadHeader', 'messages']) $(id).hidden = !current;
+
+  const isAdmin = Boolean(current?.admin);
+  $('composer').hidden = !current || isAdmin;
+  $('adminComposer').hidden = !isAdmin;
+  $('deleteChat').hidden = isAdmin;
+  $('threadBadge').hidden = !isAdmin;
+  $('threadAvatar').setAttribute('href', isAdmin ? '#adminAvatar' : '#avatar');
+  $('thread').classList.toggle('admin-thread', isAdmin);
   if (!current) {
     $('messages').replaceChildren();
     renderedRoom = null;
@@ -552,7 +572,6 @@ async function refresh() {
   }
   render();
   purgeExpired();
-  // Emergency PIN setup is deliberately opened from Settings.
 }
 
 function offerPin() {
@@ -605,7 +624,7 @@ $('message').addEventListener('keydown', e => {
 $('composer').addEventListener('submit', async e => {
   e.preventDefault();
   const id = selected, text = $('message').value.trim();
-  if (!id || !text || $('send').disabled) return;
+  if (!id || !text || $('send').disabled || state.rooms.find(room => room.id === id)?.admin) return;
   $('send').disabled = true;
   try {
     await api('message', {

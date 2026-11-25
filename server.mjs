@@ -7,6 +7,8 @@ import { openAccounts, createAccount, findAccount, issuePin, usePin, requestRese
 
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset } from './lib/discord.mjs';
+import { handleAdminCommand } from './lib/admin.mjs';
+import { startAdminSocket } from './lib/admin-socket.mjs';
 
 process.umask(0o077);
 const root = dirname(fileURLToPath(import.meta.url));
@@ -248,4 +250,12 @@ app.use((err, req, res, next) => {
   });
 });
 const port = Number(process.env.PORT || 3000);
-app.listen(port, process.env.HOST || '0.0.0.0', () => console.log('qzu. listening on ' + port));
+startAdminSocket(command => handleAdminCommand(db, chats, command))
+  .then(() => {
+    app.listen(port, process.env.HOST || '0.0.0.0', () => console.log('qzu. listening on ' + port));
+  })
+  .catch(error => {
+    console.error(error.message);
+    db.close();
+    process.exitCode = 1;
+  });
