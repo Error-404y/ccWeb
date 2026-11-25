@@ -25,14 +25,14 @@ test('emergency removes only involved rooms and own invite',()=>{
 test('PIN is issued once, single-use, developer-approved replacement',()=>{
  const db=openAccounts(':memory:'),a=createAccount(db);
  assert.equal(findAccount(db,a.token).id,a.id);
- const pin=issuePin(db,a.id);assert.match(pin,/^\d{6}$/);assert.equal(issuePin(db,a.id),null);
+ const pin=issuePin(db,a.id,'124578');assert.match(pin,/^\d{6}$/);assert.equal(issuePin(db,a.id,'124578'),null);
  assert.equal(usePin(db,a.id,pin),'ok');assert.equal(usePin(db,a.id,pin),'unavailable');
  const ref=requestReset(db,a.id);assert.equal(requestReset(db,a.id),ref);
  assert.equal(approveReset(db,'wrong'),false);assert.equal(approveReset(db,ref),true);
- assert.match(issuePin(db,a.id),/^\d{6}$/);db.close();
+ assert.match(issuePin(db,a.id,'124578'),/^\d{6}$/);db.close();
 });
 test('PIN has a persistent retry lock',()=>{
- const db=openAccounts(':memory:'),a=createAccount(db);const pin=issuePin(db,a.id);
+ const db=openAccounts(':memory:'),a=createAccount(db);const pin=issuePin(db,a.id,'124578');
  const wrong=pin==='000000'?'000001':'000000';
  for(let i=0;i<5;i++)assert.equal(usePin(db,a.id,wrong,100),'invalid');
  assert.equal(usePin(db,a.id,pin,101),'locked');

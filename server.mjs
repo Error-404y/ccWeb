@@ -3,11 +3,15 @@ import QRCode from 'qrcode';
 import {fileURLToPath} from 'node:url';
 import {resolve,dirname} from 'node:path';
 import {Chats} from './lib/chats.mjs';
-import {openAccounts,createAccount,findAccount,issuePin,usePin,requestReset} from './lib/accounts.mjs';
+import {openAccounts,createAccount,findAccount,issuePin,usePin,requestReset,setLogin,verifyLogin,changeLogin,validPin,markRequestSent} from './lib/accounts.mjs';
+
+import {Unlocks} from './lib/unlocks.mjs';
+import {sendReset} from './lib/discord.mjs';
 
 process.umask(0o077);
 const root=dirname(fileURLToPath(import.meta.url));
 const app=express(), chats=new Chats(), db=openAccounts();
+const unlocks=new Unlocks(), sendingResets=new Map();
 const production=process.env.NODE_ENV==='production';
 if(production&&!process.env.PUBLIC_ORIGIN) throw new Error('Set PUBLIC_ORIGIN to your HTTPS origin.');
 const publicOrigin=process.env.PUBLIC_ORIGIN;
@@ -29,7 +33,7 @@ function rate(key,max,period) {
   const bucket=old&&old.until>now?old:{count:0,until:now+period};
   limits.set(key,bucket);return ++bucket.count<=max;
 }
-const timer=setInterval(()=>{chats.sweep();const now=Date.now();for(const [k,v] of limits)if(v.until<=now)limits.delete(k);},1000);
+const timer=setInterval(()=>{chats.sweep();unlocks.sweep();const now=Date.now();for(const [k,v] of limits)if(v.until<=now)limits.delete(k);},1000);
 timer.unref();
 app.use('/api',(req,res,next)=>{
   if(!['GET','HEAD'].includes(req.method)){
@@ -45,23 +49,50 @@ app.post('/api/session',(req,res)=>{
     if(!rate('new:'+req.ip,20,60*60_000))return res.status(429).json({error:'Try again later.'});
     const {token,id}=createAccount(db);
     res.cookie(cookieName,token,{httpOnly:true,secure:production,sameSite:'strict',path:'/',maxAge:365*24*60*60_000});
-    req.account={id};
+    req.account={id,login_hash:null};
   }
-  res.json({ok:true});
+  res.json({needsSetup:!req.account.login_hash});
 });
 app.use('/api',(req,res,next)=>req.account?next():res.status(401).json({error:'Session unavailable.'}));
 const guard=(name,max,period)=> (req,res,next)=>rate(name+':'+req.account.id,max,period)?next():res.status(429).json({error:'Try again shortly.'});
+function loginError(res,result){
+  return res.status(result==='locked'?429:400).json({error:result==='locked'?'Try again in 15 minutes.':result==='same-emergency'?'Choose a different PIN.':'Incorrect or unavailable PIN.'});
+}
+app.post('/api/login/setup',guard('login-setup',5,60_000),(req,res)=>{
+  if(!validPin(req.body?.pin)||!setLogin(db,req.account.id,req.body.pin))return res.status(400).json({error:'Choose a different PIN or unlock.'});
+  if(!chats.inviteFor(req.account.id))chats.newCode(req.account.id);
+  res.json({token:unlocks.issue(req.account.id)});
+});
+app.post('/api/login/unlock',guard('unlock',10,60_000),(req,res)=>{
+  const result=verifyLogin(db,req.account.id,req.body?.pin);
+  if(result!=='ok')return loginError(res,result);
+  res.json({token:unlocks.issue(req.account.id)});
+});
+app.post('/api/login/lock',(req,res)=>{
+  unlocks.revoke(req.account.id,req.get('x-qzu-unlock'));
+  res.json({ok:true});
+});
+app.use('/api',(req,res,next)=>{
+  if(!unlocks.check(req.account.id,req.get('x-qzu-unlock')))return res.status(423).json({error:'Locked.'});
+  next();
+});
+app.post('/api/login/change',guard('login-change',10,60_000),(req,res)=>{
+  const result=changeLogin(db,req.account.id,req.body?.current,req.body?.next);
+  if(result!=='ok')return loginError(res,result);
+  unlocks.revokeAll(req.account.id);
+  res.json({token:unlocks.issue(req.account.id)});
+});
 app.get('/api/state',(req,res)=>{
   const a=req.account;
-  res.json({now:Date.now(),rooms:chats.snapshot(a.id),invite:chats.inviteFor(a.id),pinState:a.pin_state,resetRequest:a.request});
+  res.json({now:Date.now(),rooms:chats.snapshot(a.id),invite:chats.inviteFor(a.id),pinState:a.pin_state,resetPending:Boolean(a.request),resetDelivered:Boolean(a.request&&a.request_sent)});
 });
 app.post('/api/invite',guard('invite',15,60_000),(req,res)=>res.json(chats.newCode(req.account.id)));
 app.get('/api/qr',async(req,res)=>{
   const inv=chats.inviteFor(req.account.id);
   if(!inv)return res.sendStatus(404);
   const origin=publicOrigin||req.protocol+'://'+req.get('host');
-  const png=await QRCode.toBuffer(origin+'/connect#'+inv.code,{width:320,margin:2,errorCorrectionLevel:'M'});
-  res.type('png').send(png);
+  const image=await QRCode.toDataURL(origin+'/connect#'+inv.code,{width:320,margin:4,errorCorrectionLevel:'M'});
+  res.json({image});
 });
 app.post('/api/connect',guard('connect',10,60_000),(req,res)=>{
   const code=typeof req.body?.code==='string'?req.body.code.trim().toUpperCase():'';
@@ -75,14 +106,23 @@ app.post('/api/chat/delete',(req,res)=>{
   chats.remove(req.account.id,req.body?.id);res.json({ok:true});
 });
 app.post('/api/pin/issue',guard('pin-issue',5,60_000),(req,res)=>{
-  const pin=issuePin(db,req.account.id);
-  if(pin===null)return res.status(409).json({error:'PIN already issued.'});
-  res.json({pin});
+  const pin=issuePin(db,req.account.id,req.body?.pin);
+  if(pin===null)return res.status(409).json({error:'Choose a different PIN, or request a reset.'});
+  res.json({ok:true});
 });
-app.post('/api/pin/reset',guard('pin-reset',5,60_000),(req,res)=>{
-  const ref=requestReset(db,req.account.id);
+app.post('/api/pin/reset',guard('pin-reset',5,60_000),async(req,res)=>{
+  const id=req.account.id;
+  const ref=requestReset(db,id);
   if(!ref)return res.status(409).json({error:'Reset unavailable.'});
-  res.json({ref});
+  if(req.account.request===ref&&req.account.request_sent)return res.json({pending:true});
+  try{
+    if(!sendingResets.has(ref)){
+      const delivery=sendReset(ref).then(()=>markRequestSent(db,ref)).finally(()=>sendingResets.delete(ref));
+      sendingResets.set(ref,delivery);
+    }
+    await sendingResets.get(ref);
+    res.json({pending:true});
+  }catch{res.status(503).json({error:'Reset delivery unavailable. Try again.'});}
 });
 app.post('/api/emergency',guard('pin-use',10,15*60_000),(req,res)=>{
   const result=usePin(db,req.account.id,req.body?.pin);
