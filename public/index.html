@@ -27,6 +27,16 @@
         <rect x="5" y="10" width="14" height="11" rx="2"/>
         <path d="M8 10V7a4 4 0 0 1 8 0v3"/>
       </symbol>
+      <symbol id="groupAvatar" viewBox="0 0 48 48">
+        <circle cx="24" cy="24" r="24" fill="#dfe2e2"/>
+        <circle cx="19" cy="18" r="7" fill="#989e9f"/>
+        <circle cx="32" cy="20" r="5" fill="#989e9f"/>
+        <path d="M6 36c0-7 5-12 13-12s13 5 13 12Z M34 26c6 0 9 4 9 10h-8c0-4-1-7-3-10Z" fill="#989e9f"/>
+      </symbol>
+      <symbol id="reply" viewBox="0 0 24 24"><path d="m9 7-5 5 5 5M4 12h9a7 7 0 0 1 7 7"/></symbol>
+      <symbol id="check" viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></symbol>
+      <symbol id="doubleCheck" viewBox="0 0 24 24"><path d="m2 12 4 4L16 6m-5 10L21 6"/></symbol>
+      <symbol id="eye" viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
       <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
       <symbol id="settings" viewBox="0 0 24 24"><path d="M10 3h4l.7 2.5 2 .9 2.3-1.2 2.8 2.8-1.2 2.3.9 2L24 13v3l-2.5.7-.9 2 1.2 2.3-2.8 2.8-2.3-1.2-2 .9L14 26h-4l-.7-2.5-2-.9L5 23.8l-2.8-2.8 1.2-2.3-.9-2L0 16v-3l2.5-.7.9-2L2.2 8 5 5.2l2.3 1.2 2-.9Z" transform="translate(2 0) scale(.83)"/><circle cx="12" cy="12" r="3"/></symbol>
       <symbol id="back" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6M8 12h12"/></symbol>
@@ -67,13 +77,20 @@
             <button id="backToChats" class="icon-button mobile-back" aria-label="Back to chats"><svg><use href="#back"/></svg></button>
             <svg class="avatar"><use id="threadAvatar" href="#avatar"/></svg>
             <div class="thread-title">
-              <h2 id="threadName">Chat</h2>
+              <div class="thread-name-wrap"><h2 id="threadName">Chat</h2><span id="memberCount" class="member-count" hidden></span></div>
               <svg id="threadBadge" class="admin-badge" aria-label="Verified Admin" hidden><use href="#adminBadge"/></svg>
             </div>
             <div class="expiry" title="Chat expires"><svg><use href="#clock"/></svg><span id="chatTimer">30:00</span></div>
+            <button id="groupInvite" class="icon-button" aria-label="Group invite" title="Group invite" hidden><svg><use href="#plus"/></svg></button>
             <button id="deleteChat" class="icon-button" aria-label="Delete chat" title="Delete chat"><svg><use href="#trash"/></svg></button>
           </header>
+          <progress id="expiryProgress" class="expiry-progress" max="1800000" value="1800000" aria-label="Remaining chat lifetime" hidden></progress>
           <div id="messages" class="messages" aria-label="Messages" hidden></div>
+          <div id="typingIndicator" class="typing-indicator" hidden><span class="typing-dots"><i></i><i></i><i></i></span><span id="typingLabel"></span></div>
+          <div id="replyComposer" class="reply-composer" hidden>
+            <div class="reply-content"><strong id="replyName"></strong><span id="replyText"></span></div>
+            <button id="cancelReply" type="button" class="icon-button" aria-label="Cancel reply"><svg><use href="#close"/></svg></button>
+          </div>
           <form id="composer" class="composer" hidden>
             <textarea id="message" aria-label="Message" placeholder="Message" rows="1" maxlength="2000" autocomplete="off"></textarea>
             <button id="send" class="send-button" type="button" aria-label="Send" disabled><svg><use href="#send"/></svg></button>
@@ -101,6 +118,7 @@
               <button class="primary-button" type="submit">Add</button>
             </form>
             <button id="scanCode" class="secondary-button"><svg><use href="#qr"/></svg>Scan QR</button>
+            <button id="createGroup" class="secondary-button"><svg><use href="#plus"/></svg>Create group</button>
           </div>
         </div>
       </section>
@@ -113,6 +131,10 @@
             <div class="settings-row"><svg><use href="#clock"/></svg><span>Chat lifetime</span><strong>30 min</strong></div>
             <button class="settings-row" id="changeLogin"><svg><use href="#key"/></svg><span>Change login PIN</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="resetPin"><svg><use href="#key"/></svg><span id="resetLabel">Request Reset</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <div class="settings-row">
+              <svg><use href="#eye"/></svg><span>Privacy mode</span>
+              <label class="privacy-switch"><input id="privacyMode" type="checkbox" aria-label="Privacy mode"><span></span></label>
+            </div>
             <button class="settings-row" id="appInfo">
               <svg><use href="#info"/></svg>
               <span>Info</span>

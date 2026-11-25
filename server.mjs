@@ -192,11 +192,29 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   });
 });
 app.post('/api/message', guard('send', 80, 60_000), (req, res) => {
-  chats.send(req.account.id, req.body?.id, req.body?.text);
+  chats.send(req.account.id, req.body?.id, req.body?.text, req.body?.replyTo ?? null);
   res.json({
     ok: true
   });
 });
+app.post('/api/group/create', guard('group-create', 10, 60_000), (req, res) => {
+  res.json({ id: chats.createGroup(req.account.id) });
+});
+
+app.post('/api/group/invite', guard('group-invite', 20, 60_000), (req, res) => {
+  res.json(chats.groupInvite(req.account.id, req.body?.id));
+});
+
+app.post('/api/typing', guard('typing', 100, 60_000), (req, res) => {
+  chats.setTyping(req.account.id, req.body?.id, req.body?.active);
+  res.json({ ok: true });
+});
+
+app.post('/api/receipts', guard('receipts', 100, 60_000), (req, res) => {
+  chats.acknowledge(req.account.id, req.body?.entries);
+  res.json({ ok: true });
+});
+
 app.post('/api/chat/delete', (req, res) => {
   chats.remove(req.account.id, req.body?.id);
   res.json({

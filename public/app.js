@@ -51,6 +51,14 @@ let qrPending = '';
 let loopStarted = false;
 let pendingInvite = '';
 let sendingMessage = false;
+let privacyMode = false;
+let replyTarget = null;
+let lastTypingAt = 0;
+let typingRoom = null;
+let receiptsInFlight = false;
+const revealedMessages = new Set();
+const acknowledgedDelivery = new Set();
+const acknowledgedRead = new Set();
 
 function routeName(path) {
   return path === '/settings' ? 'settings': path === '/connect' ? 'connect': 'chat';
@@ -64,7 +72,15 @@ function updatePages() {
 
 function navigate(path, push = true) {
   if (push) history.pushState(null, '', path);
-  page = routeName(location.pathname);
+  const nextPage = routeName(location.pathname);
+  if (page !== nextPage) {
+    stopTyping();
+    clearReply();
+    revealedMessages.clear();
+    contactKey = '';
+    renderedRoom = null;
+  }
+  page = nextPage;
   if (page === 'connect' && pendingInvite && unlockToken) {
     $('enterCode').value = pendingInvite;
     pendingInvite = '';
@@ -90,7 +106,7 @@ const clock = ms => {
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 };
 const serverNow = () => Date.now() + offset;
-const nameFor = room => room.admin ? 'Admin' : 'Chat ' + room.id.slice(0, 4).toUpperCase();
+const nameFor = room => room.admin ? 'Admin' : (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
   cancelAnimationFrame(scanFrame);
@@ -162,11 +178,11 @@ function dialogError(error) {
   p.textContent = errorMessage(error);
 }
 
-async function api(path, data) {
+async function api(path, data, quiet = false) {
   const write = data !== undefined, epoch = authEpoch, token = unlockToken;
   const authRoute = ['session', 'login/setup', 'login/unlock', 'login/emergency'].includes(path);
   if (!authRoute && !token) throw new Error('Locked.');
-  if (write) sequence++;
+  if (write && !quiet) sequence++;
   const headers = {};
   if (write) {
     headers['Content-Type'] = 'application/json';
@@ -397,6 +413,19 @@ function lock(reopen = true) {
   const old = unlockToken;
   unlockToken = null;
   sendingMessage = false;
+  typingRoom = null;
+  lastTypingAt = 0;
+  receiptsInFlight = false;
+  acknowledgedDelivery.clear();
+  acknowledgedRead.clear();
+  revealedMessages.clear();
+  clearReply();
+  $('typingIndicator').hidden = true;
+  $('typingLabel').textContent = '';
+  $('memberCount').hidden = true;
+  $('memberCount').textContent = '';
+  $('expiryProgress').hidden = true;
+  $('groupInvite').hidden = true;
   revokeToken(old);
   stopCamera();
   pinPrompt = false;
@@ -462,6 +491,9 @@ window.visualViewport?.addEventListener('resize', setViewport);
 
 function selectRoom(id, open = true) {
   if (selected !== id) {
+    stopTyping();
+    clearReply();
+    revealedMessages.clear();
     $('message').value = '';
     $('send').disabled = true;
   }
@@ -476,6 +508,9 @@ function renderChat() {
   const now = serverNow(), rooms = state.rooms.filter(r => r.expires > now);
   if (!rooms.some(r => r.id === selected)) {
     if (selected !== null) {
+      stopTyping();
+      clearReply();
+      revealedMessages.clear();
       $('message').value = '';
       $('send').disabled = true;
       mobileOpen = false;
@@ -485,7 +520,7 @@ function renderChat() {
   const current = rooms.find(r => r.id === selected);
   $('chatPage').classList.toggle('thread-open', Boolean(current && mobileOpen));
   $('chatCount').textContent = rooms.length ? String(rooms.length): '';
-  const key = JSON.stringify(rooms.map(r => [r.id, r.messages.at(-1)?.id, r.id === selected]));
+  const key = JSON.stringify([privacyMode, rooms.map(r => [r.id, r.memberCount, r.messages.at(-1)?.id, r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -513,8 +548,9 @@ function renderChat() {
         name.append(badge);
       }
 
-      content.append(name, el('span', 'contact-preview', last ? last.text : 'New chat'));
-      b.append(svg(r.admin ? 'adminAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
+      const preview = last ? (privacyMode ? 'Message hidden' : last.text) : r.group ? r.memberCount + ' members' : 'New chat';
+      content.append(name, el('span', 'contact-preview', preview));
+      b.append(svg(r.admin ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       b.addEventListener('click', () => selectRoom(r.id));
       list.append(b);
     }
@@ -528,7 +564,14 @@ function renderChat() {
   $('adminComposer').hidden = !isAdmin;
   $('deleteChat').hidden = isAdmin;
   $('threadBadge').hidden = !isAdmin;
-  $('threadAvatar').setAttribute('href', isAdmin ? '#adminAvatar' : '#avatar');
+  $('threadAvatar').setAttribute('href', isAdmin ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
+  $('groupInvite').hidden = !current?.canInvite;
+  $('memberCount').hidden = !current?.group;
+  $('memberCount').textContent = current?.group ? current.memberCount + ' members' : '';
+  $('expiryProgress').hidden = !current;
+  $('typingIndicator').hidden = !current?.typing?.length;
+  $('typingLabel').textContent = current?.typing?.length ? (current.group ? current.typing.join(', ') : 'Contact') + (current.typing.length === 1 ? ' is typing' : ' are typing') : '';
+  renderReply();
   $('thread').classList.toggle('admin-thread', isAdmin);
   updateSendButton();
   if (!current) {
@@ -539,23 +582,200 @@ function renderChat() {
   }
   $('threadName').textContent = nameFor(current);
   $('chatTimer').textContent = clock(current.expires - now);
-  const container = $('messages'), ids = current.messages.map(m => m.id);
+  updateExpiry(current);
+  const container = $('messages');
+  const ids = current.messages.map(message => message.id);
   const sameRoom = renderedRoom === current.id;
-  const appendOnly = sameRoom && renderedMessages.length <= ids.length && renderedMessages.every((v, i) => ids[i] === v);
-  if (appendOnly && renderedMessages.length === ids.length) return;
-  const follow = !sameRoom || container.scrollHeight - container.scrollTop - container.clientHeight < 100 || current.messages.at(-1)?.mine;
+  const appendOnly = sameRoom && renderedMessages.length <= ids.length &&
+    renderedMessages.every((id, index) => ids[index] === id);
+
+  const follow = !sameRoom || container.scrollHeight - container.scrollTop - container.clientHeight < 100 ||
+    (ids.length > renderedMessages.length && current.messages.at(-1)?.mine);
+
   if (!appendOnly) container.replaceChildren();
-  const start = appendOnly ? renderedMessages.length: 0;
-  for (const m of current.messages.slice(start)) {
-    const row = el('div', 'message-row' + (m.mine ? ' mine': ''));
-    const bubble = el('div', 'bubble', m.text);
-    bubble.append(el('span', 'bubble-time', fmtTime(m.at)));
-    row.append(bubble);
-    container.append(row);
+
+  const first = appendOnly ? renderedMessages.length : 0;
+
+  for (const message of current.messages.slice(first)) {
+    container.append(renderMessage(current, message));
   }
+
+  for (const message of current.messages) {
+    if (!message.mine) continue;
+    const row = document.getElementById('message-' + message.id);
+    const status = row?.querySelector('.message-status');
+    if (status && status.dataset.status !== message.status) updateStatus(status, message.status);
+  }
+
   renderedRoom = current.id;
   renderedMessages = ids;
   if (follow) container.scrollTop = container.scrollHeight;
+}
+
+function updateExpiry(room) {
+  const remaining = Math.max(0, room.expires - serverNow());
+  const bar = $('expiryProgress');
+  bar.max = room.expires - room.created;
+  bar.value = remaining;
+  bar.classList.toggle('expiring', remaining <= 5 * 60_000);
+  bar.classList.toggle('critical', remaining <= 60_000);
+}
+
+function updateStatus(node, status) {
+  node.dataset.status = status;
+  node.title = status === 'read' ? 'Read' : status === 'delivered' ? 'Delivered' : 'Sent';
+  node.setAttribute('aria-label', node.title);
+  node.replaceChildren(svg(status === 'sent' ? 'check' : 'doubleCheck'));
+}
+
+function renderMessage(room, message) {
+  const row = el('div', 'message-row' + (message.mine ? ' mine' : ''));
+  row.id = 'message-' + message.id;
+  const bubble = el('div', 'bubble');
+  const content = el('div', 'message-content');
+  const masked = privacyMode && !revealedMessages.has(message.id);
+
+  if (room.group && !message.mine) content.append(el('strong', 'message-author', message.sender));
+
+  if (message.reply) {
+    const quote = el('div', 'message-quote');
+    quote.append(el('strong', '', message.reply.sender), el('span', '', message.reply.text));
+    content.append(quote);
+  }
+
+  content.append(el('div', 'message-text', message.text));
+  bubble.append(content);
+
+  const footer = el('div', 'message-footer');
+  footer.append(el('span', 'bubble-time', fmtTime(message.at)));
+
+  if (message.mine) {
+    const status = el('span', 'message-status');
+    updateStatus(status, message.status);
+    footer.append(status);
+  }
+
+  bubble.append(footer);
+
+  if (masked) {
+    bubble.classList.add('masked-message');
+    content.setAttribute('aria-hidden', 'true');
+    const reveal = button('Tap to reveal', () => {
+      revealedMessages.add(message.id);
+      bubble.classList.remove('masked-message');
+      content.removeAttribute('aria-hidden');
+      reveal.remove();
+      if (canReadCurrent()) acknowledgeMessages();
+    }, 'reveal-message');
+    bubble.append(reveal);
+  }
+
+  if (!room.admin) {
+    const reply = button('', () => {
+      replyTarget = { roomId: room.id, id: message.id, sender: message.sender, text: message.text };
+      renderReply();
+      $('message').focus();
+    }, 'reply-action');
+    reply.title = 'Reply';
+    reply.setAttribute('aria-label', 'Reply to message');
+    reply.append(svg('reply'));
+    row.append(reply);
+  }
+
+  row.append(bubble);
+  return row;
+}
+
+function clearReply() {
+  replyTarget = null;
+  $('replyComposer').hidden = true;
+  $('replyName').textContent = '';
+  $('replyText').textContent = '';
+}
+
+function renderReply() {
+  if (!replyTarget || replyTarget.roomId !== selected || page !== 'chat') {
+    $('replyComposer').hidden = true;
+    return;
+  }
+
+  $('replyComposer').hidden = false;
+  $('replyName').textContent = 'Reply to ' + replyTarget.sender;
+  $('replyText').textContent = privacyMode && !revealedMessages.has(replyTarget.id) ? 'Message hidden' : replyTarget.text;
+}
+
+function stopTyping() {
+  const id = typingRoom;
+  typingRoom = null;
+  lastTypingAt = 0;
+  if (id && unlockToken) api('typing', { id, active: false }, true).catch(() => {});
+}
+
+function reportTyping() {
+  const room = state.rooms.find(room => room.id === selected);
+  if (!unlockToken || page !== 'chat' || !room || room.admin || !$('message').value.trim()) {
+    stopTyping();
+    return;
+  }
+  if (typingRoom !== room.id) stopTyping();
+  if (Date.now() - lastTypingAt < 1800) return;
+  typingRoom = room.id;
+  lastTypingAt = Date.now();
+  api('typing', { id: room.id, active: true }, true).catch(() => {});
+}
+
+function canReadCurrent() {
+  return page === 'chat' && !document.hidden && (!mobile.matches || mobileOpen);
+}
+
+async function acknowledgeMessages() {
+  if (receiptsInFlight || !unlockToken || document.hidden) return;
+  const epoch = authEpoch;
+  const entries = [];
+  for (const room of state.rooms) {
+    if (room.admin) continue;
+    const delivered = [];
+    const read = [];
+    for (const message of room.messages) {
+      if (message.mine) continue;
+      if (!acknowledgedDelivery.has(message.id)) delivered.push(message.id);
+      const node = document.getElementById('message-' + message.id);
+      const view = $('messages').getBoundingClientRect();
+      const rect = node?.getBoundingClientRect();
+      const visible = rect && rect.bottom > view.top && rect.top < view.bottom;
+      if (room.id === selected && canReadCurrent() && visible && (!privacyMode || revealedMessages.has(message.id)) && !acknowledgedRead.has(message.id)) read.push(message.id);
+    }
+    if (delivered.length || read.length) entries.push({ id: room.id, delivered, read });
+  }
+
+  if (!entries.length) return;
+  const batch = [];
+  let size = 0;
+  for (const entry of entries) {
+    const ids = [...new Set([...entry.delivered, ...entry.read])];
+    const deliveredSet = new Set(entry.delivered);
+    const readSet = new Set(entry.read);
+    for (let index = 0; index < ids.length; index += 60) {
+      const part = ids.slice(index, index + 60);
+      if (size + part.length > 100) break;
+      batch.push({ id: entry.id, delivered: part.filter(id => deliveredSet.has(id)), read: part.filter(id => readSet.has(id)) });
+      size += part.length;
+    }
+    if (size >= 100) break;
+  }
+
+  receiptsInFlight = true;
+  try {
+    await api('receipts', { entries: batch }, true);
+    if (epoch !== authEpoch) return;
+    for (const entry of batch) {
+      entry.delivered.forEach(id => acknowledgedDelivery.add(id));
+      entry.read.forEach(id => acknowledgedRead.add(id));
+    }
+  } catch {} finally {
+    if (epoch === authEpoch) receiptsInFlight = false;
+  }
+
 }
 
 function renderConnect() {
@@ -612,11 +832,19 @@ function purgeExpired() {
     render();
   }
   const room = state.rooms.find(r => r.id === selected);
-  if (room) $('chatTimer').textContent = clock(room.expires - now);
+  if (room) {
+    $('chatTimer').textContent = clock(room.expires - now);
+    updateExpiry(room);
+  }
   if (page === 'connect' && state.invite) $('inviteTimer').textContent = clock(state.invite.expires - now);
 }
 
 function clearVolatile() {
+  stopTyping();
+  clearReply();
+  revealedMessages.clear();
+  acknowledgedDelivery.clear();
+  acknowledgedRead.clear();
   sequence++;
   state.rooms = [];
   state.invite = null;
@@ -647,6 +875,7 @@ async function refresh() {
   }
   render();
   purgeExpired();
+  acknowledgeMessages();
 }
 
 function offerPin() {
@@ -676,6 +905,9 @@ $('changeLogin').addEventListener('click', () => {
   });
 });
 $('backToChats').addEventListener('click', () => {
+  stopTyping();
+  clearReply();
+  revealedMessages.clear();
   mobileOpen = false;
   selected = null;
   renderedRoom = null;
@@ -708,12 +940,14 @@ async function sendMessage() {
   updateSendButton();
 
   try {
-    await api('message', { id, text });
+    await api('message', { id, text, replyTo: replyTarget?.roomId === id ? replyTarget.id : null });
 
     if (epoch !== authEpoch) return;
 
     if (selected === id && $('message').value.trim() === text) {
       $('message').value = '';
+      clearReply();
+      stopTyping();
     }
 
     await refresh();
@@ -727,7 +961,12 @@ async function sendMessage() {
   }
 }
 
-$('message').addEventListener('input', updateSendButton);
+$('message').addEventListener('input', () => {
+  updateSendButton();
+  reportTyping();
+});
+$('cancelReply').addEventListener('click', clearReply);
+$('messages').addEventListener('scroll', acknowledgeMessages, { passive: true });
 $('send').addEventListener('click', sendMessage);
 
 $('message').addEventListener('keydown', event => {
@@ -745,7 +984,10 @@ $('composer').addEventListener('submit', event => {
 $('deleteChat').addEventListener('click', () => {
   const id = selected;
   if (!id) return;
-  const confirm = button('Delete for both', async() => {
+  const room = state.rooms.find(room => room.id === id);
+  if (!room || room.admin) return;
+  const leave = room.group && !room.canInvite;
+  const confirm = button(leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
     confirm.disabled = true;
     try {
       await api('chat/delete', {
@@ -759,8 +1001,58 @@ $('deleteChat').addEventListener('click', () => {
       modalError(e);
     }
   }, 'primary-button danger-button');
-  show('Delete chat?', [el('p', '', 'This removes the conversation for both participants.'), confirm, button('Cancel', closeModal, 'secondary-button')]);
+  show(leave ? 'Leave group?' : 'Delete chat?', [el('p', '', leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, button('Cancel', closeModal, 'secondary-button')]);
 });
+try {
+  privacyMode = localStorage.getItem('qzu-privacy') === '1';
+} catch {}
+
+$('privacyMode').checked = privacyMode;
+$('privacyMode').addEventListener('change', () => {
+  privacyMode = $('privacyMode').checked;
+  revealedMessages.clear();
+  contactKey = '';
+  renderedRoom = null;
+  try { localStorage.setItem('qzu-privacy', privacyMode ? '1' : '0'); } catch {}
+  render();
+});
+
+$('createGroup').addEventListener('click', () => {
+  const create = button('Create group', async () => {
+    create.disabled = true;
+    try {
+      const result = await api('group/create', {});
+      closeModal();
+      await refresh();
+      navigate('/chat');
+      selectRoom(result.id);
+      await showGroupInvite(result.id);
+    } catch (error) {
+      create.disabled = false;
+      showError(error);
+    }
+  });
+  show('New group', [el('p', '', 'Up to 12 members. Expires 30 minutes after creation.'), create, button('Cancel', closeModal, 'secondary-button')]);
+});
+
+async function showGroupInvite(id) {
+  try {
+    const invite = await api('group/invite', { id });
+    const code = el('strong', 'pin-display', invite.code);
+    const copy = button('Copy code', async () => {
+      try { await navigator.clipboard.writeText(invite.code); } catch {}
+    });
+    const expires = el('p', '', 'Valid for ' + clock(invite.expires - serverNow()) + ' at the time of opening.');
+    show('Group invite', [code, expires, el('p', '', 'Share this code. Members join using Connect.'), copy, button('Close', closeModal, 'secondary-button')]);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+$('groupInvite').addEventListener('click', () => {
+  if (selected) showGroupInvite(selected);
+});
+
 $('newCode').addEventListener('click', async() => {
   $('newCode').disabled = true;
   try {
@@ -911,6 +1203,8 @@ $('appInfo').addEventListener('click', () => {
     ['Connection codes', 'Invite codes expire after 10 minutes. Generate a new code when needed.'],
     ['Automatic lock', 'Leaving the tab locks qzu. Unlock with your login PIN.'],
     ['emg.exe', 'Your single-use emergency PIN removes your active chats for all participants. A replacement requires developer approval.'],
+    ['Groups', 'Up to 12 anonymous members. Groups expire 30 minutes after creation. New members can see existing group messages.'],
+    ['Privacy mode', 'Hide chat previews and blur messages until you reveal them. This is a visual privacy feature, not encryption.'],
     ['Privacy', 'Messages are not yet end-to-end encrypted. Screenshots and externally saved copies cannot be removed by qzu.']
   ];
 
