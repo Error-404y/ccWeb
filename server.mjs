@@ -6,6 +6,7 @@ import { Chats } from './lib/chats.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
 import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, applyRenewal, submitPayment } from './lib/access.mjs';
+import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
 import { handleAdminCommand } from './lib/admin.mjs';
@@ -15,12 +16,16 @@ process.umask(0o077);
 const root = dirname(fileURLToPath(import.meta.url));
 const app = express(), db = openAccounts();
 initAccess(db);
+initDevices(db);
+const devices = deviceVerifier();
 const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 const unlocks = new Unlocks(), sendingResets = new Map();
 const production = process.env.NODE_ENV === 'production';
 if (production && !process.env.PUBLIC_ORIGIN) throw new Error('Set PUBLIC_ORIGIN to your HTTPS origin.');
 const publicOrigin = process.env.PUBLIC_ORIGIN;
+const mobileOnly = process.env.QZU_MOBILE_ONLY === 'true' || (production && process.env.QZU_MOBILE_ONLY !== 'false');
+const nativeOrigins = new Set(['capacitor://localhost', 'https://localhost']);
 if (production && !publicOrigin.startsWith('https://')) throw new Error('HTTPS required.');
 if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -36,7 +41,21 @@ app.use((req, res, next) => {
   if (production) res.set('Strict-Transport-Security', 'max-age=31536000');
   next();
 });
-app.use((req, res, next) => express.json({ limit: req.path === '/api/message' ? '3mb' : '12kb' })(req, res, next));
+app.use('/api', (req, res, next) => {
+  const origin = req.get('origin');
+  if (nativeOrigins.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, X-QZU, X-QZU-Unlock, X-QZU-Device, X-QZU-Signature, X-QZU-Time, X-QZU-Nonce');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+  }
+  next();
+});
+app.use((req, res, next) => express.json({
+  limit: req.path === '/api/message' ? '3mb' : '12kb',
+  verify: (req, res, buffer) => { req.rawBody = buffer.toString('utf8'); }
+})(req, res, next));
 const cookieName = production ? '__Host-qzu': 'qzu';
 const readToken = req => req.headers.cookie?.split(';').map(x => x.trim()).find(x => x.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
 const limits = new Map();
@@ -53,6 +72,7 @@ function rate(key, max, period) {
 const timer = setInterval(() => {
   chats.sweep();
   unlocks.sweep();
+  devices.sweep();
   const now = Date.now();
   for (const [k, v] of limits) if (v.until <= now) limits.delete(k);
 }, 1000);
@@ -61,14 +81,25 @@ app.use('/api', (req, res, next) => {
   if (!['GET', 'HEAD'].includes(req.method)) {
     const origin = req.get('origin');
     const allowed = publicOrigin || req.protocol + '://' + req.get('host');
-    if (req.get('x-qzu') !== '1' || (origin && origin !== allowed)) return res.status(403).json({
+    if (req.get('x-qzu') !== '1' || (origin && origin !== allowed && !nativeOrigins.has(origin))) return res.status(403).json({
       error: 'Request rejected.'
     });
   }
   if (!rate('ip:' + req.ip, 600, 60_000)) return res.status(429).json({
     error: 'Try again shortly.'
   });
-  req.account = findAccount(db, readToken(req));
+  if (req.get('x-qzu-device')) {
+    req.deviceId = devices.authenticate({
+      publicKey: req.get('x-qzu-device'), signature: req.get('x-qzu-signature'), timestamp: req.get('x-qzu-time'), nonce: req.get('x-qzu-nonce'),
+      method: req.method, path: req.originalUrl, body: req.rawBody || '', unlock: req.get('x-qzu-unlock') || ''
+    });
+    if (!req.deviceId) return res.status(401).json({ error: 'Device verification failed.' });
+    req.account = findDeviceAccount(db, req.deviceId);
+  } else {
+    if (mobileOnly) return res.status(403).json({ error: 'Use the qzu. mobile app.' });
+    req.account = findAccount(db, readToken(req));
+    if (req.account?.device_id) return res.status(403).json({ error: 'Use your registered device.' });
+  }
   next();
 });
 const accessRequired = process.env.QZU_ACCESS_REQUIRED !== 'false';
@@ -126,9 +157,9 @@ app.post('/api/session', (req, res) => {
     if (!rate('new:' + req.ip, 20, 60 * 60_000)) return res.status(429).json({
       error: 'Try again later.'
     });
-    if (accessRequired && !req.body?.accessKey) return res.json({ accessRequired: true });
-    const { token, id } = accessRequired ? redeemAccess(db, req.body.accessKey) : createAccount(db);
-    res.cookie(cookieName, token, {
+    if ((accessRequired || req.deviceId) && !req.body?.accessKey) return res.json({ accessRequired: true });
+    const { token, id } = accessRequired || req.deviceId ? redeemAccess(db, req.body.accessKey, Date.now(), req.deviceId || null) : createAccount(db);
+    if (!req.deviceId) res.cookie(cookieName, token, {
       httpOnly: true,
       secure: production,
       sameSite: 'strict',
@@ -384,6 +415,11 @@ app.post('/api/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) => {
 app.use('/api', (req, res) => res.status(404).json({
   error: 'Not found.'
 }));
+app.use((req, res, next) => {
+  if (!mobileOnly) return next();
+  if (req.path === '/') return res.type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu.</title><h1>qzu.</h1><p>Mobile app only.</p></html>');
+  res.status(404).send('Not found');
+});
 app.get('/vendor/jsqr.js', (req, res) => res.sendFile(resolve(root, 'node_modules/jsqr/dist/jsQR.js')));
 app.use(express.static(resolve(root, 'public'), {
   index: false,

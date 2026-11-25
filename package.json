@@ -1,6 +1,6 @@
 {
   "name": "qzu-messenger",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -17,11 +17,21 @@
     "access-invoices": "node --env-file-if-exists=.env scripts/access.mjs invoices",
     "access-review": "node --env-file-if-exists=.env scripts/access.mjs review",
     "access-approve": "node --env-file-if-exists=.env scripts/access.mjs approve",
-    "access-reject": "node --env-file-if-exists=.env scripts/access.mjs reject"
+    "access-reject": "node --env-file-if-exists=.env scripts/access.mjs reject",
+    "mobile:prepare": "node scripts/mobile-prepare.mjs",
+    "mobile:ios": "npm run mobile:prepare -- ios && npx cap open ios",
+    "mobile:android": "npm run mobile:prepare -- android && npx cap open android"
   },
   "dependencies": {
     "express": "^5.1.0",
     "qrcode": "^1.5.4",
-    "jsqr": "^1.4.0"
+    "jsqr": "^1.4.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.0.0"
   }
 }

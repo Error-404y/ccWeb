@@ -1,5 +1,21 @@
 'use strict';
 const $ = id => document.getElementById(id);
+const native = window.Capacitor?.isNativePlatform?.() === true;
+const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
+const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
+
+async function transport(path, options = {}) {
+  if (!native) return fetch(path, options);
+  if (!apiOrigin || !apiOrigin.startsWith('https://')) throw new Error('Mobile server unavailable.');
+  const headers = { ...options.headers };
+  const timestamp = String(Date.now());
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+  const message = JSON.stringify(['qzu-device-v1', options.method || 'GET', path, timestamp, nonce, headers['X-QZU-Unlock'] || '', options.body || '']);
+  const result = await devicePlugin.sign({ message });
+  Object.assign(headers, { 'X-QZU-Device': result.publicKey, 'X-QZU-Signature': result.signature, 'X-QZU-Time': timestamp, 'X-QZU-Nonce': nonce });
+  return fetch(apiOrigin + path, { ...options, headers, credentials: 'omit' });
+}
+
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
@@ -16,7 +32,7 @@ const svg = (name, cls) => {
   return node;
 };
 let page = location.pathname === '/settings' ? 'settings': location.pathname === '/connect' ? 'connect': 'chat';
-const mobile = matchMedia('(max-width:700px)');
+const mobile = native ? { matches: true, addEventListener() {} } : matchMedia('(max-width:700px)');
 let state = {
   rooms: [],
   invite: null,
@@ -213,7 +229,7 @@ async function api(path, data, quiet = false) {
   if (token) headers['X-QZU-Unlock'] = token;
   let res;
   try {
-    res = await fetch('/api/' + path, {
+    res = await transport('/api/' + path, {
       method: write ? 'POST': 'GET',
       headers,
       body: write ? JSON.stringify(data): undefined,
@@ -246,7 +262,7 @@ async function api(path, data, quiet = false) {
 
 function revokeToken(token) {
   if (!token) return;
-  fetch('/api/login/lock', {
+  transport('/api/login/lock', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1226,7 +1242,7 @@ function parseScan(raw) {
   if (/^[A-Z0-9]{6}$/.test(value)) return value;
   try {
     const url = new URL(raw);
-    if (url.origin !== location.origin || url.pathname !== '/connect') return null;
+    if (url.origin !== apiOrigin || url.pathname !== '/connect') return null;
     const code = url.hash.slice(1).toUpperCase();
     return /^[A-Z0-9]{6}$/.test(code) ? code: null;
   } catch {
@@ -1398,6 +1414,13 @@ if (page === 'connect' && location.hash) {
   const code = location.hash.slice(1).toUpperCase();
   if (/^[A-Z0-9]{6}$/.test(code)) pendingInvite = code;
   history.replaceState(null, '', location.pathname);
+}
+if (native) {
+  window.Capacitor.registerPlugin('App').addListener('appStateChange', ({ isActive }) => {
+    if (!isActive) { if (!isPublicCheckout()) lock(); }
+    else if (isPublicCheckout()) resumeCheckout?.();
+    else if (!unlockToken) getSession();
+  });
 }
 window.addEventListener('offline', () => {
   if (unlockToken) lock();
@@ -1609,7 +1632,7 @@ function showMedia(room, kind, source, messageId) {
 async function openMedia(room, message) {
   const epoch = authEpoch;
   try {
-    const response = await fetch('/api/media/' + encodeURIComponent(room.id) + '/' + encodeURIComponent(message.id), {
+    const response = await transport('/api/media/' + encodeURIComponent(room.id) + '/' + encodeURIComponent(message.id), {
       headers: { 'X-QZU-Unlock': unlockToken }, cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(8000)
     });
     if (!response.ok) throw new Error('Attachment unavailable.');

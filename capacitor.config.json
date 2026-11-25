@@ -1,0 +1,15 @@
+{
+  "appId": "cc.qzu.app",
+  "appName": "qzu.",
+  "webDir": "mobile-dist",
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "capacitor"
+  },
+  "ios": {
+    "contentInset": "automatic"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
