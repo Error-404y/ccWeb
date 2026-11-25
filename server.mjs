@@ -6,7 +6,7 @@ import { Chats } from './lib/chats.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
 import { Unlocks } from './lib/unlocks.mjs';
-import { sendReset } from './lib/discord.mjs';
+import { sendReset, sendFeedback } from './lib/discord.mjs';
 import { handleAdminCommand } from './lib/admin.mjs';
 import { startAdminSocket } from './lib/admin-socket.mjs';
 
@@ -162,13 +162,14 @@ app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
 });
 app.get('/api/state', (req, res) => {
   const a = req.account;
-  chats.markPresent(a.id);
+  chats.markPresent(a.id, Boolean(a.invisible));
   res.json({
     now: Date.now(),
     rooms: chats.snapshot(a.id),
     requests: chats.connectionRequests(a.id),
     invite: chats.ensureInvite(a.id),
     pinState: a.pin_state,
+    invisible: Boolean(a.invisible),
     resetPending: Boolean(a.request),
     resetDelivered: Boolean(a.request && a.request_sent)
   });
@@ -201,6 +202,31 @@ app.post('/api/connection/respond', guard('connection-response', 30, 60_000), (r
   res.json(chats.respondConnection(req.account.id, req.body?.id, req.body?.accept === true));
 });
 
+app.post('/api/message/unsend', guard('unsend', 40, 60_000), (req, res) => {
+  chats.unsend(req.account.id, req.body?.id, req.body?.messageId);
+  res.json({ ok: true });
+});
+
+app.post('/api/privacy/invisible', guard('invisible', 20, 60_000), (req, res) => {
+  if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'Invalid setting.' });
+  db.prepare('UPDATE accounts SET invisible=? WHERE id=?').run(Number(req.body.enabled), req.account.id);
+  chats.markPresent(req.account.id, req.body.enabled);
+  res.json({ invisible: req.body.enabled });
+});
+
+app.post('/api/feedback', guard('feedback', 3, 10 * 60_000), async (req, res) => {
+  const message = req.body?.message;
+  if (typeof message !== 'string' || !message.trim() || message.trim().length > 2000 || req.body?.confirmed !== true) {
+    return res.status(400).json({ error: 'Enter and confirm your feedback.' });
+  }
+  try {
+    await sendFeedback(message);
+    res.json({ ok: true });
+  } catch {
+    res.status(503).json({ error: 'Feedback delivery unavailable.' });
+  }
+});
+
 app.post('/api/message/edit', guard('edit', 40, 60_000), (req, res) => {
   chats.edit(req.account.id, req.body?.id, req.body?.messageId, req.body?.text);
   res.json({ ok: true });
@@ -212,7 +238,7 @@ app.post('/api/message/react', guard('react', 80, 60_000), (req, res) => {
 });
 
 app.post('/api/message/open', guard('open', 80, 60_000), (req, res) => {
-  res.json(chats.openOnce(req.account.id, req.body?.id, req.body?.messageId));
+  res.json(chats.openOnce(req.account.id, req.body?.id, req.body?.messageId, Boolean(req.account.invisible)));
 });
 
 app.get('/api/media/:room/:message', guard('media', 120, 60_000), (req, res) => {
@@ -243,12 +269,12 @@ app.post('/api/group/invite', guard('group-invite', 20, 60_000), (req, res) => {
 });
 
 app.post('/api/typing', guard('typing', 100, 60_000), (req, res) => {
-  chats.setTyping(req.account.id, req.body?.id, req.body?.active);
+  chats.setTyping(req.account.id, req.body?.id, req.body?.active, Boolean(req.account.invisible));
   res.json({ ok: true });
 });
 
 app.post('/api/receipts', guard('receipts', 100, 60_000), (req, res) => {
-  chats.acknowledge(req.account.id, req.body?.entries);
+  chats.acknowledge(req.account.id, req.body?.entries, Boolean(req.account.invisible));
   res.json({ ok: true });
 });
 
@@ -320,7 +346,7 @@ app.use((err, req, res, next) => {
   });
 });
 const port = Number(process.env.PORT || 3000);
-startAdminSocket(command => handleAdminCommand(db, chats, command))
+startAdminSocket(command => handleAdminCommand(db, chats, command, unlocks))
   .then(() => {
     app.listen(port, process.env.HOST || '0.0.0.0', () => console.log('qzu. listening on ' + port));
   })

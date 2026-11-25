@@ -53,6 +53,8 @@ let pendingInvite = '';
 let sendingMessage = false;
 let viewOnce = false;
 let mediaRoom = null;
+let mediaMessage = null;
+let invisibleSaving = false;
 let mediaUrl = null;
 let recordingCleanup = null;
 const reactions = ['👍', '❤️', '😂', '🔥', '😮', '👎'];
@@ -423,6 +425,8 @@ function lock(reopen = true) {
   const old = unlockToken;
   unlockToken = null;
   sendingMessage = false;
+  invisibleSaving = false;
+  $('invisibleMode').checked = false;
   resetOnce();
   clearMedia();
   $('connectionRequests').hidden = true;
@@ -539,7 +543,7 @@ function renderChat() {
   renderRequests();
   $('chatPage').classList.toggle('thread-open', Boolean(current && mobileOpen));
   $('chatCount').textContent = rooms.length ? String(rooms.length): '';
-  const key = JSON.stringify([privacyMode, rooms.map(r => [r.id, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.id === selected])]);
+  const key = JSON.stringify([privacyMode, rooms.map(r => [r.id, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -608,7 +612,7 @@ function renderChat() {
   $('chatTimer').textContent = clock(current.expires - now);
   updateExpiry(current);
   const container = $('messages');
-  const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.reactions, message.reply]));
+  const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.deleted, message.reactions, message.reply]));
   const sameRoom = renderedRoom === current.id;
   const appendOnly = sameRoom && renderedMessages.length <= ids.length &&
     renderedMessages.every((id, index) => ids[index] === id);
@@ -657,7 +661,7 @@ function renderMessage(room, message) {
   row.id = 'message-' + message.id;
   const bubble = el('div', 'bubble');
   const content = el('div', 'message-content');
-  const masked = privacyMode && !revealedMessages.has(message.id) && !message.once;
+  const masked = privacyMode && !revealedMessages.has(message.id) && !message.once && !message.deleted;
 
   if (room.group && !message.mine) content.append(el('strong', 'message-author', message.sender));
 
@@ -667,7 +671,9 @@ function renderMessage(room, message) {
     content.append(quote);
   }
 
-  if (message.once) {
+  if (message.deleted) {
+    content.append(el('div', 'deleted-message', 'This message was deleted.'));
+  } else if (message.once) {
     const label = message.opened ? 'Opened' : message.mine ? 'View-once message' : 'Open once';
     const open = button(label, () => openOnceMessage(room, message), 'media-message');
     open.disabled = message.mine || message.opened;
@@ -684,7 +690,7 @@ function renderMessage(room, message) {
   if (message.edited) footer.append(el('span', 'edited-label', 'Edited'));
   footer.append(el('span', 'bubble-time', fmtTime(message.at)));
 
-  if (message.mine) {
+  if (message.mine && !message.deleted) {
     const status = el('span', 'message-status');
     updateStatus(status, message.status);
     footer.append(status);
@@ -705,7 +711,7 @@ function renderMessage(room, message) {
     bubble.append(reveal);
   }
 
-  if (!room.admin && !message.once) {
+  if (!room.admin && !message.once && !message.deleted) {
     const reply = button('', () => {
       replyTarget = { roomId: room.id, id: message.id, sender: message.sender, text: previewText(message) };
       renderReply();
@@ -728,6 +734,11 @@ function renderMessage(room, message) {
     }
   }
 
+  if (!room.admin && message.once && message.mine && !message.deleted) {
+    const more = button('⋯', () => messageActions(room, message), 'reply-action message-more');
+    more.setAttribute('aria-label', 'Message actions');
+    row.append(more);
+  }
   row.append(bubble);
   return row;
 }
@@ -759,7 +770,7 @@ function stopTyping() {
 
 function reportTyping() {
   const room = state.rooms.find(room => room.id === selected);
-  if (!unlockToken || page !== 'chat' || !room || room.admin || !$('message').value.trim()) {
+  if (!unlockToken || state.invisible || page !== 'chat' || !room || room.admin || !$('message').value.trim()) {
     stopTyping();
     return;
   }
@@ -783,13 +794,13 @@ async function acknowledgeMessages() {
     const delivered = [];
     const read = [];
     for (const message of room.messages) {
-      if (message.mine) continue;
+      if (message.mine || message.deleted) continue;
       if (!acknowledgedDelivery.has(message.id)) delivered.push(message.id);
       const node = document.getElementById('message-' + message.id);
       const view = $('messages').getBoundingClientRect();
       const rect = node?.getBoundingClientRect();
       const visible = rect && rect.bottom > view.top && rect.top < view.bottom;
-      if (room.id === selected && canReadCurrent() && visible && (!privacyMode || revealedMessages.has(message.id)) && !message.once && !acknowledgedRead.has(message.id)) read.push(message.id);
+      if (!state.invisible && room.id === selected && canReadCurrent() && visible && (!privacyMode || revealedMessages.has(message.id)) && !message.once && !acknowledgedRead.has(message.id)) read.push(message.id);
     }
     if (delivered.length || read.length) entries.push({ id: room.id, delivered, read });
   }
@@ -861,6 +872,8 @@ function renderSettings() {
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
+  if (!invisibleSaving) $('invisibleMode').checked = Boolean(state.invisible);
+  $('invisibleMode').disabled = invisibleSaving || !unlockToken;
 }
 
 function render() {
@@ -909,7 +922,8 @@ async function refresh() {
   online = true;
   offset = data.now - Date.now();
   state = data;
-  if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom)) closeModal();
+  if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && (!mediaMessage || room.messages.some(message => message.id === mediaMessage && !message.deleted)))) closeModal();
+  if (replyTarget && !state.rooms.some(room => room.id === replyTarget.roomId && room.messages.some(message => message.id === replyTarget.id && !message.deleted))) clearReply();
   if (page === 'chat' && !selected) {
     let target = null;
     try {
@@ -1259,6 +1273,8 @@ $('appInfo').addEventListener('click', () => {
     ['View once', 'Direct-chat messages can be opened once by the recipient. Screenshots and saved copies cannot be prevented.'],
     ['Media', 'Photos and voice messages are held temporarily in server memory and expire with the chat.'],
     ['Connections', 'New connections require approval. Blocked accounts cannot reconnect while using the same account.'],
+    ['Invisible mode', 'Hides active status, typing and read receipts. Delivery status and opening view-once messages may still be visible.'],
+    ['Feedback', 'Only the text you explicitly submit is sent to the developer via Discord.'],
     ['Privacy', 'Messages are not yet end-to-end encrypted. Screenshots and externally saved copies cannot be removed by qzu.']
   ];
 
@@ -1376,6 +1392,7 @@ loop();
 
 
 function previewText(message) {
+  if (message.deleted) return 'This message was deleted.';
   if (message.once) return message.opened ? 'Opened' : 'View-once message';
   if (message.kind === 'image') return 'Photo';
   if (message.kind === 'audio') return 'Voice message';
@@ -1430,9 +1447,9 @@ async function reactTo(room, message, emoji) {
 function messageActions(room, message) {
   const picker = el('div', 'reaction-picker');
   for (const emoji of reactions) picker.append(button(emoji, () => reactTo(room, message, emoji), 'reaction-choice'));
-  const controls = [picker];
+  const controls = message.once ? [] : [picker];
 
-  if (message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
+  if (!message.once && message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
     controls.push(button('Edit message', () => {
       const input = el('textarea', 'edit-input');
       input.value = message.text;
@@ -1447,11 +1464,14 @@ function messageActions(room, message) {
       });
       show('Edit message', [input, save, button('Cancel', closeModal, 'secondary-button')]);
       mediaRoom = room.id;
+      mediaMessage = message.id;
     }, 'secondary-button'));
   }
+  if (message.mine && !message.deleted) controls.push(button('Unsend', () => confirmUnsend(room, message), 'primary-button danger-button'));
   controls.push(button('Close', closeModal, 'secondary-button'));
   show('Message', controls);
   mediaRoom = room.id;
+  mediaMessage = message.id;
 }
 
 $('chatOptions').addEventListener('click', () => {
@@ -1524,14 +1544,16 @@ function clearMedia() {
   if (mediaUrl) URL.revokeObjectURL(mediaUrl);
   mediaUrl = null;
   mediaRoom = null;
+  mediaMessage = null;
 }
 
-function showMedia(room, kind, source) {
+function showMedia(room, kind, source, messageId) {
   const node = el(kind === 'image' ? 'img' : 'audio', 'temporary-media');
   if (kind === 'image') node.alt = 'Temporary photo';
   else node.controls = true;
   show(kind === 'image' ? 'Photo' : 'Voice message', [node, button('Close', closeModal)]);
   mediaRoom = room.id;
+  mediaMessage = messageId;
   if (source instanceof Blob) {
     mediaUrl = URL.createObjectURL(source);
     node.src = mediaUrl;
@@ -1547,7 +1569,8 @@ async function openMedia(room, message) {
     if (!response.ok) throw new Error('Attachment unavailable.');
     const blob = await response.blob();
     if (epoch !== authEpoch || document.hidden || selected !== room.id) return;
-    showMedia(room, message.kind, blob);
+    if (!state.rooms.some(item => item.id === room.id && item.messages.some(m => m.id === message.id && !m.deleted))) return;
+    showMedia(room, message.kind, blob, message.id);
   } catch (error) { if (epoch === authEpoch) showError(error); }
 }
 
@@ -1557,16 +1580,18 @@ async function openOnceMessage(room, message) {
     try {
       const result = await api('message/open', { id: room.id, messageId: message.id });
       if (selected !== room.id) return;
-      if (result.media) showMedia(room, result.kind, 'data:' + result.media.mime + ';base64,' + result.media.data);
+      if (result.media) showMedia(room, result.kind, 'data:' + result.media.mime + ';base64,' + result.media.data, message.id);
       else {
         show('View once', [el('p', 'once-content', result.text), button('Close', closeModal)]);
         mediaRoom = room.id;
+        mediaMessage = message.id;
       }
       await refresh();
     } catch (error) { modalError(error); }
   });
   show('View once', [el('p', '', 'This message cannot be reopened.'), open, button('Cancel', closeModal, 'secondary-button')]);
   mediaRoom = room.id;
+  mediaMessage = message.id;
 }
 
 $('attachmentMenu').addEventListener('click', () => {
@@ -1682,3 +1707,110 @@ async function recordVoice(room) {
     if (epoch === authEpoch && body.contains(label)) modalError(error);
   }
 }
+
+function confirmUnsend(room, message) {
+  const confirm = button('Unsend', async () => {
+    confirm.disabled = true;
+    try {
+      await api('message/unsend', { id: room.id, messageId: message.id });
+      closeModal();
+      await refresh();
+    } catch (error) {
+      confirm.disabled = false;
+      modalError(error);
+    }
+  }, 'primary-button danger-button');
+  show('Unsend message?', [el('p', '', 'Remove this message for everyone in the chat. Saved copies cannot be removed.'), confirm, button('Cancel', closeModal, 'secondary-button')]);
+  mediaRoom = room.id;
+  mediaMessage = message.id;
+}
+
+$('invisibleMode').addEventListener('change', async () => {
+  const enabled = $('invisibleMode').checked;
+  const epoch = authEpoch;
+  invisibleSaving = true;
+  $('invisibleMode').disabled = true;
+  if (enabled) stopTyping();
+  try {
+    const result = await api('privacy/invisible', { enabled });
+    state.invisible = result.invisible;
+    await refresh();
+  } catch (error) {
+    if (epoch === authEpoch) showError(error);
+  } finally {
+    if (epoch === authEpoch) {
+      invisibleSaving = false;
+      renderSettings();
+    }
+  }
+});
+
+$('securityCenter').addEventListener('click', () => {
+  const list = el('div', 'security-list');
+  const items = [
+    ['Login PIN', 'Enabled'],
+    ['Automatic lock', 'Enabled'],
+    ['Chat lifetime', '30 minutes'],
+    ['Privacy mode', privacyMode ? 'Enabled' : 'Disabled'],
+    ['Invisible mode', state.invisible ? 'Enabled' : 'Disabled'],
+    ['Emergency PIN', state.pinState === 'active' ? 'Ready' : state.pinState === 'used' ? 'Used' : 'Not configured'],
+    ['End-to-end encryption', 'Not implemented'],
+    ['Saved copies', 'Outside qzu. control']
+  ];
+  for (const [name, value] of items) {
+    const item = el('div', 'security-item');
+    item.append(el('span', '', name), el('strong', '', value));
+    list.append(item);
+  }
+  show('Security center', [list, button('Lock now', () => lock(), 'secondary-button'), button('Close', closeModal)]);
+});
+
+const backgroundChoices = ['plain', 'grid', 'dots'];
+function applyChatBackground(value) {
+  if (!backgroundChoices.includes(value)) value = 'plain';
+  document.documentElement.dataset.chatBackground = value;
+  try { localStorage.setItem('qzu-chat-background', value); } catch {}
+}
+
+try { applyChatBackground(localStorage.getItem('qzu-chat-background')); } catch { applyChatBackground('plain'); }
+
+$('chatBackground').addEventListener('click', () => {
+  const picker = el('div', 'background-picker');
+  for (const name of backgroundChoices) {
+    const choice = button('', () => { applyChatBackground(name); closeModal(); }, 'background-choice');
+    const sample = el('div', 'background-preview pattern-' + name);
+    sample.append(el('span', 'preview-bubble'), el('span', 'preview-bubble mine'));
+    choice.append(sample, el('span', '', name === 'plain' ? 'Minimal' : name === 'grid' ? 'Grid' : 'Dots'));
+    choice.setAttribute('aria-pressed', String(document.documentElement.dataset.chatBackground === name));
+    picker.append(choice);
+  }
+  show('Chat background', [picker, button('Close', closeModal)]);
+});
+
+$('submitFeedback').addEventListener('click', () => {
+  const input = el('textarea', 'edit-input feedback-input');
+  input.placeholder = 'Your feedback';
+  input.maxLength = 2000;
+  input.setAttribute('aria-label', 'Your feedback');
+  const label = el('label', 'feedback-confirm');
+  const check = el('input');
+  check.type = 'checkbox';
+  label.append(check, el('span', '', 'Send this text to the developer via Discord.'));
+  const submit = button('Submit', async () => {
+    if (!check.checked || !input.value.trim()) return;
+    submit.disabled = true;
+    try {
+      await api('feedback', { message: input.value.trim(), confirmed: true });
+      input.value = '';
+      info('Feedback sent', 'Thank you for your feedback.');
+    } catch (error) {
+      submit.disabled = false;
+      modalError(error);
+    }
+  });
+  const update = () => { submit.disabled = !check.checked || !input.value.trim(); };
+  input.addEventListener('input', update);
+  check.addEventListener('change', update);
+  update();
+  show('Submit feedback', [input, el('p', '', 'Do not include PINs, personal details or private messages.'), label, submit, button('Cancel', closeModal, 'secondary-button')]);
+});

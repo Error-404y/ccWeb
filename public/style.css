@@ -1658,3 +1658,21 @@ dialog {
 @media (prefers-color-scheme: dark) { :root[data-theme=system][data-accent=purple] { --accent: #b397e3; --accent-ink: #251738; --sent: #3d2e54; --active: #362b49; } }
 @media (prefers-color-scheme: dark) { :root[data-theme=system][data-accent=gold] { --accent: #d8b16d; --accent-ink: #2f2010; --sent: #4b3b25; --active: #433622; } }
 @media (prefers-color-scheme: dark) { :root[data-theme=system][data-accent=grey] { --accent: #acb4bb; --accent-ink: #202428; --sent: #353d42; --active: #30383c; } }
+
+.deleted-message { font-size: 13px; font-style: italic; color: var(--muted); }
+.security-list { display: grid; gap: 0; max-height: 52dvh; overflow-y: auto; }
+.security-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.security-item strong { text-align: right; font-size: 12px; }
+.background-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.background-choice { display: grid; gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; font-size: 12px; }
+.background-choice[aria-pressed=true] { border-color: var(--accent); }
+.background-preview { aspect-ratio: 1; background-color: var(--sub); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+:root[data-chat-background=grid] .messages, .pattern-grid { background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 20px 20px; }
+:root[data-chat-background=dots] .messages, .pattern-dots { background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 13px 13px; }
+.preview-bubble { display: block; height: 14px; width: 72%; border-radius: 4px; background: var(--received); }
+.preview-bubble.mine { align-self: flex-end; background: var(--sent); }
+.feedback-input { min-height: 120px; width: 100%; }
+.feedback-confirm { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.feedback-confirm input { accent-color: var(--accent); flex-shrink: 0; }
+#settingsPage .page-content { overflow-y: auto; align-items: flex-start; }
+#settingsPage .settings-panel { margin-block: auto; }
