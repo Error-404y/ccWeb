@@ -353,10 +353,11 @@ app.post('/api/encryption/confirm', guard('encryption-confirm', 20, 60000), (req
 });
 app.post('/api/encryption/message', guard('encrypted-send', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
-  const id=chats.sendEncrypted(req.account.id, req.body?.id, req.body?.cipher, req.body?.kind);
+  const id=chats.sendEncrypted(req.account.id, req.body?.id, req.body?.cipher, req.body?.kind,req.body?.replyCipher??null);
   notifyRoom(req.account.id,req.body.id);
   res.json({id});
 });
+app.post('/api/encryption/reaction',guard('encrypted-reaction',80,60000),(req,res)=>{if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});res.json(chats.reactEncrypted(req.account.id,req.body?.id,req.body?.messageId,req.body?.cipher));});
 app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
   res.json(chats.getEncryptedMedia(req.account.id, req.params.room, req.params.message));
@@ -365,7 +366,7 @@ function stateData(a) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, live: true },
     official:official.snapshot(a.id),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
     access: accessStatus(a),

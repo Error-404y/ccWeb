@@ -1088,7 +1088,7 @@ function renderMessage(room, message) {
   }
 
   if (!room.readOnly && !message.deleted) {
-    const canReply=!message.once&&!message.burnSeconds&&!room.encryption;
+    const canReply=!message.once&&!message.burnSeconds&&(!room.encryption||(state.capabilities?.encryptedExtras&&encryptionReady(room)));
     attachMessageGesture(bubble,canReply?()=>beginReply(room,message):null,()=>messageActions(room,message));
     if(message.reactions?.length){const bar=el('div','message-reactions');for(const reaction of message.reactions)bar.append(button(reaction.emoji+' '+reaction.count,()=>reactTo(room,message,reaction.emoji),'reaction-chip'+(reaction.mine?' chosen':'')));bubble.append(bar);}
   }
@@ -1287,7 +1287,7 @@ function scrubRemovedRooms(previous,next,clearKeys=true){
     if(!current&&clearKeys){roomKeys.delete(room.id);roomKeyJobs.delete(room.id);if(native)roomVault('remove',room.id).catch(()=>{});if(mediaRoom===room.id)closeModal();}
     const messages=new Map((current?.messages||[]).map(message=>[message.id,message]));
     for(const message of room.messages){
-      if(!messages.has(message.id)||messages.get(message.id).deleted){message.text='';message.cipher=null;message.reply=null;message.reactions=[];message.decrypted=false;revealedMessages.delete(message.id);acknowledgedDelivery.delete(message.id);acknowledgedRead.delete(message.id);}
+      if(!messages.has(message.id)||messages.get(message.id).deleted){message.text='';message.cipher=null;message.reply=null;message.replyCipher=null;message.encryptedReactions=[];message.reactions=[];message.decrypted=false;revealedMessages.delete(message.id);acknowledgedDelivery.delete(message.id);acknowledgedRead.delete(message.id);}
     }
     if(!current)room.messages.length=0;
   }
@@ -1388,6 +1388,11 @@ async function prepareEncryptedRooms(data) {
       seen.add(nonce);
       try { message.text = await QzuCrypto.decrypt(local.context, message.cipher, message.mine); message.decrypted = true; }
       catch { message.text = 'Encrypted message could not be authenticated'; }
+    }
+    if(encryptionReady(room))for(const message of room.messages){
+      if(message.deleted)continue;
+      if(message.replyCipher&&message.cipher&&message.decrypted){try{const id=await QzuCrypto.decryptReply(local.context,message.cipher.iv,message.replyCipher,message.mine);const target=room.messages.find(m=>m.id===id);if(target)message.reply={id,sender:target.sender,text:target.deleted?'This message was deleted.':previewText(target).slice(0,160)};}catch{}}
+      const totals=new Map();for(const reaction of message.encryptedReactions||[]){try{const emoji=await QzuCrypto.decryptReaction(local.context,message.id,reaction.cipher,reaction.mine);if(emoji==='-')continue;const value=totals.get(emoji)||{emoji,count:0,mine:false};value.count++;value.mine||=reaction.mine;totals.set(emoji,value);}catch{}}message.reactions=[...totals.values()];
     }
   }
 }
@@ -1737,7 +1742,9 @@ async function sendMessage() {
       if (!encryptionReady(room)) throw Error('Verify encryption before sending.');
       const cipher = await QzuCrypto.encrypt(roomKeys.get(id).context, text);
       if (epoch !== authEpoch || document.hidden || !unlockToken || selected !== id || room.expires <= serverNow()) throw Error('Chat unavailable.');
-      await api('encryption/message', { id, cipher });
+      const replyCipher=state.capabilities?.encryptedExtras&&replyTarget?.roomId===id?await QzuCrypto.encryptReply(roomKeys.get(id).context,cipher.iv,replyTarget.id):null;
+      if(epoch!==authEpoch||!unlockToken||document.hidden||selected!==id)throw Error('Chat unavailable.');
+      await api('encryption/message', { id, cipher,...(replyCipher?{replyCipher}:{}) });
     } else {
       await api('message', { id, text, once: viewOnce, burnSeconds, replyTo: burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
     }
@@ -2217,7 +2224,7 @@ $('connectionRequests').addEventListener('click', () => {
 
 async function reactTo(room, message, emoji) {
   try {
-    await api('message/react', { id: room.id, messageId: message.id, emoji });
+    if(room.encryption){if(!state.capabilities?.encryptedExtras||!encryptionReady(room))throw Error('Encryption unavailable.');const epoch=authEpoch;const value=message.reactions?.some(r=>r.mine&&r.emoji===emoji)?'-':emoji;const cipher=await QzuCrypto.encryptReaction(roomKeys.get(room.id).context,message.id,value);if(epoch!==authEpoch||!unlockToken||document.hidden)throw Error('Locked.');await api('encryption/reaction',{id:room.id,messageId:message.id,cipher});}else await api('message/react', { id: room.id, messageId: message.id, emoji });
     closeModal();
     await refresh();
   } catch (error) { showError(error); }
@@ -2239,8 +2246,9 @@ $('adminReports').addEventListener('click',async()=>{
 function messageActions(room, message) {
   const picker = el('div', 'reaction-picker');
   for (const emoji of reactions) picker.append(button(emoji, () => reactTo(room, message, emoji), 'reaction-choice'));
-  const controls = message.once || message.burnSeconds || room.encryption ? [] : [picker];
-  if(!message.once&&!message.burnSeconds&&!room.encryption)controls.push(button('Reply',()=>{closeModal();beginReply(room,message);},'secondary-button'));
+  const extras=!room.encryption||(state.capabilities?.encryptedExtras&&encryptionReady(room));
+  const controls = message.once || message.burnSeconds || !extras ? [] : [picker];
+  if(!message.once&&!message.burnSeconds&&extras)controls.push(button('Reply',()=>{closeModal();beginReply(room,message);},'secondary-button'));
   if(message.kind==='text'&&!message.once&&!message.burnSeconds&&(!room.encryption||message.decrypted))controls.push(button('Copy',async()=>{try{await navigator.clipboard.writeText(message.text);closeModal();}catch(error){modalError(error);}},'secondary-button'));
   if(!message.mine)controls.push(button('Report',()=>showReport(room,{messageId:message.id}),'secondary-button'));
 

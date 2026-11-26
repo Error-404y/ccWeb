@@ -89,6 +89,12 @@
       return text;
     }finally{clear.fill(0);}
   }
+  const validReference=id=>typeof id==='string'&&/^[0-9a-f-]{36}$/.test(id);
+  async function encryptReply(context,iv,id){if(!validReference(id))throw Error('Invalid reply.');return seal(context,bytes(id),'reply:'+iv);}
+  async function decryptReply(context,iv,cipher,mine){const clear=new Uint8Array(await unseal(context,cipher,mine,'reply:'+iv,64));try{const id=new TextDecoder('utf-8',{fatal:true}).decode(clear);if(!validReference(id))throw Error('Invalid reply.');return id;}finally{clear.fill(0);}}
+  const reactionValues=['👍','❤️','😂','🔥','😮','👎','-'];
+  async function encryptReaction(context,id,value){if(!validReference(id)||!reactionValues.includes(value))throw Error('Invalid reaction.');return seal(context,bytes(value),'reaction:'+id);}
+  async function decryptReaction(context,id,cipher,mine){if(!validReference(id))throw Error('Invalid reaction.');const clear=new Uint8Array(await unseal(context,cipher,mine,'reaction:'+id,64));try{const value=new TextDecoder('utf-8',{fatal:true}).decode(clear);if(!reactionValues.includes(value))throw Error('Invalid reaction.');return value;}finally{clear.fill(0);}}
   const mediaTypes = { image: ['image/jpeg', 'image/png', 'image/webp'], audio: ['audio/webm', 'audio/mp4', 'audio/ogg'] };
   const mediaLimit = 2 * 1024 * 1024;
   async function encryptMedia(context, kind, blob) {
@@ -112,5 +118,5 @@
     return new Blob([clear.subarray(split + 1)], { type: mime });
     }finally{clear.fill(0);}
   }
-  globalThis.QzuCrypto = Object.freeze({ generate, restore, establish, encrypt, decrypt, encryptMedia, decryptMedia });
+  globalThis.QzuCrypto = Object.freeze({ generate, restore, establish, encrypt, decrypt, encryptMedia, decryptMedia, encryptReply, decryptReply, encryptReaction, decryptReaction });
 })();
