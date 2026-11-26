@@ -114,6 +114,7 @@
             <form id="officialComposer" class="official-composer" hidden><label for="officialMessage">Publish to everyone</label><div><textarea id="officialMessage" maxlength="2000" rows="2" placeholder="Write an announcement…" aria-label="Announcement"></textarea><button id="officialSend" class="primary-button" type="submit" disabled>Publish</button></div></form>
             <footer id="officialReadOnly" class="admin-composer"><div class="read-only-bar"><svg aria-hidden="true"><use href="#lock"/></svg><span>Read-only channel</span></div></footer>
           </section>
+          <div class="connection-strip"><div id="connectionState" role="status" hidden></div><button id="manageOutbox" class="secondary-button" type="button" hidden>Outgoing messages</button></div>
           <button id="extensionNotice" class="request-link" type="button" hidden></button>
           <div id="messages" class="messages" aria-label="Messages" hidden></div>
           <div id="typingIndicator" class="typing-indicator" hidden><span class="typing-dots"><i></i><i></i><i></i></span><span id="typingLabel"></span></div>
