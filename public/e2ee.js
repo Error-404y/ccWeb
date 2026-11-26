@@ -63,20 +63,22 @@
   async function unseal(context, value, mine, kind, limit) {
     if (value?.v !== 2 || typeof value.iv !== 'string' || value.iv.length !== 16 || typeof value.data !== 'string' || value.data.length > Math.ceil(limit / 3) * 4) throw Error('Invalid encrypted message.');
     const iv = un64(value.iv), ciphertext = un64(value.data);
-    if (iv.length !== 12 || ciphertext.length > limit || ciphertext.length < 17) throw Error('Invalid encrypted message.');
+    if (b64(iv)!==value.iv||b64(ciphertext)!==value.data||iv.length !== 12 || ciphertext.length > limit || ciphertext.length < 17) throw Error('Invalid encrypted message.');
     const sender = mine ? context.own : context.peer;
     const key = await messageKey(context, sender, kind, iv, 'decrypt');
     return globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: aad(context, sender, kind), tagLength: 128 }, key, ciphertext);
   }
   async function encrypt(context, text) {
     if (typeof text !== 'string' || !text.trim() || text.length > 2000) throw Error('Invalid message.');
-    return seal(context, bytes(text), 'text');
+    const clear=bytes(text);
+    try{return await seal(context,clear,'text');}finally{clear.fill(0);}
   }
   async function decrypt(context, value, mine) {
-    const clear = await unseal(context, value, mine, 'text', 8016);
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(clear);
-    if (!text.trim() || text.length > 2000) throw Error('Invalid message.');
-    return text;
+    const clear = new Uint8Array(await unseal(context, value, mine, 'text', 8016));
+    try{const text = new TextDecoder('utf-8', { fatal: true }).decode(clear);
+      if (!text.trim() || text.length > 2000) throw Error('Invalid message.');
+      return text;
+    }finally{clear.fill(0);}
   }
   const mediaTypes = { image: ['image/jpeg', 'image/png', 'image/webp'], audio: ['audio/webm', 'audio/mp4', 'audio/ogg'] };
   const mediaLimit = 2 * 1024 * 1024;
@@ -86,17 +88,20 @@
     const header = bytes(mime + '\n');
     const payload = new Uint8Array(header.length + blob.size);
     payload.set(header);
-    payload.set(new Uint8Array(await blob.arrayBuffer()), header.length);
-    return seal(context, payload, kind);
+    const data=new Uint8Array(await blob.arrayBuffer());
+    payload.set(data,header.length);data.fill(0);
+    try{return await seal(context,payload,kind);}finally{payload.fill(0);}
   }
   async function decryptMedia(context, kind, cipher, mine) {
     if (!mediaTypes[kind]) throw Error('Invalid attachment.');
     const clear = new Uint8Array(await unseal(context, cipher, mine, kind, mediaLimit + 64));
+    try{
     const split = clear.subarray(0, 48).indexOf(10);
     if (split < 1 || clear.length <= split + 1 || clear.length - split - 1 > mediaLimit) throw Error('Invalid attachment.');
     const mime = new TextDecoder('utf-8', { fatal: true }).decode(clear.subarray(0, split));
     if (!mediaTypes[kind].includes(mime)) throw Error('Invalid attachment type.');
     return new Blob([clear.subarray(split + 1)], { type: mime });
+    }finally{clear.fill(0);}
   }
   globalThis.QzuCrypto = Object.freeze({ generate, establish, encrypt, decrypt, encryptMedia, decryptMedia });
 })();

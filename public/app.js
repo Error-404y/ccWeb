@@ -9,7 +9,7 @@ const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
 const updateReminders = new Map();
-let officialReadJob=null,officialRenderKey='',liveRevision='';
+let officialReadJob=null,officialRenderKey='',liveRevision='',manualRefreshes=0;
 
 async function transport(path, options = {}) {
   if (!native) return fetch(path, options);
@@ -651,6 +651,7 @@ function lock(reopen = true) {
   pinPrompt = false;
   qrKey = '';
   qrPending = '';
+  scrubRemovedRooms(state.rooms,[],false);
   state = {
     rooms: [],
     invite: null,
@@ -1286,7 +1287,9 @@ function purgeExpired() {
   const now = serverNow();
   if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && room.expires > now)) closeModal();
   if (state.rooms.some(r => r.expires <= now) || state.invite && state.invite.expires <= now) {
-    state.rooms = state.rooms.filter(r => r.expires > now);
+    const remaining=state.rooms.filter(r=>r.expires>now);
+    scrubRemovedRooms(state.rooms,remaining);
+    state.rooms=remaining;
     if (state.invite?.expires <= now) state.invite = null;
     render();
   }
@@ -1306,7 +1309,21 @@ function purgeExpired() {
   if (page === 'connect' && state.invite) $('inviteTimer').textContent = clock(state.invite.expires - now);
 }
 
+function scrubRemovedRooms(previous,next,clearKeys=true){
+  const retained=new Map(next.map(room=>[room.id,room]));
+  for(const room of previous){
+    const current=retained.get(room.id);
+    if(!current&&clearKeys){roomKeys.delete(room.id);roomKeyJobs.delete(room.id);if(mediaRoom===room.id)closeModal();}
+    const messages=new Map((current?.messages||[]).map(message=>[message.id,message]));
+    for(const message of room.messages){
+      if(!messages.has(message.id)||messages.get(message.id).deleted){message.text='';message.cipher=null;message.reply=null;message.reactions=[];message.decrypted=false;revealedMessages.delete(message.id);acknowledgedDelivery.delete(message.id);acknowledgedRead.delete(message.id);}
+    }
+    if(!current)room.messages.length=0;
+  }
+}
 function clearVolatile() {
+  scrubRemovedRooms(state.rooms,[]);
+  liveRevision='';
   roomKeys.clear();
   roomKeyJobs.clear();
   stopTyping();
@@ -1339,7 +1356,7 @@ function encryptionReady(room) {
 }
 function dropExpiredKeys(rooms = null) {
   const now = Date.now();
-  for (const [id, local] of roomKeys) if (local.until <= now || (rooms && !rooms.some(room => room.id === id))) roomKeys.delete(id);
+  for (const [id, local] of roomKeys) if (local.until <= now || (rooms && !rooms.some(room => room.id === id))) {roomKeys.delete(id);roomKeyJobs.delete(id);}
 }
 setInterval(dropExpiredKeys, 1000);
 async function prepareEncryptedRooms(data) {
@@ -1438,7 +1455,7 @@ async function showEncryption(room) {
   if (local.verified !== code || !room.encryption.confirmed) content.push(button('Codes match — verify', async () => {
     try {
       if (roomKeys.get(room.id) !== local || local.context?.code !== code || !unlockToken) throw Error('Encryption key changed.');
-      await api('encryption/confirm', { id: room.id });
+      await api('encryption/confirm', { id: room.id, code });
       local.verified = code;
       closeModal();
       await refresh();
@@ -1455,6 +1472,9 @@ $('encryptionStatus').addEventListener('click', () => {
 });
 
 async function refresh(live=false) {
+  if(live&&manualRefreshes)return;
+  if(!live)manualRefreshes++;
+  try{
   const ticket = ++sequence;
   const data = await api(live&&liveRevision?'state/live?since='+liveRevision:'state');
   if (ticket !== sequence || document.hidden || !unlockToken) return;
@@ -1463,6 +1483,7 @@ async function refresh(live=false) {
   if(data.unchanged){liveRevision=data.revision;purgeExpired();maybePromptUpdate();return;}
   await prepareEncryptedRooms(data);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
+  scrubRemovedRooms(state.rooms,data.rooms);
   state = data;
   liveRevision=data.revision||'';
   if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && (!mediaMessage || room.messages.some(message => message.id === mediaMessage && !message.deleted)))) closeModal();
@@ -1482,6 +1503,7 @@ async function refresh(live=false) {
   purgeExpired();
   acknowledgeMessages();
   maybePromptUpdate();
+  }finally{if(!live)manualRefreshes--;}
 }
 
 function offerPin() {
@@ -2117,10 +2139,11 @@ setInterval(purgeExpired, 250);
 
 async function loop() {
   if (unlockToken && !accessDue && !document.hidden) {
+    const epoch=authEpoch;
     try {
       await refresh(Boolean(state.capabilities?.live));
     } catch {
-      if (unlockToken && !accessDue) lock();
+      if (epoch===authEpoch&&unlockToken && !accessDue) lock();
     }
   }
   setTimeout(loop, unlockToken&&state.capabilities?.live?500:1500);

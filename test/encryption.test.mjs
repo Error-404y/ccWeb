@@ -32,8 +32,9 @@ test('verified direct encryption stores ciphertext only and rejects downgrade, r
   const ciphertext = await QzuCrypto.encrypt(ac, 'secret message 🔒');
   assert.equal(validEnvelope(ciphertext), true);
   assert.throws(() => chats.sendEncrypted('a', id, ciphertext));
-  chats.confirmRoomKey('a', id);
-  chats.confirmRoomKey('b', id);
+  assert.throws(()=>chats.confirmRoomKey('a',id,'0'.repeat(64)));
+  chats.confirmRoomKey('a', id,ac.code);
+  chats.confirmRoomKey('b', id,bc.code);
   const message = chats.sendEncrypted('a', id, ciphertext);
   assert.throws(() => chats.sendEncrypted('a', id, ciphertext));
   assert.throws(() => chats.send('a', id, 'plaintext'));
