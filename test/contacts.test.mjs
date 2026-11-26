@@ -34,6 +34,8 @@ test('contacts survive room expiry and restart, aliases are private, activity ex
   const fresh=restarted.openContact('b',id);
   restarted.send('a',fresh,'hello');
   assert.equal(store.list('b')[0].warning,false);
+  restarted.remove('a',fresh);
+  assert.equal(store.list('a')[0].id,id);
   time+=CONTACT_WARNING+CONTACT_GRACE;
   assert.equal(store.list('a').length,0);
   assert.throws(()=>restarted.openContact('a',id));

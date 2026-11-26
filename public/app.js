@@ -776,7 +776,8 @@ function renderChat() {
   $('qzuInfoOpen').setAttribute('aria-pressed', String(infoOpen));
   $('qzuInfoChannel').hidden = !infoOpen;
   $('chatPage').classList.toggle('thread-open', Boolean((current || infoOpen) && mobileOpen));
-  $('chatCount').textContent = rooms.length ? String(rooms.length): '';
+  const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
+  $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
   const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.id === selected])]);
   if (key !== contactKey) {
