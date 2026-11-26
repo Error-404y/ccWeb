@@ -39,3 +39,25 @@ test('contact preferences are private and contact removal revokes access',()=>{
   assert.equal(chats.isBlocked('a','b'),true);
   db.close();
 });
+
+test('trust reset closes the existing encrypted chat and requires new verification',()=>{
+  const db=openAccounts(':memory:');
+  const store=contactStore(db);
+  const chats=new Chats();chats.contacts=store;chats.requireEncryptedDirect=true;
+  const id=store.add('a','b','B','A');
+  const roomId=chats.openContact('a',id);
+  const room=chats.requireRoom('a',roomId);
+  room.encryption.keys.set('a',{identity:'a-key'});
+  room.encryption.keys.set('b',{identity:'b-key'});
+  chats.confirmRoomKey('a',roomId);
+  assert.equal(store.list('a')[0].trusted,false);
+  chats.confirmRoomKey('b',roomId);
+  assert.equal(store.list('a')[0].trusted,true);
+  chats.updateContact('a',id,{resetTrust:true});
+  assert.equal(store.list('b')[0].trusted,false);
+  assert.throws(()=>chats.requireRoom('a',roomId));
+  const fresh=chats.openContact('a',id);
+  assert.notEqual(fresh,roomId);
+  assert.equal(chats.requireRoom('a',fresh).encryption.confirmed.size,0);
+  db.close();
+});

@@ -260,7 +260,7 @@ app.post('/api/logout', guard('logout', 3, 60000), (req,res) => {
   res.json({ok:true});
 });
 app.post('/api/contacts/open', guard('contacts-open', 30, 60000), (req,res) => res.json({id:chats.openContact(req.account.id,req.body?.id)}));
-app.post('/api/contacts/update', guard('contacts-update', 30, 60000), (req,res) => res.json(contacts.update(req.account.id,req.body?.id,req.body||{})));
+app.post('/api/contacts/update', guard('contacts-update', 30, 60000), (req,res) => res.json(chats.updateContact(req.account.id,req.body?.id,req.body||{})));
 app.post('/api/contacts/remove', guard('contacts-remove', 20, 60000), (req,res) => res.json(chats.removeContact(req.account.id,req.body?.id,req.body?.block===true)));
 app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
   const result = changeLogin(db, req.account.id, req.body?.current, req.body?.next);
