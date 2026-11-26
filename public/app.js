@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.11.0';
+const installedVersion = window.QZU_APP_VERSION || '0.11.1';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -107,6 +107,8 @@ let mediaUrl = null;
 let recordingCleanup = null;
 const reactions = ['👍', '❤️', '😂', '🔥', '😮', '👎'];
 let privacyMode = false;
+let backgroundPin=true,backgroundPinSaving=false,bootPending=native&&!matchMedia('(prefers-reduced-motion: reduce)').matches;
+try{backgroundPin=localStorage.getItem('qzu-background-pin')!=='off';}catch{}
 let replyTarget = null;
 let lastTypingAt = 0;
 let typingRoom = null;
@@ -161,7 +163,7 @@ const fmtTime = ms => new Intl.DateTimeFormat(undefined, {
 }).format(new Date(ms));
 const clock = ms => {
   const s = Math.max(0, Math.ceil(ms / 1000));
-  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  const minutes=String(Math.floor(s/60)%60).padStart(2,'0'),seconds=String(s%60).padStart(2,'0');return s>=3600?String(Math.floor(s/3600)).padStart(2,'0')+':'+minutes+':'+seconds:minutes+':'+seconds;
 };
 const serverNow = () => Date.now() + offset;
 const supportClock = (room,now) => room.persistent ? 'No expiry' : room.mobileSupport && room.expires-now >= 3600000 ? Math.ceil((room.expires-now)/60000/60)+'h' : clock(room.expires-now);
@@ -465,12 +467,12 @@ function pinDialog(title, fields, submitLabel, onSubmit, {
 }
 
 function showLogin() {
-  if (document.hidden || unlockToken || !sessionReady) return;
+  if (bootPending || document.hidden || unlockToken || !sessionReady) return;
   const setup = needsSetup;
   pinDialog(setup ? 'Create login PIN': 'Unlock', setup ? ['New PIN', 'Confirm PIN']: ['Login PIN'], setup ? 'Create': 'Unlock', async values => {
     if (setup && values[0] !== values[1]) throw new Error('PINs do not match.');
     const result = await api(setup ? 'login/setup': 'login/unlock', {
-      pin: values[0]
+      pin: values[0],keepUnlocked:native&&!backgroundPin
     });
     unlockToken = result.token;
     accessDue = result.access?.active === false;
@@ -581,7 +583,7 @@ function showLockedEmergency() {
 }
 
 async function getSession() {
-  if (authBusy || document.hidden || unlockToken || isPublicCheckout()) return;
+  if (bootPending || authBusy || document.hidden || unlockToken || isPublicCheckout()) return;
   authBusy = true;
   const epoch = authEpoch;
   try {
@@ -1232,6 +1234,7 @@ function renderSettings() {
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
+  $('backgroundPin').checked=backgroundPin;$('backgroundPin').disabled=!native||!unlockToken||backgroundPinSaving;
   $('pushStatus').textContent=state.push?.registered?'On':native&&window.Capacitor.getPlatform()==='ios'?'In-app':pushAvailable()?'Off':'Unavailable';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
@@ -1823,6 +1826,8 @@ try {
   privacyMode = localStorage.getItem('qzu-privacy') === '1';
 } catch {}
 
+$('backgroundPin').checked=backgroundPin;
+$('backgroundPin').addEventListener('change',async()=>{const input=$('backgroundPin'),next=input.checked,epoch=authEpoch;backgroundPinSaving=true;input.disabled=true;try{const result=await api('login/background-lock',{keepUnlocked:!next});if(!result.ok||epoch!==authEpoch)throw Error('Session unavailable.');backgroundPin=next;try{localStorage.setItem('qzu-background-pin',next?'on':'off');}catch{}}catch(error){if(epoch===authEpoch)showError(error);}finally{backgroundPinSaving=false;input.checked=backgroundPin;input.disabled=!native||!unlockToken;}});
 $('privacyMode').checked = privacyMode;
 $('privacyMode').addEventListener('change', () => {
   privacyMode = $('privacyMode').checked;
@@ -1848,7 +1853,7 @@ $('createGroup').addEventListener('click', () => {
       showError(error);
     }
   });
-  show('New group', [el('p', '', 'Up to 12 members. Expires 30 minutes after creation.'), create, button('Cancel', closeModal, 'secondary-button')]);
+  show('New group', [el('p', '', 'Up to 12 members. Expires 24 hours after creation.'), create, button('Cancel', closeModal, 'secondary-button')]);
 });
 
 async function showGroupInvite(id) {
@@ -2033,7 +2038,7 @@ $('appInfo').addEventListener('click', () => {
     ['Connection codes', 'New codes can last 5, 10 or 15 minutes. Generating a new code invalidates the previous one.'],
     ['Automatic lock', 'Leaving the tab locks qzu. Unlock with your login PIN.'],
     ['emg.exe', 'Your single-use emergency PIN removes your active chats for all participants. A replacement requires developer approval.'],
-    ['Groups', 'Up to 12 anonymous members. Groups expire 30 minutes after creation. New members can see existing group messages.'],
+    ['Groups', 'Up to 12 anonymous members. Groups expire 24 hours after creation. New members can see existing group messages.'],
     ['Privacy mode', 'Hide chat previews and blur messages until you reveal them.'],
     ['View once', 'Direct-chat messages can be opened once by the recipient. Screenshots and saved copies cannot be prevented.'],
     ['Media', 'Photos and voice messages are held temporarily in server memory and expire with the chat.'],
@@ -2131,31 +2136,29 @@ if (page === 'connect' && location.hash) {
   if (/^[A-Z0-9]{6}$/.test(code)) pendingInvite = code;
   history.replaceState(null, '', location.pathname);
 }
+function backgroundApp(){if(isPublicCheckout())return;if(!native||backgroundPin){if(unlockToken||pinPrompt)lock();return;}if(recordingCleanup||mediaRoom||stream)closeModal();stopCamera();stopTyping();}
+function resumeApp(){if(bootPending)return;if(isPublicCheckout())resumeCheckout?.();else if(!unlockToken)getSession();else if(!document.hidden)refresh().catch(()=>{});}
 if (native) {
   if(window.Capacitor.getPlatform()==='ios')devicePlugin.addListener('screenCaptured',()=>{if(unlockToken)lock();}).catch(()=>{});
   console.info('[qzu] Mobile startup; device plugin available:', window.Capacitor.isPluginAvailable('QzuDevice'), '; server:', apiOrigin);
   window.Capacitor.registerPlugin('App').addListener('appStateChange', ({ isActive }) => {
-    if (!isActive) { if (!isPublicCheckout()) lock(); }
-    else if (isPublicCheckout()) resumeCheckout?.();
-    else if (!unlockToken) getSession();
+    if (!isActive) backgroundApp();else resumeApp();
   });
 }
 window.addEventListener('offline', () => {
-  if (unlockToken) lock();
+  online=false;if(unlockToken&&(!native||backgroundPin))lock();
 });
 window.addEventListener('online', () => {
-  if (isPublicCheckout()) resumeCheckout?.();
-  else if (!unlockToken) getSession();
+  resumeApp();
 });
 document.addEventListener('visibilitychange', () => {
   if (isPublicCheckout()) {
     if (!document.hidden) resumeCheckout?.();
     return;
   }
-  if (document.hidden) lock();
-  else if (!unlockToken) getSession();
+  if (document.hidden) backgroundApp();else resumeApp();
 });
-window.addEventListener('pagehide', () => { if (!isPublicCheckout()) lock(); });
+window.addEventListener('pagehide',backgroundApp);
 window.addEventListener('pageshow', e => {
   if (!e.persisted) return;
   if (isPublicCheckout()) resumeCheckout?.();
@@ -2169,14 +2172,15 @@ async function loop() {
     try {
       await refresh(Boolean(state.capabilities?.live));
     } catch {
-      if (epoch===authEpoch&&unlockToken && !accessDue) lock();
+      if(epoch===authEpoch&&unlockToken&&!accessDue){online=false;if(!native||backgroundPin)lock();}
     }
   }
   setTimeout(loop, unlockToken&&state.capabilities?.live?500:1500);
 }
 updatePages();
-const boot=$('bootSplash');if(native&&!matchMedia('(prefers-reduced-motion: reduce)').matches){document.documentElement.classList.add('booting');boot.classList.add('boot-running');setTimeout(()=>{boot.remove();document.documentElement.classList.remove('booting');},1450);}else boot.remove();
-getSession();
+const boot=$('bootSplash');
+function finishBoot(){if(!bootPending)return;bootPending=false;boot.remove();document.documentElement.classList.remove('booting');getSession();}
+if(bootPending){document.documentElement.classList.add('booting');boot.addEventListener('animationend',event=>{if(event.target===boot&&event.animationName==='bootExit')finishBoot();});requestAnimationFrame(()=>requestAnimationFrame(()=>{boot.classList.add('boot-running');setTimeout(finishBoot,2300);}));}else{boot.remove();getSession();}
 loop();
 
 
@@ -2662,7 +2666,7 @@ $('securityCenter').addEventListener('click', () => {
   const items = [
     ['Login PIN', 'Enabled'],
     ['Automatic lock', 'Enabled'],
-    ['Chat lifetime', '30 minutes'],
+    ['Chat lifetime', '24 hours'],
     ['Privacy mode', privacyMode ? 'Enabled' : 'Disabled'],
     ['Invisible mode', state.invisible ? 'Enabled' : 'Disabled'],
     ['Emergency PIN', state.pinState === 'active' ? 'Ready' : state.pinState === 'used' ? 'Used' : 'Not configured'],

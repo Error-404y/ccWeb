@@ -194,13 +194,15 @@
               <svg><use href="#eye"/></svg><span>Invisible mode</span>
               <label class="privacy-switch"><input id="invisibleMode" type="checkbox" aria-label="Invisible mode"><span></span></label>
             </div>
+            <div class="settings-row"><svg><use href="#lock"/></svg><span>Require PIN when leaving app</span><label class="privacy-switch"><input id="backgroundPin" type="checkbox" checked aria-label="Require PIN when leaving app"><span></span></label></div>
+            <p class="background-pin-note">Off keeps the current session unlocked for up to 12 hours of inactivity. A fresh launch still requires your PIN.</p>
             <button class="settings-row" id="privateNotifications" type="button"><svg><use href="#lock"/></svg><span>Private notifications</span><strong id="pushStatus">Off</strong><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="privacyPolicy" type="button"><svg><use href="#info"/></svg><span>Privacy policy</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="securityCenter"><svg><use href="#lock"/></svg><span>Security center</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="manageContacts"><svg><use href="#avatar"/></svg><span>Manage contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="blockedContacts"><svg><use href="#lock"/></svg><span>Blocked contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row emergency-row" id="emergency"><svg><use href="#terminal"/></svg><span>emg.exe</span><svg class="chevron"><use href="#chevron"/></svg></button>
-            <div class="settings-row"><svg><use href="#clock"/></svg><span>Chat lifetime</span><strong>30 min</strong></div>
+            <div class="settings-row"><svg><use href="#clock"/></svg><span>Chat lifetime</span><strong>24 hours</strong></div>
           </div>
           <div class="panel settings-panel" data-settings-category="appearance" hidden>
             <h1>Appearance</h1>

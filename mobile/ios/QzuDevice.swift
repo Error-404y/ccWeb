@@ -97,7 +97,7 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
             case "save":
                 guard let value = call.getString("value"), let data = value.data(using:.utf8), data.count <= 8192,
                       let object = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
-                      let until = object["until"] as? Double, until > Date().timeIntervalSince1970*1000, until < Date().timeIntervalSince1970*1000+7200000 else { call.reject("Invalid key."); return }
+                      let until = object["until"] as? Double, until > Date().timeIntervalSince1970*1000, until < Date().timeIntervalSince1970*1000+691200000 else { call.reject("Invalid key."); return }
                 var attrs = query; attrs[kSecValueData as String] = data; attrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
                 let status = SecItemAdd(attrs as CFDictionary,nil)
                 let result = status == errSecDuplicateItem ? SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary) : status

@@ -62,7 +62,7 @@ public class QzuDevice extends Plugin {
             if(action.equals("remove")){if(!prefs.edit().remove(id).commit())throw new Exception();call.resolve();return;}
             Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");
             if(action.equals("save")){
-                String value=call.getString("value");if(value==null||value.length()>8192)throw new Exception();long until=new JSONObject(value).getLong("until"),now=System.currentTimeMillis();if(until<=now||until>now+7200000L)throw new Exception();
+                String value=call.getString("value");if(value==null||value.length()>8192)throw new Exception();long until=new JSONObject(value).getLong("until"),now=System.currentTimeMillis();if(until<=now||until>now+691200000L)throw new Exception();
                 cipher.init(Cipher.ENCRYPT_MODE,vaultKey());cipher.updateAAD(id.getBytes(StandardCharsets.UTF_8));String packed=Base64.encodeToString(cipher.getIV(),Base64.NO_WRAP)+":"+Base64.encodeToString(cipher.doFinal(value.getBytes(StandardCharsets.UTF_8)),Base64.NO_WRAP);
                 if(!prefs.edit().putString(id,packed).commit())throw new Exception();call.resolve();return;
             }
