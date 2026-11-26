@@ -55,8 +55,18 @@ public class QzuDevice extends Plugin {
     @PluginMethod public synchronized void roomVault(PluginCall call){
         try{
             String action=call.getString("action",""),id=call.getString("room","");
-            SharedPreferences prefs=getContext().getSharedPreferences("qzu_room_vault",0);
+            SharedPreferences prefs=getContext().getSharedPreferences("prekeys".equals(call.getString("vault"))?"qzu_prekey_vault":"qzu_room_vault",0);
             if(action.equals("clear")){if(!prefs.edit().clear().commit())throw new Exception();call.resolve();return;}
+            if(action.equals("sweep")){
+                SharedPreferences.Editor edit=prefs.edit();
+                for(String k:prefs.getAll().keySet())try{
+                    String packed=prefs.getString(k,null);String[] parts=packed.split(":",2);Cipher box=Cipher.getInstance("AES/GCM/NoPadding");
+                    box.init(Cipher.DECRYPT_MODE,vaultKey(),new GCMParameterSpec(128,Base64.decode(parts[0],Base64.NO_WRAP)));box.updateAAD(k.getBytes(StandardCharsets.UTF_8));
+                    String value=new String(box.doFinal(Base64.decode(parts[1],Base64.NO_WRAP)),StandardCharsets.UTF_8);
+                    if(new JSONObject(value).getLong("until")<=System.currentTimeMillis())edit.remove(k);
+                }catch(Exception ignored){}
+                if(!edit.commit())throw new Exception();call.resolve();return;
+            }
             if(action.equals("prune")){JSONArray rooms=call.getArray("rooms");java.util.HashSet<String> keep=new java.util.HashSet<>();if(rooms!=null)for(int x=0;x<rooms.length();x++)keep.add(rooms.getString(x));SharedPreferences.Editor edit=prefs.edit();for(String k:prefs.getAll().keySet())if(!keep.contains(k))edit.remove(k);if(!edit.commit())throw new Exception();call.resolve();return;}
             if(!id.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))throw new Exception();
             if(action.equals("remove")){if(!prefs.edit().remove(id).commit())throw new Exception();call.resolve();return;}

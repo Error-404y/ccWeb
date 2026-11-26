@@ -559,7 +559,7 @@ function showLockedEmergency() {
       input.value = '';
       pendingInvite = '';
       roomKeys.clear();
-      roomKeyJobs.clear();if(native)await roomVault('clear','').catch(()=>{});
+      roomKeyJobs.clear();if(native)await clearPrivateKeys();
       lock(false);
 
       show('emg.exe', [
@@ -622,7 +622,7 @@ function lock(reopen = true) {
   authEpoch++;
   sequence++;
   const old = unlockToken;
-  unlockToken = null;roomKeys.clear();roomKeyJobs.clear();keyPruneSignature='';nextCryptoRetry=0;lastBadge=-1;clearTimeout(activityTimer);$('activityBanner').hidden=true;
+  unlockToken = null;roomKeys.clear();roomKeyJobs.clear();keyPruneSignature='';nextCryptoRetry=0;nextPrekeyAttempt=0;lastBadge=-1;clearTimeout(activityTimer);$('activityBanner').hidden=true;
   pendingUpdate = null;
   nextUpdateCheck = 0;
   sendingMessage = false;
@@ -1299,7 +1299,7 @@ function scrubRemovedRooms(previous,next,clearKeys=true){
 function clearVolatile() {
   scrubRemovedRooms(state.rooms,[]);
   liveRevision='';
-  roomKeys.clear();roomKeyJobs.clear();if(native)roomVault('clear','').catch(()=>{});
+  roomKeys.clear();roomKeyJobs.clear();if(native)clearPrivateKeys().catch(()=>{});
   stopTyping();
   clearReply();
   revealedMessages.clear();
@@ -1326,15 +1326,50 @@ function encryptionRequired(room) {
 function encryptionReady(room) {
   const local = roomKeys.get(room.id);
   if(identityChanged(room))return false;
-  return Boolean(local?.until > Date.now() && room.encryption && room.encryption.confirmed && room.encryption.peerConfirmed && local?.context && local.verified === local.context.code && room.encryptionStatus === 'ready');
+  return Boolean(local?.until > Date.now() && room.encryption && room.encryption.confirmed && (room.encryption.offline||room.encryption.peerConfirmed) && local?.context && local.verified === local.context.code && room.encryptionStatus === 'ready');
 }
 async function roomVault(action,room,extra={}){return devicePlugin.roomVault({action,room,...extra});}
+let prekeyJob=null,nextPrekeyAttempt=0;
+async function clearPrivateKeys(){await Promise.allSettled([roomVault('clear',''),roomVault('clear','',{vault:'prekeys'})]);}
+function replenishPrekeys(data){
+  if(!native||!data.capabilities?.offlinePrekeys||!unlockToken||prekeyJob||data.prekeyCount>=8||Date.now()<nextPrekeyAttempt||document.hidden)return;
+  nextPrekeyAttempt=Date.now()+15000;
+  const epoch=authEpoch;
+  prekeyJob=(async()=>{
+    await roomVault('sweep','',{vault:'prekeys'});
+    const items=[];
+    for(let n=0;n<12-Math.max(0,Number(data.prekeyCount)||0);n++){
+      if(epoch!==authEpoch||!unlockToken||document.hidden)return;
+      const id=crypto.randomUUID(),until=Date.now()+7*86400000+600000;
+      const local=await QzuCrypto.generate(id,message=>devicePlugin.sign({message}),value=>{
+        if(epoch!==authEpoch||!unlockToken||document.hidden)throw Error('Locked.');
+        return roomVault('save',id,{vault:'prekeys',value:JSON.stringify({...value,until})});
+      });
+      items.push({id,record:local.record});
+    }
+    if(items.length&&epoch===authEpoch&&unlockToken&&!document.hidden){
+      await api('encryption/prekeys',{items},true);
+      liveRevision='';
+    }
+  })().catch(()=>{}).finally(()=>{prekeyJob=null;});
+}
 async function localRoomKey(room,until){
   const epoch=authEpoch;
   const saved=await roomVault('load',room.id);
   if(epoch!==authEpoch||!unlockToken)throw Error('Locked.');
   let value,local;
   if(saved?.value){value=JSON.parse(saved.value);local=await QzuCrypto.restore(value);if(Math.abs(value.until-until)>5000)await roomVault('save',room.id,{value:JSON.stringify({...value,until})});}
+  else if(room.encryption.own?.prekey){
+    const id=room.encryption.own.prekey;
+    const reserved=await roomVault('load',id,{vault:'prekeys'});
+    if(!reserved?.value)return null;
+    value=JSON.parse(reserved.value);local=await QzuCrypto.restore(value);
+    const expected=room.encryption.own;
+    if(local.record.key!==expected.key||local.record.identity!==expected.identity||local.record.signature!==expected.signature)throw Error('Reserved key mismatch.');
+    if(epoch!==authEpoch||!unlockToken)throw Error('Locked.');
+    await roomVault('save',room.id,{value:JSON.stringify({...value,until})});
+    await roomVault('remove',id,{vault:'prekeys'});
+  }
   else if(room.encryption.own)return null;
   else local=await QzuCrypto.generate(room.id,message=>devicePlugin.sign({message}),data=>{if(epoch!==authEpoch||!unlockToken)throw Error('Locked.');return roomVault('save',room.id,{value:JSON.stringify({...data,until})});});
   if(epoch!==authEpoch||!unlockToken)throw Error('Locked.');
@@ -1376,7 +1411,7 @@ async function prepareEncryptedRooms(data,ticket) {
         if(!current())return;
         if(identityChanged(room))throw Error('Contact identity changed.');
         if(!encryption.confirmed){await api('encryption/confirm',{id:room.id,code:local.context.code,automatic:true},true);encryption.confirmed=true;}
-        local.verified=local.context.code;room.encryptionStatus=encryption.confirmed&&encryption.peerConfirmed?'ready':'waiting';
+        local.verified=local.context.code;room.encryptionStatus=encryption.confirmed&&(encryption.offline||encryption.peerConfirmed)?'ready':'waiting';
       } catch {
         local.context = null;
         local.verified = null;
@@ -1415,7 +1450,7 @@ async function showEncryption(room) {
     return;
   }
   const local = roomKeys.get(room.id);
-  if(!local?.context||!room.encryption.peer){info('Connecting securely','Encryption is set up automatically when both devices connect.');return;}
+  if(!local?.context||!room.encryption.peer){info('Connecting securely','Encryption starts automatically. If this contact has not yet registered offline keys, they need to open the updated app once.');return;}
   const code = local.context.code;
   const content = [
     el('p', '', 'Compare the entire safety code in person or through a separate trusted channel. Do not confirm unless every character matches.'),
@@ -1450,7 +1485,7 @@ async function refresh(live=false) {
   online = true;
   offset = data.now - Date.now();
   if(!data.unchanged&&data.termsAccepted!==true){termsPending=true;updatePages();showTermsGate(data.termsVersion||1);return;}
-  if(data.unchanged){liveRevision=data.revision;if(state.rooms.some(r=>directRoom(r)&&r.encryption&&r.encryptionStatus==='error')&&Date.now()>=nextCryptoRetry){liveRevision='';nextCryptoRetry=Date.now()+5000;}purgeExpired();maybePromptUpdate();void acknowledgeMessages();return;}
+  if(data.unchanged){liveRevision=data.revision;if(state.rooms.some(r=>directRoom(r)&&r.encryption&&r.encryptionStatus==='error')&&Date.now()>=nextCryptoRetry){liveRevision='';nextCryptoRetry=Date.now()+5000;}purgeExpired();maybePromptUpdate();void acknowledgeMessages();replenishPrekeys(state);return;}
   await prepareEncryptedRooms(data,ticket);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   scrubRemovedRooms(state.rooms,data.rooms);
@@ -1475,7 +1510,7 @@ async function refresh(live=false) {
   purgeExpired();
   acknowledgeMessages();
   maybePromptUpdate();
-  restorePushRegistration();
+  restorePushRegistration();replenishPrekeys(state);
   }finally{if(!live)manualRefreshes--;}
 }
 
@@ -1509,7 +1544,7 @@ function showDeleteAccount(){
     confirm.disabled=true;
     try{
       await api('account/delete',{confirmed:true});
-      roomKeys.clear();roomKeyJobs.clear();if(native)await roomVault('clear','').catch(()=>{});sessionReady=false;needsSetup=false;forgetInvoice(false);forgetInvoice(true);
+      roomKeys.clear();roomKeyJobs.clear();if(native)await clearPrivateKeys();sessionReady=false;needsSetup=false;forgetInvoice(false);forgetInvoice(true);
       checkoutReturn=null;lock(false);history.replaceState(null,'','/chat');navigate('/chat',false);await getSession();
     }catch(error){dialogError(error);confirm.disabled=false;}
   },'primary-button danger-button');

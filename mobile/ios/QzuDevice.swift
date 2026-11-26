@@ -89,10 +89,10 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
 
     @objc func roomVault(_ call: CAPPluginCall) {
         let action = call.getString("action") ?? "", room = call.getString("room") ?? ""
-        guard action == "clear" || action == "prune" || UUID(uuidString: room) != nil else { call.reject("Invalid room."); return }
+        guard action == "clear" || action == "prune" || action == "sweep" || UUID(uuidString: room) != nil else { call.reject("Invalid room."); return }
         queue.async {
-            var query: [String: Any] = [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"cc.qzu.app.rooms.v1"]
-            if action != "clear" && action != "prune" { query[kSecAttrAccount as String] = room }
+            var query: [String: Any] = [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:(call.getString("vault") == "prekeys" ? "cc.qzu.app.prekeys.v1" : "cc.qzu.app.rooms.v1")]
+            if action != "clear" && action != "prune" && action != "sweep" { query[kSecAttrAccount as String] = room }
             switch action {
             case "save":
                 guard let value = call.getString("value"), let data = value.data(using:.utf8), data.count <= 8192,
@@ -112,6 +112,17 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
             case "remove","clear":
                 let status = SecItemDelete(query as CFDictionary)
                 if status == errSecSuccess || status == errSecItemNotFound { call.resolve() } else { call.reject("Secure storage unavailable.") }
+            case "sweep":
+                var find = query;find[kSecReturnAttributes as String] = true;find[kSecReturnData as String] = true;find[kSecMatchLimit as String] = kSecMatchLimitAll
+                var result: CFTypeRef?;let status = SecItemCopyMatching(find as CFDictionary,&result)
+                if status == errSecSuccess, let items = result as? [[String:Any]] {
+                    for item in items {
+                        guard let id = item[kSecAttrAccount as String] as? String,let data = item[kSecValueData as String] as? Data,
+                              let object = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any],let until = object["until"] as? Double,until <= Date().timeIntervalSince1970*1000 else { continue }
+                        var remove = query;remove[kSecAttrAccount as String] = id;SecItemDelete(remove as CFDictionary)
+                    }
+                }
+                call.resolve()
             case "prune":
                 let keep = Set(call.getArray("rooms",String.self) ?? [])
                 var find = query;find[kSecReturnAttributes as String] = true;find[kSecMatchLimit as String] = kSecMatchLimitAll
