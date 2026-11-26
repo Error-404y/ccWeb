@@ -4,7 +4,8 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.7.1';
+const installedVersion = window.QZU_APP_VERSION || '0.8.0';
+const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
 const updateReminders = new Map();
 
@@ -546,6 +547,7 @@ function showLockedEmergency() {
 
       input.value = '';
       pendingInvite = '';
+      roomKeys.clear();
       lock(false);
 
       show('emg.exe', [
@@ -619,6 +621,7 @@ function lock(reopen = true) {
   $('connectionRequests').hidden = true;
   $('presenceLabel').hidden = true;
   $('presenceLabel').textContent = '';
+  $('encryptionStatus').hidden = true;
   typingRoom = null;
   lastTypingAt = 0;
   receiptsInFlight = false;
@@ -816,7 +819,10 @@ function renderChat() {
   $('composer').hidden = !current || readOnly;
   $('adminComposer').hidden = !readOnly;
   $('deleteChat').hidden = readOnly;
-  $('attachmentMenu').hidden = Boolean(current?.support);
+  $('attachmentMenu').hidden = Boolean(current?.support || current?.encryption || (native && directRoom(current)));
+  const encryptionStatus = $('encryptionStatus');
+  encryptionStatus.hidden = !current;
+  encryptionStatus.textContent = !current ? '' : directRoom(current) && (native || current.encryption) ? encryptionReady(current) ? '🔒 Verified encrypted text' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Encryption key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption' : 'Not end-to-end encrypted';
   $('threadBadge').hidden = !isAdmin;
   $('threadAvatar').setAttribute('href', isAdmin ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
@@ -1003,7 +1009,7 @@ function renderMessage(room, message) {
     bubble.append(reveal);
   }
 
-  if (!room.readOnly && !message.once && !message.burnSeconds && !message.deleted) {
+  if (!room.readOnly && !room.encryption && !(native && directRoom(room)) && !message.once && !message.burnSeconds && !message.deleted) {
     const startReply = () => {
       if (!unlockToken || page !== 'chat' || selected !== room.id || document.hidden) return;
       const current = state.rooms.find(item => item.id === room.id && !item.readOnly && item.expires > serverNow());
@@ -1035,6 +1041,11 @@ function renderMessage(room, message) {
   if (!room.readOnly && (message.once || message.burnSeconds) && message.mine && !message.deleted) {
     const more = button('⋯', () => messageActions(room, message), 'reply-action message-more');
     more.setAttribute('aria-label', 'Message actions');
+    row.append(more);
+  }
+  if (room.encryption && message.mine && !message.deleted) {
+    const more = button('⋯', () => confirmUnsend(room, message), 'reply-action message-more');
+    more.setAttribute('aria-label', 'Unsend encrypted message');
     row.append(more);
   }
   row.append(bubble);
@@ -1092,7 +1103,7 @@ async function acknowledgeMessages() {
     const delivered = [];
     const read = [];
     for (const message of room.messages) {
-      if (message.mine || message.deleted) continue;
+      if (message.mine || message.deleted || (room.encryption && !message.decrypted)) continue;
       if (!acknowledgedDelivery.has(message.id)) delivered.push(message.id);
       const node = document.getElementById('message-' + message.id);
       const view = $('messages').getBoundingClientRect();
@@ -1206,6 +1217,7 @@ function purgeExpired() {
 }
 
 function clearVolatile() {
+  roomKeys.clear();
   stopTyping();
   clearReply();
   revealedMessages.clear();
@@ -1221,12 +1233,120 @@ function clearVolatile() {
   render();
 }
 
+function directRoom(room) {
+  return room && !room.group && !room.admin && !room.support;
+}
+function encryptionReady(room) {
+  const local = roomKeys.get(room.id);
+  return Boolean(room.encryption && room.encryption.confirmed && room.encryption.peerConfirmed && local?.context && local.verified === local.context.code && room.encryptionStatus === 'ready');
+}
+function dropExpiredKeys(rooms = null) {
+  const now = Date.now();
+  for (const [id, local] of roomKeys) if (local.until <= now || (rooms && !rooms.some(room => room.id === id))) roomKeys.delete(id);
+}
+setInterval(dropExpiredKeys, 1000);
+async function prepareEncryptedRooms(data) {
+  dropExpiredKeys(data.rooms);
+  for (const room of data.rooms) {
+    if (!directRoom(room) || (!native && !room.encryption)) continue;
+    room.encryptionStatus = 'waiting';
+    const local = roomKeys.get(room.id), encryption = room.encryption;
+    if (local) local.until = Date.now() + Math.max(0, room.expires - data.now);
+    if (!data.capabilities?.encryptedDirect || !encryption || !globalThis.crypto?.subtle) room.encryptionStatus = 'unavailable';
+    else if (encryption.own && !local) room.encryptionStatus = 'lost';
+    else if (local && encryption.own && encryption.peer) {
+      try {
+        const binding = JSON.stringify([encryption.own, encryption.peer]);
+        if (local.binding !== binding || !local.context) {
+          if (local.binding && local.binding !== binding) throw Error('Encryption key changed.');
+          local.context = await QzuCrypto.establish(room.id, local, encryption.own, encryption.peer);
+          local.binding = binding;
+        }
+        room.encryptionStatus = local.verified === local.context.code && encryption.confirmed && encryption.peerConfirmed ? 'ready' : 'verify';
+      } catch {
+        local.context = null;
+        local.verified = null;
+        room.encryptionStatus = 'error';
+      }
+    }
+    const seen = new Set();
+    for (const message of room.messages) {
+      message.text = message.deleted ? '' : 'Encrypted message — locked';
+      message.reply = null;
+      if (message.deleted || !encryptionReady(room) || !message.cipher) continue;
+      const nonce = String(message.mine) + ':' + message.cipher.iv;
+      if (seen.has(nonce)) { message.text = 'Duplicate encrypted message'; continue; }
+      seen.add(nonce);
+      try { message.text = await QzuCrypto.decrypt(local.context, message.cipher, message.mine); message.decrypted = true; }
+      catch { message.text = 'Encrypted message could not be authenticated'; }
+    }
+  }
+}
+async function showEncryption(room) {
+  if (!native || !state.capabilities?.encryptedDirect || !room.encryption || !globalThis.crypto?.subtle) {
+    info('Encryption unavailable', 'Both devices need the current app and compatible encryption support. No plaintext will be sent.');
+    return;
+  }
+  if (room.encryptionStatus === 'lost' || room.encryptionStatus === 'error') {
+    info('Encryption unavailable', 'The temporary encryption key is missing or changed. Delete this chat and start a new one. No plaintext will be sent.');
+    return;
+  }
+  const local = roomKeys.get(room.id);
+  if (!room.encryption.own) {
+    show('Set up encryption', [el('p', '', 'Generate a temporary key on this device. Both participants must compare the safety code before sending. Closing the app completely can remove the temporary key.'), button('Generate key', async () => {
+      const epoch = authEpoch;
+      try {
+        let key = roomKeys.get(room.id);
+        if (!key) {
+          key = await QzuCrypto.generate(room.id, message => devicePlugin.sign({ message }));
+          if (epoch !== authEpoch || !unlockToken) return;
+          key.until = Date.now() + Math.max(0, room.expires - serverNow());
+          roomKeys.set(room.id, key);
+        }
+        await api('encryption/key', { id: room.id, record: key.record });
+        closeModal();
+        await refresh();
+      } catch (error) { if (epoch === authEpoch) modalError(error); }
+    }), button('Cancel', closeModal, 'secondary-button')]);
+    return;
+  }
+  if (!local?.context || !room.encryption.peer) {
+    info('Waiting for contact', 'Ask your contact to open this chat and generate their encryption key.');
+    return;
+  }
+  const code = local.context.code;
+  const content = [
+    el('p', '', 'Compare the entire safety code in person or through a separate trusted channel. Do not confirm unless every character matches.'),
+    el('div', 'fingerprint-code', code.match(/.{1,4}/g).join(' ')),
+    el('p', '', 'Experimental encrypted text. Photos, audio, replies, edits and timed messages are disabled here.'),
+  ];
+  if (local.verified !== code || !room.encryption.confirmed) content.push(button('Codes match — verify', async () => {
+    try {
+      if (roomKeys.get(room.id) !== local || local.context?.code !== code || !unlockToken) throw Error('Encryption key changed.');
+      await api('encryption/confirm', { id: room.id });
+      local.verified = code;
+      closeModal();
+      await refresh();
+    } catch (error) { modalError(error); }
+  }));
+  else content.push(el('p', '', room.encryption.peerConfirmed ? 'Both devices have confirmed.' : 'Waiting for your contact to confirm.'));
+  content.push(button('Close', closeModal, 'secondary-button'));
+  show('Verify encrypted chat', content);
+}
+$('encryptionStatus').addEventListener('click', () => {
+  const room = state.rooms.find(item => item.id === selected);
+  if (directRoom(room)) showEncryption(room);
+  else if (room) info('Connection security', 'This conversation uses transport encryption only. It is not end-to-end encrypted.');
+});
+
 async function refresh() {
   const ticket = ++sequence;
   const data = await api('state');
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   online = true;
   offset = data.now - Date.now();
+  await prepareEncryptedRooms(data);
+  if (ticket !== sequence || document.hidden || !unlockToken) return;
   state = data;
   if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && (!mediaMessage || room.messages.some(message => message.id === mediaMessage && !message.deleted)))) closeModal();
   if (replyTarget && !state.rooms.some(room => room.id === replyTarget.roomId && room.messages.some(message => message.id === replyTarget.id && !message.deleted))) clearReply();
@@ -1296,7 +1416,7 @@ mobile.addEventListener('change', () => {
 function updateSendButton() {
   const room = state.rooms.find(room => room.id === selected);
   $('send').disabled = !unlockToken || sendingMessage || !room || room.readOnly ||
-    room.expires <= serverNow() || !$('message').value.trim();
+    room.expires <= serverNow() || ((room.encryption || (native && directRoom(room))) && !encryptionReady(room)) || !$('message').value.trim();
 }
 
 async function sendMessage() {
@@ -1314,7 +1434,14 @@ async function sendMessage() {
   updateSendButton();
 
   try {
-    await api('message', { id, text, once: viewOnce, burnSeconds, replyTo: burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
+    if (room.encryption || (native && directRoom(room))) {
+      if (!encryptionReady(room)) throw Error('Verify encryption before sending.');
+      const cipher = await QzuCrypto.encrypt(roomKeys.get(id).context, text);
+      if (epoch !== authEpoch || document.hidden || !unlockToken || selected !== id || room.expires <= serverNow()) throw Error('Chat unavailable.');
+      await api('encryption/message', { id, cipher });
+    } else {
+      await api('message', { id, text, once: viewOnce, burnSeconds, replyTo: burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
+    }
 
     if (epoch !== authEpoch) return;
 
@@ -1836,7 +1963,7 @@ $('chatOptions').addEventListener('click', () => {
   if (!room || room.admin) return;
   const controls = [];
   if (!room.group) {
-    controls.push(button('Compare device fingerprints', () => showFingerprint(room), 'secondary-button'));
+    controls.push(button('Verify encryption', () => showEncryption(room), 'secondary-button'));
     if (!room.extended) controls.push(button('Extend chat', () => showExtension(room), 'secondary-button'));
   }
   const confirm = member => {
@@ -1957,7 +2084,7 @@ async function openOnceMessage(room, message) {
 
 $('attachmentMenu').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
-  if (!room || room.admin) return;
+  if (!room || room.admin || room.encryption || (native && directRoom(room))) return;
   const items = burnSeconds ? [] : [button('Photo', () => choosePhoto(room), 'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
   if (!room.group && !burnSeconds) items.unshift(button(viewOnce ? 'Disable view once' : 'Enable view once', () => {
     viewOnce = !viewOnce;

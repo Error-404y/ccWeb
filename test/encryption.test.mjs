@@ -1,0 +1,56 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { generateKeyPairSync, createHash, sign } from 'node:crypto';
+import { Chats } from '../lib/chats.mjs';
+import { validRoomKey, validEnvelope } from '../lib/encryption.mjs';
+import '../public/e2ee.js';
+
+function identity() {
+  const pair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const pub = pair.publicKey.export({ format: 'der', type: 'spki' }).subarray(-65);
+  const id = createHash('sha256').update(pub).digest('hex');
+  return { id, sign: async message => ({ publicKey: pub.toString('base64'), signature: sign('sha256', Buffer.from(message), pair.privateKey).toString('base64') }) };
+}
+test('verified direct encryption stores ciphertext only and rejects downgrade, replay, tampering and replacement', async () => {
+  const chats = new Chats();
+  chats.requireEncryptedDirect = true;
+  const id = chats.connectPair('a', 'b');
+  const alice = identity(), bob = identity();
+  const a = await QzuCrypto.generate(id, alice.sign);
+  const b = await QzuCrypto.generate(id, bob.sign);
+  assert.equal(a.privateKey.extractable, false);
+  assert.equal(validRoomKey(id, bob.id, a.record), false);
+  assert.equal(validRoomKey('other', alice.id, a.record), false);
+  assert.throws(() => chats.send('a', id, 'plaintext'));
+  assert.throws(() => chats.publishRoomKey('outsider', id, alice.id, a.record));
+  chats.publishRoomKey('a', id, alice.id, a.record);
+  assert.throws(() => chats.confirmRoomKey('a', id));
+  chats.publishRoomKey('b', id, bob.id, b.record);
+  const ac = await QzuCrypto.establish(id, a, a.record, b.record);
+  const bc = await QzuCrypto.establish(id, b, b.record, a.record);
+  assert.equal(ac.code, bc.code);
+  const ciphertext = await QzuCrypto.encrypt(ac, 'secret message 🔒');
+  assert.equal(validEnvelope(ciphertext), true);
+  assert.throws(() => chats.sendEncrypted('a', id, ciphertext));
+  chats.confirmRoomKey('a', id);
+  chats.confirmRoomKey('b', id);
+  const message = chats.sendEncrypted('a', id, ciphertext);
+  assert.throws(() => chats.sendEncrypted('a', id, ciphertext));
+  assert.throws(() => chats.send('a', id, 'plaintext'));
+  assert.throws(() => chats.edit('a', id, message, 'plaintext'));
+  assert.throws(() => chats.react('b', id, message, '👍'));
+  const snapshot = chats.snapshot('b')[0];
+  assert.equal(snapshot.messages[0].text, 'Encrypted message');
+  assert.equal(JSON.stringify(snapshot).includes('secret message'), false);
+  assert.equal(await QzuCrypto.decrypt(bc, snapshot.messages[0].cipher, false), 'secret message 🔒');
+  assert.equal(await QzuCrypto.decrypt(ac, ciphertext, true), 'secret message 🔒');
+  const response = await QzuCrypto.encrypt(bc, 'reply');
+  assert.equal(await QzuCrypto.decrypt(ac, response, false), 'reply');
+  await assert.rejects(QzuCrypto.decrypt(bc, ciphertext, true));
+  const tampered = Buffer.from(ciphertext.data, 'base64'); tampered[0] ^= 1;
+  await assert.rejects(QzuCrypto.decrypt(bc, { ...ciphertext, data: tampered.toString('base64') }, false));
+  const replacement = await QzuCrypto.generate(id, alice.sign);
+  assert.throws(() => chats.publishRoomKey('a', id, alice.id, replacement.record));
+  chats.unsend('a', id, message);
+  assert.equal(chats.snapshot('b')[0].messages[0].cipher, null);
+});

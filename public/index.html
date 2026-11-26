@@ -8,6 +8,7 @@
     <title>qzu.</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/style.css">
+    <script src="/e2ee.js" defer></script>
     <script src="/app.js" defer></script>
   </head>
   <body>
@@ -85,7 +86,7 @@
             <button id="backToChats" class="icon-button mobile-back" aria-label="Back to chats"><svg><use href="#back"/></svg></button>
             <svg class="avatar"><use id="threadAvatar" href="#avatar"/></svg>
             <div class="thread-title">
-              <div class="thread-name-wrap"><h2 id="threadName">Chat</h2><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span></div>
+              <div class="thread-name-wrap"><h2 id="threadName">Chat</h2><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span><button id="encryptionStatus" class="encryption-status" type="button" hidden></button></div>
               <svg id="threadBadge" class="admin-badge" aria-label="Verified Admin" hidden><use href="#adminBadge"/></svg>
             </div>
             <div class="expiry" title="Chat expires"><svg><use href="#clock"/></svg><span id="chatTimer">30:00</span></div>

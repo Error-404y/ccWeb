@@ -32,6 +32,7 @@ const production = process.env.NODE_ENV === 'production';
 if (production && !process.env.PUBLIC_ORIGIN) throw new Error('Set PUBLIC_ORIGIN to your HTTPS origin.');
 const publicOrigin = process.env.PUBLIC_ORIGIN;
 const mobileOnly = process.env.QZU_MOBILE_ONLY === 'true' || (production && process.env.QZU_MOBILE_ONLY !== 'false');
+chats.requireEncryptedDirect = mobileOnly;
 const nativeOrigins = new Set(['capacitor://localhost', 'https://localhost']);
 if (production && !publicOrigin.startsWith('https://')) throw new Error('HTTPS required.');
 if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
@@ -264,7 +265,7 @@ function updateLink(value) {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Improved touch interactions, settings layout and update reminders.',
+  notes: 'Experimental verified encryption for direct text chats. Both devices must update and compare safety codes.',
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: updateLink(process.env.QZU_ANDROID_UPDATE_URL) }
 }));
 app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
@@ -276,11 +277,22 @@ app.post('/api/chat/fingerprint', guard('fingerprint', 15, 60000), (req, res) =>
   if (ids.some(id => !id || !/^[a-f0-9]{64}$/.test(id))) return res.status(400).json({ error: 'Both participants need registered mobile devices.' });
   res.json({ code: createHash('sha256').update('qzu-device-pair-v1:' + ids.sort().join(':')).digest('hex').toUpperCase() });
 });
+app.post('/api/encryption/key', guard('encryption-key', 20, 60000), (req, res) => {
+  res.json(chats.publishRoomKey(req.account.id, req.body?.id, req.deviceId, req.body?.record));
+});
+app.post('/api/encryption/confirm', guard('encryption-confirm', 20, 60000), (req, res) => {
+  res.json(chats.confirmRoomKey(req.account.id, req.body?.id));
+});
+app.post('/api/encryption/message', guard('encrypted-send', 80, 60000), (req, res) => {
+  if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
+  res.json({ id: chats.sendEncrypted(req.account.id, req.body?.id, req.body?.cipher) });
+});
 app.get('/api/state', (req, res) => {
   const a = req.account;
   chats.markPresent(a.id, Boolean(a.invisible));
   res.json({
     now: Date.now(),
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect },
     access: accessStatus(a),
     rooms: chats.snapshot(a.id),
     requests: chats.connectionRequests(a.id),
