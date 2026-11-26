@@ -2399,3 +2399,5 @@ html.booting dialog{visibility:hidden}
 @media(prefers-reduced-motion:reduce){.motion-page,.motion-thread,.motion-message,.motion-tick,.motion-reaction,.motion-qr,.qr-orbit{animation:none!important}.send-button,.contact,.icon-button,.primary-button,.secondary-button,.reaction-chip{transition:none!important}}
 
 .connection-strip{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--sub);color:var(--muted);font-size:12px;padding:0 12px;flex:none}.connection-strip:has(>[hidden]+[hidden]){display:none}.connection-strip #connectionState:not([hidden]){padding:8px 0}.connection-strip .secondary-button{font-size:11px;padding:5px 8px;min-height:0}
+
+.pending-row .pending-status{font-size:10px;color:inherit;opacity:.78}.pending-row .bubble{opacity:.9}

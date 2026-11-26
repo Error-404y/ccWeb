@@ -123,11 +123,11 @@ function routeName(path) {
 
 const drafts=new Map(), scrollMemory=new Map(), outbox=new Map();
 let flushingOutbox=false, nextOutboxAttempt=0, reconnectDelay=500;
-function updateConnection(){const node=$('connectionState');const queued=[...outbox.values()].filter(x=>x.room===selected),failed=queued.filter(x=>x.failed);node.hidden=online&&!queued.length;node.textContent=(!online?'Reconnecting securely…':'')+(queued.length?((!online?' · ':'')+queued.length+' encrypted '+(queued.length===1?'message':'messages')+' waiting'+(failed.length?' · '+failed.length+' failed':'')):'');$('manageOutbox').hidden=!queued.length;}
+function updateConnection(){const node=$('connectionState');const queued=[...outbox.values()].filter(x=>x.room===selected&&!x.accepted),failed=queued.filter(x=>x.failed),syncing=[...outbox.values()].some(x=>x.room===selected&&x.accepted);node.hidden=online&&!queued.length&&!syncing;node.textContent=(!online?'Reconnecting securely…':'')+(queued.length?((!online?' · ':'')+queued.length+' encrypted '+(queued.length===1?'message':'messages')+' waiting'+(failed.length?' · '+failed.length+' failed':'')):syncing?(online?'Syncing messages…':' · Syncing messages…'):'');$('manageOutbox').hidden=!queued.length;}
 function discardRoomQueue(id){for(const [key,item] of outbox)if(item.room===id)outbox.delete(key);}
 function reconcileOutbox(){for(const [key,item] of outbox){const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()||room.messages.some(m=>m.requestId===key))outbox.delete(key);}updateConnection();}
 async function flushOutbox(){if(flushingOutbox||!online||!unlockToken||document.hidden||accessDue||termsPending||suspendedAccount||Date.now()<nextOutboxAttempt||!state.capabilities?.queuedSends)return;flushingOutbox=true;const epoch=authEpoch;
-try{for(const [key,item] of outbox){if(epoch!==authEpoch||!unlockToken||!online||document.hidden||accessDue||termsPending||suspendedAccount)break;if(item.failed||item.sending)continue;const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()){outbox.delete(key);continue;}if(!encryptionReady(room))continue;if(roomKeys.get(room.id)?.context?.code!==item.binding){item.failed=true;item.error='Conversation key changed. Discard this message.';continue;}item.sending=true;try{await api('encryption/message',item.payload);if(epoch!==authEpoch)break;outbox.delete(key);haptic();}catch(error){if(epoch!==authEpoch)break;if(error.status>=400&&error.status<500&&![408,429].includes(error.status)){item.failed=true;item.error=errorMessage(error);}else{nextOutboxAttempt=Date.now()+3000;break;}}finally{item.sending=false;}}}finally{flushingOutbox=false;updateConnection();}}
+try{for(const [key,item] of outbox){if(epoch!==authEpoch||!unlockToken||!online||document.hidden||accessDue||termsPending||suspendedAccount)break;if(item.failed||item.sending||item.accepted)continue;const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()){outbox.delete(key);continue;}if(!encryptionReady(room))continue;if(roomKeys.get(room.id)?.context?.code!==item.binding){item.failed=true;item.error='Conversation key changed. Discard this message.';continue;}item.sending=true;try{await api('encryption/message',item.payload);if(epoch!==authEpoch)break;item.accepted=true;}catch(error){if(epoch!==authEpoch)break;if(error.status>=400&&error.status<500&&![408,429].includes(error.status)){item.failed=true;item.error=errorMessage(error);}else{nextOutboxAttempt=Date.now()+3000;break;}}finally{item.sending=false;}}}finally{flushingOutbox=false;updateConnection();if(unlockToken&&page==='chat'&&!document.hidden)renderChat();}}
 function markDisconnected(){online=false;liveRevision='';updateConnection();}
 
 const motionAllowed=()=>!matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -983,6 +983,18 @@ function renderChat() {
     }
     keep.add(row);if(container.children[index]!==row)container.insertBefore(row,container.children[index]||null);
   });
+  for(const [key,item] of outbox){if(item.room!==current.id)continue;
+    let row=oldRows.get('pending-'+key);const context=roomKeys.get(current.id)?.context;
+    const safe=Boolean(!privacyMode&&encryptionReady(current)&&context?.code===item.binding);
+    if(!row||row.dataset.previewAllowed!==String(safe)){
+      const epoch=authEpoch;row=el('div','message-row mine pending-row');row.id='pending-'+key;row.dataset.previewAllowed=String(safe);
+      const bubble=el('div','bubble'),content=el('div','message-text',safe?'Encrypted message…':'Message hidden'),footer=el('div','message-footer');
+      footer.append(el('span','bubble-time',fmtTime(item.at)),el('span','pending-status'));bubble.append(content,footer);row.append(bubble);
+      if(safe)QzuCrypto.decrypt(context,item.payload.cipher,true).then(text=>{if(row.isConnected&&epoch===authEpoch&&unlockToken&&selected===current.id&&!privacyMode&&outbox.get(key)===item&&roomKeys.get(current.id)?.context===context)content.textContent=text;}).catch(()=>{});
+      if(sameRoom&&!oldRows.has(row.id))motion(row,'motion-message');
+    }
+    row.querySelector('.pending-status').textContent=item.failed?'! Failed':item.accepted?'✓ Sent':'◷ Waiting';keep.add(row);if(row.parentNode!==container)container.append(row);
+  }
   for(const node of [...container.children])if(!keep.has(node))node.remove();
 
   for (const message of current.messages) {
@@ -1819,9 +1831,9 @@ async function sendMessage() {
       if(state.capabilities?.queuedSends){
         if(outbox.size>=30)throw Error('Outgoing queue is full. Wait for messages to send.');
         const requestId=crypto.randomUUID(),payload={id,cipher,requestId,...(replyCipher?{replyCipher}:{})};
-        outbox.set(requestId,{room:id,payload,binding:roomKeys.get(id).context.code,failed:false,sending:false});
+        outbox.set(requestId,{room:id,payload,binding:roomKeys.get(id).context.code,at:Date.now(),failed:false,sending:false});
         if(selected===id&&$('message').value.trim()===text){$('message').value='';drafts.delete(id);resetOnce();clearReply();stopTyping();}
-        haptic();updateConnection();void flushOutbox();return;
+        haptic();updateConnection();renderChat();$('messages').scrollTop=$('messages').scrollHeight;void flushOutbox();return;
       }
       if(!online)throw Error('Reconnect to send this message.');
       await api('encryption/message', { id, cipher,...(replyCipher?{replyCipher}:{}) });
@@ -1850,7 +1862,7 @@ async function sendMessage() {
   }
 }
 
-$('manageOutbox').addEventListener('click',()=>{const entries=[...outbox.entries()].filter(([,item])=>item.room===selected);const controls=[el('p','','Encrypted outgoing messages are kept in memory until sent, locked or expired. Cancelling an already accepted message does not delete it from the chat.')];for(const [key,item] of entries){const row=el('div','request-item');row.append(el('span','',item.failed?item.error:'Waiting to send'));if(item.failed)row.append(button('Retry',()=>{item.failed=false;nextOutboxAttempt=0;closeModal();void flushOutbox();},'secondary-button'));const cancel=button('Discard',()=>{outbox.delete(key);closeModal();updateConnection();},'secondary-button');cancel.disabled=item.sending;row.append(cancel);controls.push(row);}controls.push(button('Close',closeModal,'secondary-button'));show('Outgoing messages',controls);});
+$('manageOutbox').addEventListener('click',()=>{const entries=[...outbox.entries()].filter(([,item])=>item.room===selected&&!item.accepted);const controls=[el('p','','Encrypted outgoing messages are kept in memory until sent, locked or expired. Cancelling an already accepted message does not delete it from the chat.')];for(const [key,item] of entries){const row=el('div','request-item');row.append(el('span','',item.failed?item.error:'Waiting to send'));if(item.failed)row.append(button('Retry',()=>{item.failed=false;nextOutboxAttempt=0;closeModal();void flushOutbox();},'secondary-button'));const cancel=button('Discard',()=>{if(item.sending||item.accepted)return;outbox.delete(key);closeModal();updateConnection();renderChat();},'secondary-button');cancel.disabled=item.sending||item.accepted;row.append(cancel);controls.push(row);}controls.push(button('Close',closeModal,'secondary-button'));show('Outgoing messages',controls);});
 $('message').addEventListener('input', () => {
   rememberRoom();updateSendButton();
   reportTyping();
@@ -2843,7 +2855,7 @@ $('updateCenter').addEventListener('click', async () => {
     show('Update center', [el('strong', '', 'You are up to date'), el('p', '', 'Installed: ' + installedVersion + ' · Server release: ' + release.latest),changes, button('Close', closeModal)]);
   } catch (error) { showError(error); }
 });
-let pushPlugin=null,pushListenersReady=false,pushRetryAt=0,pushRegisterJob=null;
+let pushPlugin=null,pushListenersReady=false,pushRetryAt=0,pushRegisterJob=null,pushRemovalJob=null;
 function pushOptedOut(){try{return localStorage.getItem('qzu-push-opt-out')==='1';}catch{return false;}}
 function shouldPromptPush(){try{return localStorage.getItem('qzu-push-permission-requested')!=='1';}catch{return false;}}
 function notePushPrompt(){try{localStorage.setItem('qzu-push-permission-requested','1');}catch{}}
@@ -2882,7 +2894,9 @@ async function registerPrivatePushOnce(interactive,requestPermission){
   setTimeout(()=>{if(pushRegistration===pending){pushRegistration=null;pushEpoch=-1;pushRetryAt=Date.now()+15000;if(interactive&&epoch===authEpoch&&unlockToken)info('Private notifications','Registration timed out. Try again.');}},15000);
   try{await plugin.register();}catch(error){pushRegistration=null;pushEpoch=-1;pushRetryAt=Date.now()+15000;throw error;}
 }
+async function disablePrivatePush(){if(pushRemovalJob)return pushRemovalJob;const job=(async()=>{pushRegistration=null;pushEpoch=authEpoch;await api('push/remove',{});try{await getPushPlugin()?.unregister?.();}catch{}})();pushRemovalJob=job;try{await job;}finally{if(pushRemovalJob===job)pushRemovalJob=null;}}
 function restorePushRegistration(){
+  if(pushOptedOut()){if(state.push?.registered&&!pushRemovalJob&&Date.now()>=pushRetryAt){pushRetryAt=Date.now()+15000;disablePrivatePush().catch(()=>{});}return;}
   if(!pushOptedOut()&&native&&window.Capacitor.getPlatform()==='android'&&pushAvailable()&&pushEpoch!==authEpoch&&!pushRegisterJob&&Date.now()>=pushRetryAt&&getPushPlugin()&&unlockToken&&!document.hidden){
     pushEpoch=authEpoch;registerPrivatePush(false,shouldPromptPush()).catch(()=>{pushEpoch=-1;pushRetryAt=Date.now()+15000;});
   }
@@ -2894,8 +2908,8 @@ $('privateNotifications').addEventListener('click',()=>{
   if(native&&window.Capacitor.getPlatform()==='ios'){
     controls.push(el('p','','Internal notifications work in the app. Remote notifications require Apple Push Notification service.'),button('Enable iOS notification permissions',async()=>{try{const count=state.rooms.reduce((n,r)=>n+unreadCount(r),0);const result=await devicePlugin.setBadge({count,requestPermission:true});info('Notifications',result.granted?'Enabled.':'Permission not granted.');}catch(error){modalError(error);}}),button('Test local notification',async event=>{const control=event.currentTarget,epoch=authEpoch;control.disabled=true;control.textContent='Scheduling test…';let timer;try{const result=await Promise.race([devicePlugin.testLocalNotification(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Native notification test timed out. Rebuild the iOS app.')),12000);})]);if(!result?.scheduled)throw Error('Native test was not confirmed. Install the latest iOS build.');if(epoch===authEpoch&&unlockToken)info('Notifications','Local test scheduled for 5 seconds. Stay here or return to the Home Screen. Alerts: '+(result.alerts?'enabled':'disabled')+' · Sounds: '+(result.sounds?'enabled':'disabled')+' · Badges: '+(result.badges?'enabled':'disabled')+'.');}catch(error){if(epoch===authEpoch)modalError(error);}finally{clearTimeout(timer);control.disabled=false;control.textContent='Test local notification';}},'secondary-button'));
   }
-  if(registered)controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'),button('Turn off',async()=>{try{try{localStorage.setItem('qzu-push-opt-out','1');}catch{}pushRegistration=null;pushEpoch=authEpoch;await api('push/remove',{});try{await getPushPlugin()?.unregister?.();}catch{}closeModal();await refresh();}catch(error){modalError(error);}}));
-  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{try{localStorage.removeItem('qzu-push-opt-out');}catch{}await registerPrivatePush(true);}catch(error){modalError(error);}}));if(!pushOptedOut())controls.push(button('Turn off',async()=>{try{localStorage.setItem('qzu-push-opt-out','1');pushRegistration=null;pushEpoch=authEpoch;await api('push/remove',{});try{await getPushPlugin()?.unregister?.();}catch{}closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button'));}
+  if(registered&&!pushOptedOut())controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'),button('Turn off',async()=>{try{try{localStorage.setItem('qzu-push-opt-out','1');}catch{}await disablePrivatePush();closeModal();await refresh();}catch(error){modalError(error);}}));
+  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{if(pushRemovalJob)await pushRemovalJob;try{localStorage.removeItem('qzu-push-opt-out');}catch{}pushRetryAt=0;await registerPrivatePush(true);}catch(error){modalError(error);}}));if(!pushOptedOut())controls.push(button('Turn off',async()=>{try{localStorage.setItem('qzu-push-opt-out','1');await disablePrivatePush();closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button'));}
   else if(!native||window.Capacitor.getPlatform()!=='ios')controls.push(el('p','','Push delivery is not configured yet.'));
   if(state.push?.diagnostic)controls.push(el('p','','Last push result: '+state.push.diagnostic.result));
   controls.push(button('Close',closeModal,'secondary-button'));show('Private notifications',controls);
