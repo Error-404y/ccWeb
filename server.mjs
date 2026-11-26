@@ -14,7 +14,7 @@ import { versionedState } from './lib/live.mjs';
 import { contactStore, retireAccount } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
-import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, applyRenewal, submitPayment } from './lib/access.mjs';
+import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment } from './lib/access.mjs';
 import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
@@ -178,7 +178,8 @@ app.post('/api/session', (req, res) => {
       error: 'Try again later.'
     });
     if ((accessRequired || req.deviceId) && !req.body?.accessKey) return res.json({ accessRequired: true });
-    const { token, id } = accessRequired || req.deviceId ? redeemAccess(db, req.body.accessKey, Date.now(), req.deviceId || null) : createAccount(db);
+    const review = validReviewKey(req.body?.accessKey);
+    const { token, id } = review ? redeemReviewAccess(db,req.body.accessKey,req.deviceId,{key:process.env.QZU_REVIEW_KEY,pin:process.env.QZU_REVIEW_PIN}) : accessRequired || req.deviceId ? redeemAccess(db, req.body.accessKey, Date.now(), req.deviceId || null) : createAccount(db);
     if (!req.deviceId) res.cookie(cookieName, token, {
       httpOnly: true,
       secure: production,
@@ -188,7 +189,7 @@ app.post('/api/session', (req, res) => {
     });
     req.account = {
       id,
-      login_hash: null
+      login_hash: review ? true : null
     };
   }
   res.json({

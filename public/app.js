@@ -2908,11 +2908,11 @@ function showKeyEntry(renewal) {
   input.maxLength = renewal ? 52 : 58;
   const submit = button('Continue', async () => {
     const value = input.value.trim().toUpperCase();
-    if(!renewal&&/^QZU-ADMIN-[A-F0-9]{48}$/.test(value)){
+    if(!renewal&&(/^[Q]ZU-ADMIN-[A-F0-9]{48}$/.test(value)||/^QZU-REVIEW-[A-F0-9]{40}$/.test(value))){
       submit.disabled=true;
       try{
         const result=await api('session',{accessKey:value});
-        if(result.accessRequired||!result.needsSetup)throw Error('Key activation unavailable.');
+        if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Key activation unavailable.');
         input.value='';forgetInvoice(false);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();
       }catch(error){dialogError(error);submit.disabled=false;}
       return;
