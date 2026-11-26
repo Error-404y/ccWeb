@@ -9,6 +9,7 @@ import { Chats } from './lib/chats.mjs';
 import { officialStore } from './lib/official.mjs';
 import { feedbackStore } from './lib/feedback.mjs';
 import { privatePush } from './lib/push.mjs';
+import { loadFirebaseDelivery } from './lib/firebase-push.mjs';
 import { versionedState } from './lib/live.mjs';
 import { contactStore, retireAccount } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
@@ -34,7 +35,7 @@ const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
 const official=officialStore(db),feedback=feedbackStore(db),liveWaiters=new Map();
-const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET});
+const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET,firebase:loadFirebaseDelivery(process.env.QZU_FIREBASE_CREDENTIALS)});
 let liveTotal=0;
 const contacts = contactStore(db);
 chats.contacts = contacts;
@@ -345,7 +346,7 @@ function stateData(a) {
     now: Date.now(),
     capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, live: true },
     official:official.snapshot(a.id),
-    push:{available:push.enabled,registered:push.registered(a.id)},
+    push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id)},
     access: accessStatus(a),
     supportAgent: a.access_plan==='admin',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),

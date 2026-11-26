@@ -1268,7 +1268,7 @@ function renderSettings() {
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
-  $('pushStatus').textContent=state.push?.registered?'On':state.push?.available?'Off':'Unavailable';
+  $('pushStatus').textContent=state.push?.registered?'On':pushAvailable()?'Off':'Unavailable';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('adminInterface').hidden=!state.supportAgent;
@@ -2746,6 +2746,7 @@ $('updateCenter').addEventListener('click', async () => {
   } catch (error) { showError(error); }
 });
 let pushPlugin=null,pushListenersReady=false;
+function pushAvailable(){return Boolean(state.push?.available&&(!state.push.platforms||state.push.platforms.includes(window.Capacitor?.getPlatform?.())));}
 function getPushPlugin(){
   if(!native||!window.Capacitor.isPluginAvailable('PushNotifications'))return null;
   if(!pushPlugin)pushPlugin=window.Capacitor.registerPlugin('PushNotifications');
@@ -2753,7 +2754,7 @@ function getPushPlugin(){
 }
 async function registerPrivatePush(interactive=false){
   const plugin=getPushPlugin(),epoch=authEpoch;
-  if(!plugin||!state.push?.available)throw Error('Push delivery is not available on this device yet.');
+  if(!plugin||!pushAvailable())throw Error('Push delivery is not available on this device yet.');
   if(!pushListenersReady){
     await plugin.addListener('registration',async({value})=>{
       const job=pushRegistration;
@@ -2774,7 +2775,7 @@ async function registerPrivatePush(interactive=false){
   try{await plugin.register();}catch(error){pushRegistration=null;throw error;}
 }
 function restorePushRegistration(){
-  if(state.push?.registered&&state.push.available&&pushEpoch!==authEpoch&&getPushPlugin()){
+  if(state.push?.registered&&pushAvailable()&&pushEpoch!==authEpoch&&getPushPlugin()){
     pushEpoch=authEpoch;registerPrivatePush(false).catch(()=>{});
   }
 }
@@ -2783,7 +2784,7 @@ $('privateNotifications').addEventListener('click',()=>{
   const registered=state.push?.registered;
   const controls=[el('p','','Only generic activity alerts. No sender, chat or message details.')];
   if(registered)controls.push(button('Turn off',async()=>{try{pushRegistration=null;pushEpoch=authEpoch;await api('push/remove',{});try{await getPushPlugin()?.unregister?.();}catch{}closeModal();await refresh();}catch(error){modalError(error);}}));
-  else if(state.push?.available&&getPushPlugin())controls.push(button('Enable',async()=>{try{await registerPrivatePush(true);}catch(error){modalError(error);}}));
+  else if(pushAvailable()&&getPushPlugin())controls.push(button('Enable',async()=>{try{await registerPrivatePush(true);}catch(error){modalError(error);}}));
   else controls.push(el('p','','Push delivery is not configured yet.'));
   controls.push(button('Close',closeModal,'secondary-button'));show('Private notifications',controls);
 });

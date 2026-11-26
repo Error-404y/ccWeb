@@ -14,3 +14,9 @@ android/local.properties
 *.ipa
 *.apk
 release-output/
+
+# Firebase credentials and local app configuration
+**/google-services.json
+*firebase-adminsdk*.json
+firebase-admin.json
+serviceAccountKey.json
