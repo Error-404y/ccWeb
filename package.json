@@ -1,6 +1,6 @@
 {
   "name": "qzu-messenger",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,6 +15,7 @@
     "admin-message": "node --env-file-if-exists=.env scripts/admin-message.mjs",
     "admin-announce": "node --env-file-if-exists=.env scripts/admin-announce.mjs",
     "admin-key": "node --env-file-if-exists=.env scripts/access.mjs admin-create",
+    "admin-pool": "node --env-file-if-exists=.env scripts/access.mjs admin-pool",
     "access-create": "node --env-file-if-exists=.env scripts/access.mjs create",
     "access-invoices": "node --env-file-if-exists=.env scripts/access.mjs invoices",
     "access-review": "node --env-file-if-exists=.env scripts/access.mjs review",

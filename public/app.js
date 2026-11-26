@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.12.0';
+const installedVersion = window.QZU_APP_VERSION || '0.13.0';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -131,10 +131,27 @@ try{for(const [key,item] of outbox){if(epoch!==authEpoch||!unlockToken||!online|
 function markDisconnected(){online=false;liveRevision='';updateConnection();}
 
 const motionAllowed=()=>!matchMedia('(prefers-reduced-motion: reduce)').matches;
-function motion(node,cls){if(!node||!motionAllowed()||document.hidden)return;node.classList.remove(cls);void node.offsetWidth;node.classList.add(cls);node.addEventListener('animationend',event=>{if(event.target===node)node.classList.remove(cls);},{once:true});}
+const motionJobs=new WeakMap();
+function motion(node,cls){
+  if(!node||!motionAllowed()||document.hidden)return;
+  let jobs=motionJobs.get(node);if(!jobs){jobs=new Map();motionJobs.set(node,jobs);}
+  clearTimeout(jobs.get(cls));
+  node.classList.remove(cls);void node.offsetWidth;node.classList.add(cls);
+  const timer=setTimeout(()=>{if(jobs.get(cls)===timer){node.classList.remove(cls);jobs.delete(cls);}},420);
+  jobs.set(cls,timer);
+}
+function animateFromComposer(row){
+  if(!row||!row.isConnected||!motionAllowed()||document.hidden||!row.animate)return;
+  const bubble=row.querySelector('.bubble'),composer=$('composer');
+  if(!bubble||composer.hidden)return;
+  const start=composer.getBoundingClientRect(),end=bubble.getBoundingClientRect();
+  if(!end.width||!end.height)return;
+  const dy=Math.max(0,Math.min(48,start.top-end.top));
+  bubble.animate([{transform:'translateY('+dy+'px) scale(.93)',opacity:.55},{transform:'translateY(0) scale(1)',opacity:1}],{duration:240,easing:'cubic-bezier(.2,.8,.2,1)'});
+}
 function haptic(){if(native&&!document.hidden)devicePlugin.haptic().catch(()=>{});}
-function rememberRoom(){if(typeof selected!=='string'||page!=='chat'||!unlockToken)return;const field=$('message'),view=$('messages');if(field.value)drafts.set(selected,field.value);else drafts.delete(selected);if(renderedRoom===selected&&(!mobile.matches||mobileOpen))scrollMemory.set(selected,{top:view.scrollTop,bottom:view.scrollHeight-view.scrollTop-view.clientHeight<100});}
-function restoreDraft(id){$('message').value=drafts.get(id)||'';}
+function rememberRoom(){if(typeof selected!=='string'||page!=='chat'||!unlockToken)return;const field=$('message'),view=$('messages');if(field.value)drafts.set(selected,{text:field.value,once:viewOnce,burn:burnSeconds});else drafts.delete(selected);if(renderedRoom===selected&&(!mobile.matches||mobileOpen))scrollMemory.set(selected,{top:view.scrollTop,bottom:view.scrollHeight-view.scrollTop-view.clientHeight<100});}
+function restoreDraft(id){const draft=drafts.get(id);$('message').value=draft?.text||'';resetOnce();if(draft?.once)setOnceMode(true);else if(draft?.burn){burnSeconds=draft.burn;$('attachmentMenu').classList.add('once-active');$('message').placeholder='Timed text · '+burnSeconds+'s';}}
 function updatePages() {
   updateNavigation();
   for (const name of ['chat', 'settings', 'connect']) {const node=$(name+'Page'),hidden=!unlockToken||accessDue||termsPending||suspendedAccount||name!==page;if(node.hidden&&!hidden)motion(node,'motion-page');node.hidden=hidden;}
@@ -147,7 +164,7 @@ function navigate(path, push = true) {
   const nextPage = routeName(location.pathname);
   if (page !== nextPage) {
     rememberRoom();
-    resetOnce();
+    if(nextPage==='chat')restoreDraft(selected);else resetOnce();
     closeModal();
     stopTyping();
     clearReply();
@@ -167,7 +184,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('a[href]');
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const url = new URL(a.href);
-  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/'].includes(url.pathname)) return;
+  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/'].includes(url.pathname)) return;
   e.preventDefault();
   if (unlockToken) {if(a.dataset.tab==='chat'){rememberRoom();mobileOpen=false;selected=null;renderedRoom=null;$('message').value='';}navigate(url.pathname);}
 });
@@ -213,14 +230,14 @@ modal.addEventListener('close', () => {
     stopCamera();
     body.replaceChildren();
     modalLocked = false;
-    modal.classList.remove('update-sheet');
+    modal.classList.remove('update-sheet','attachment-sheet');$('attachmentMenu').classList.remove('sheet-open');
   }
 });
 
 function show(title, content, locked = false) {
   stopCheckout();
   delete modal.dataset.checkout;
-  modal.classList.remove('update-sheet');
+  modal.classList.remove('update-sheet','attachment-sheet');$('attachmentMenu').classList.remove('sheet-open');
   clearMedia();
   stopCamera();
   modalLocked = locked;
@@ -462,7 +479,7 @@ function pinDialog(title, fields, submitLabel, onSubmit, {
       await onSubmit(values);
     } catch (err) {
       if (epoch === authEpoch && body.contains(form)) {
-        dialogError(err);
+        dialogError(err);motion(form,'pin-error-motion');haptic();
         submit.disabled = false;
         if (native) items.forEach(item => {
           item.input.disabled = false;
@@ -598,12 +615,13 @@ function showLockedEmergency() {
 }
 
 async function getSession() {
-  if (bootPending || authBusy || document.hidden || unlockToken || isPublicCheckout()) return;
+  if (authBusy || document.hidden || unlockToken || isPublicCheckout()) return;
   authBusy = true;
   const epoch = authEpoch;
   try {
     const result = await api('session', {});
-    if (epoch !== authEpoch) return;
+    await finishBoot();
+    if (epoch !== authEpoch || document.hidden) return;
     if (result.accessRequired) {
       sessionReady = false;
       const saved = playBuild?'':savedInvoice(false);
@@ -616,6 +634,7 @@ async function getSession() {
     showLogin();
   }
   catch (e) {
+    await finishBoot();
     if (epoch === authEpoch && !document.hidden) show('qzu.', [el('p', '', errorMessage(e)), button('Retry', () => {
       getSession();
     })], true);
@@ -690,7 +709,7 @@ function lock(reopen = true) {
   renderedMessages = [];
   $('contacts').replaceChildren();
   $('supportRequestsList').replaceChildren();
-  $('adminInterface').hidden=true;$('userInterfaceHeading').hidden=true;clearAdminFeedback();
+  $('adminInterface').hidden=true;$('adminLogout').hidden=true;$('userInterfaceHeading').hidden=true;clearAdminFeedback();
   $('messages').replaceChildren();
   $('message').value = '';
   $('enterCode').value = '';
@@ -714,6 +733,7 @@ function lock(reopen = true) {
 }
 
 function applyTheme(value) {
+  if(document.documentElement.dataset.theme&&document.documentElement.dataset.theme!==value)motion($('app'),'motion-theme');
   document.documentElement.dataset.theme = value;
   try {
     localStorage.setItem('qzu-theme', value);
@@ -857,12 +877,13 @@ function renderChat() {
   const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
   $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
+  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
     list.replaceChildren();
-    if (!rooms.length && !savedContacts.length) {
+    if (!state.now){const skeleton=el('div','chat-skeleton');skeleton.setAttribute('aria-hidden','true');for(let i=0;i<5;i++){const line=el('div','skeleton-contact');line.append(el('i'),el('span'),el('b'));skeleton.append(line);}list.append(skeleton);}
+    else if (!rooms.length && !savedContacts.length) {
       const box = el('div', 'empty-list');
       box.append(el('p', '', 'No chats'));
       const a = el('a', 'subtle-link', 'New chat');
@@ -979,7 +1000,7 @@ function renderChat() {
     if(!old||!sameRoom||renderedMessages[index]!==ids[index]){
       row=renderMessage(current,message);
       if(old){const before=old.querySelector('.message-reactions')?.textContent;if(before!==row.querySelector('.message-reactions')?.textContent)motion(row.querySelector('.message-reactions'),'motion-reaction');old.replaceWith(row);}
-      else if(sameRoom)motion(row,'motion-message');
+      else if(sameRoom){motion(row,'motion-message');if(message.mine)requestAnimationFrame(()=>animateFromComposer(row));}
     }
     keep.add(row);if(container.children[index]!==row)container.insertBefore(row,container.children[index]||null);
   });
@@ -991,7 +1012,7 @@ function renderChat() {
       const bubble=el('div','bubble'),content=el('div','message-text',safe?'Encrypted message…':'Message hidden'),footer=el('div','message-footer');
       footer.append(el('span','bubble-time',fmtTime(item.at)),el('span','pending-status'));bubble.append(content,footer);row.append(bubble);
       if(safe)QzuCrypto.decrypt(context,item.payload.cipher,true).then(text=>{if(row.isConnected&&epoch===authEpoch&&unlockToken&&selected===current.id&&!privacyMode&&outbox.get(key)===item&&roomKeys.get(current.id)?.context===context)content.textContent=text;}).catch(()=>{});
-      if(sameRoom&&!oldRows.has(row.id))motion(row,'motion-message');
+      if(sameRoom&&!oldRows.has(row.id)){motion(row,'motion-message');requestAnimationFrame(()=>animateFromComposer(row));}
     }
     row.querySelector('.pending-status').textContent=item.failed?'! Failed':item.accepted?'✓ Sent':'◷ Waiting';keep.add(row);if(row.parentNode!==container)container.append(row);
   }
@@ -1080,9 +1101,9 @@ function renderMessage(room, message) {
       try { await api('message/burn-open', { id: room.id, messageId: message.id }); await refresh(); } catch (error) { showError(error); }
     }, 'media-message'));
   } else if (message.once) {
-    const label = message.opened ? 'Opened' : message.mine ? 'View-once message' : 'Open once';
+    const label = message.opened ? 'Opened · View once' : message.mine ? 'View-once '+(message.kind==='image'?'photo':message.kind==='audio'?'audio':'message') : 'Open '+(message.kind==='image'?'photo':message.kind==='audio'?'audio':'message')+' once';
     const open = button(label, () => openOnceMessage(room, message), 'media-message');
-    open.disabled = message.mine || message.opened;
+    open.disabled = message.mine || message.opened || (room.encryption&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)));
     content.append(open);
   } else if (message.kind === 'image' || message.kind === 'audio') {
     const open = button('', () => openMedia(room, message), 'media-message media-tile');open.setAttribute('aria-label',message.kind==='image'?'View photo':'Play voice message');open.append(svg(message.kind==='image'?'camera':'mic'),el('span','',message.kind==='image'?'Photo':'Voice message'));
@@ -1184,7 +1205,7 @@ async function acknowledgeMessages() {
     const read = [],seen=[];
     for (const message of room.messages) {
       if (message.mine || message.deleted) continue;
-      if(room.encryption&&!message.decrypted&&message.kind==='text')continue;
+      if(room.encryption&&!message.once&&!message.decrypted&&message.kind==='text')continue;
       if (!acknowledgedDelivery.has(message.id)) delivered.push(message.id);
       const node = document.getElementById('message-' + message.id);
       const view = $('messages').getBoundingClientRect();
@@ -1265,7 +1286,7 @@ function renderSettings() {
   if (page !== 'settings') return;
   const requested = location.pathname.split('/')[2] || 'main';
   const category = ['support-requests','admin-feedback'].includes(requested) && !state.supportAgent ? 'main' : requested;
-  for (const panel of document.querySelectorAll('[data-settings-category]')) panel.hidden = panel.dataset.settingsCategory !== category;
+  for (const panel of document.querySelectorAll('[data-settings-category]')) {const hidden=panel.dataset.settingsCategory!==category;const entering=panel.hidden&&!hidden;panel.hidden=hidden;if(entering)motion(panel,'motion-settings');}
   $('settingsBack').href = category === 'main' ? '/chat' : '/settings';
   $('resetPin').disabled = !state.pinState || Boolean(state.resetDelivered) || ['new', 'approved'].includes(state.pinState);
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
@@ -1275,7 +1296,7 @@ function renderSettings() {
   $('pushStatus').textContent=state.push?.registered&&!pushOptedOut()?'On':native&&window.Capacitor.getPlatform()==='ios'?'In-app':pushAvailable()?(pushOptedOut()?'Off':'Permission / setup'):'Unavailable';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
-  $('adminInterface').hidden=!state.supportAgent;
+  $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
   $('userInterfaceHeading').hidden=!state.supportAgent;
   $('adminInboxCount').textContent=state.supportAgent?String((state.supportRequests||[]).length):'';
   $('adminFeedbackCount').textContent=state.supportAgent?String(state.feedbackCount||0):'';
@@ -1460,7 +1481,7 @@ async function prepareEncryptedRooms(data,ticket) {
     for (const message of room.messages) {
       message.text = message.deleted ? '' : 'Encrypted message — locked';
       message.reply = null;
-      if (message.deleted || !encryptionReady(room)) continue;
+      if (message.once || message.deleted || !encryptionReady(room)) continue;
       if (message.encryptedMedia) { message.text = 'Encrypted attachment'; continue; }
       if (!message.cipher) continue;
       const nonce = String(message.mine) + ':' + message.cipher.iv;
@@ -1577,6 +1598,19 @@ function showTermsGate(version){
   show('Terms of Service',[el('p','','Harassment, abuse, exploitation, threats and unlawful content are prohibited. Reports are reviewed and violations may result in suspension.'),...legalButtons(),label,accept,button('Decline and lock',()=>lock(),'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button')],true);
 }
 function showRestrictedAccount(title,message){show(title,[el('p','',message),button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button'),button('Lock',()=>lock(),'secondary-button'),...legalButtons()],true);}
+$('adminLogout').addEventListener('click',()=>{
+  if(!state.supportAgent||!unlockToken)return;
+  const confirm=button('Log out',async()=>{
+    confirm.disabled=true;
+    try{
+      await api('admin/logout',{confirmed:true});
+      if(native)await clearPrivateKeys().catch(()=>{});
+      sessionReady=false;needsSetup=false;forgetInvoice(false);forgetInvoice(true);checkoutReturn=null;
+      lock(false);history.replaceState(null,'','/chat');navigate('/chat',false);await getSession();
+    }catch(error){dialogError(error);confirm.disabled=false;}
+  });
+  show('Admin logout?',[el('p','','This ends your admin session and releases its access key.'),confirm,button('Cancel',closeModal,'secondary-button')]);
+});
 function showDeleteAccount(){
   const confirm=button('Permanently delete account',async()=>{
     confirm.disabled=true;
@@ -1754,6 +1788,7 @@ $('qzuInfoOpen').addEventListener('click', () => {
 });
 $('qzuInfoBack').addEventListener('click', () => $('backToChats').click());
 $('backToChats').addEventListener('click', () => {
+  if(recordingCleanup)clearMedia();
   rememberRoom();
   resetOnce();
   stopTyping();
@@ -1817,7 +1852,7 @@ async function sendMessage() {
     return;
   }
   if (!text) return;
-  const epoch = authEpoch;
+  const epoch = authEpoch, once=viewOnce;
   sendingMessage = true;
   updateSendButton();
 
@@ -1826,20 +1861,20 @@ async function sendMessage() {
       if (!encryptionReady(room)) throw Error('Verify encryption before sending.');
       const cipher = await QzuCrypto.encrypt(roomKeys.get(id).context, text);
       if (epoch !== authEpoch || document.hidden || !unlockToken || selected !== id || room.expires <= serverNow()) throw Error('Chat unavailable.');
-      const replyCipher=state.capabilities?.encryptedExtras&&replyTarget?.roomId===id?await QzuCrypto.encryptReply(roomKeys.get(id).context,cipher.iv,replyTarget.id):null;
+      const replyCipher=!once&&state.capabilities?.encryptedExtras&&replyTarget?.roomId===id?await QzuCrypto.encryptReply(roomKeys.get(id).context,cipher.iv,replyTarget.id):null;
       if(epoch!==authEpoch||!unlockToken||document.hidden||selected!==id)throw Error('Chat unavailable.');
-      if(state.capabilities?.queuedSends){
+      if(once){if(!state.capabilities?.encryptedOnce)throw Error('Update the server before sending view-once content.');if(!online)throw Error('Reconnect to send view-once content. Your draft is kept.');await api('encryption/once/send',{id,cipher});}
+      else if(state.capabilities?.queuedSends){
         if(outbox.size>=30)throw Error('Outgoing queue is full. Wait for messages to send.');
         const requestId=crypto.randomUUID(),payload={id,cipher,requestId,...(replyCipher?{replyCipher}:{})};
         outbox.set(requestId,{room:id,payload,binding:roomKeys.get(id).context.code,at:Date.now(),failed:false,sending:false});
         if(selected===id&&$('message').value.trim()===text){$('message').value='';drafts.delete(id);resetOnce();clearReply();stopTyping();}
         haptic();updateConnection();renderChat();$('messages').scrollTop=$('messages').scrollHeight;void flushOutbox();return;
       }
-      if(!online)throw Error('Reconnect to send this message.');
-      await api('encryption/message', { id, cipher,...(replyCipher?{replyCipher}:{}) });
+      else {if(!online)throw Error('Reconnect to send this message.');await api('encryption/message', { id, cipher,...(replyCipher?{replyCipher}:{}) });}
     } else {
       if(!online)throw Error('Reconnect to send this message. Your draft is kept.');
-      await api('message', { id, text, once: viewOnce, burnSeconds, replyTo: burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
+      await api('message', { id, text, once, burnSeconds, replyTo: once||burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
     }
 
     if (epoch !== authEpoch) return;
@@ -1974,7 +2009,8 @@ $('copyCode').addEventListener('click', async() => {
   if (!inv || inv.expires <= serverNow()) return;
   try {
     await navigator.clipboard.writeText(inv.code);
-    info('Copied', inv.code);
+    const control=$('copyCode');control.replaceChildren(svg('check'));control.setAttribute('aria-label','Copied');motion(control,'motion-reaction');haptic();
+    setTimeout(()=>{control.replaceChildren(svg('copy'));control.setAttribute('aria-label','Copy code');},1000);
   } catch {
     info('Your code', inv.code);
   }
@@ -2221,7 +2257,7 @@ if (page === 'connect' && location.hash) {
   history.replaceState(null, '', location.pathname);
 }
 function backgroundApp(){if(isPublicCheckout())return;if(!native||backgroundPin){if(unlockToken||pinPrompt)lock();return;}if(recordingCleanup||mediaRoom||stream)closeModal();stopCamera();stopTyping();}
-function resumeApp(){if(bootPending)return;if(isPublicCheckout())resumeCheckout?.();else if(!unlockToken)getSession();else if(!document.hidden)refresh().catch(()=>{});}
+function resumeApp(){if(isPublicCheckout())resumeCheckout?.();else if(!unlockToken)getSession();else if(!document.hidden)refresh().catch(()=>{});}
 if (native) {
   if(window.Capacitor.getPlatform()==='ios')devicePlugin.addListener('screenCaptured',()=>{if(unlockToken)lock();}).catch(()=>{});
   console.info('[qzu] Mobile startup; device plugin available:', window.Capacitor.isPluginAvailable('QzuDevice'), '; server:', apiOrigin);
@@ -2264,8 +2300,9 @@ async function loop() {
 }
 updatePages();
 const boot=$('bootSplash');
-function finishBoot(){if(!bootPending)return;bootPending=false;boot.remove();document.documentElement.classList.remove('booting');getSession();}
-if(bootPending){document.documentElement.classList.add('booting');boot.addEventListener('animationend',event=>{if(event.target===boot&&event.animationName==='bootExit')finishBoot();});requestAnimationFrame(()=>requestAnimationFrame(()=>{boot.classList.add('boot-running');setTimeout(finishBoot,2300);}));}else{boot.remove();getSession();}
+const bootMinimum=bootPending?new Promise(resolve=>{document.documentElement.classList.add('booting');boot.classList.add('boot-running');setTimeout(resolve,5000);}):Promise.resolve();
+async function finishBoot(){if(!bootPending)return;await bootMinimum;if(!bootPending)return;bootPending=false;boot.classList.add('boot-ready');await new Promise(resolve=>setTimeout(resolve,240));boot.remove();document.documentElement.classList.remove('booting');}
+if(!bootPending)boot.remove();getSession();
 loop();
 
 
@@ -2278,6 +2315,7 @@ function previewText(message) {
   return message.text;
 }
 
+function setOnceMode(value){viewOnce=value;burnSeconds=0;if(value)clearReply();$('attachmentMenu').classList.toggle('once-active',value);$('message').placeholder=value?'View-once message':'Message';}
 function resetOnce() {
   viewOnce = false;
   burnSeconds = 0;
@@ -2430,7 +2468,8 @@ $('chatOptions').addEventListener('click', () => {
     return;
   }
   if (room.admin&&!room.support) return;
-  const controls = [el('h3','profile-heading',nameFor(room))];
+  const profileMark=svg(room.group?'groupAvatar':'avatar','profile-transition-mark');
+  const controls = [profileMark,el('h3','profile-heading',nameFor(room))];
   if(room.support){show('Chat options',[button('Report support conversation',()=>showReport(room),'secondary-button'),button('Close',closeModal,'secondary-button')]);return;}
   if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
   if (!room.group) {
@@ -2455,7 +2494,9 @@ $('chatOptions').addEventListener('click', () => {
     for (const member of room.members || []) controls.push(button('Block ' + member, () => confirm(member), 'secondary-button'));
   } else controls.push(button('Block contact', () => confirm(null), 'secondary-button danger-button'));
   controls.push(button('Close', closeModal, 'secondary-button'));
+  const origin=$('profileAvatar').getBoundingClientRect();
   show('Contact information', controls);
+  if(motionAllowed()&&profileMark.animate){const target=profileMark.getBoundingClientRect();if(target.width&&origin.width)profileMark.animate([{transform:'translate('+((origin.left+origin.width/2)-(target.left+target.width/2))+'px,'+((origin.top+origin.height/2)-(target.top+target.height/2))+'px) scale('+origin.width/target.width+')',opacity:.6},{transform:'none',opacity:1}],{duration:260,easing:'cubic-bezier(.2,.8,.2,1)'});}
 });
 
 $('blockedContacts').addEventListener('click', async () => {
@@ -2546,43 +2587,93 @@ async function openMedia(room, message) {
 }
 
 async function openOnceMessage(room, message) {
+  if(message.mine||message.opened||message.deleted)return;
+  const epoch=authEpoch,encrypted=Boolean(room.encryption);
   const open = button('Open once', async () => {
     open.disabled = true;
+    const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&!document.hidden&&selected===room.id&&body.contains(open)&&state.rooms.some(r=>r.id===room.id&&r.expires>serverNow()&&r.messages.some(m=>m.id===message.id&&!m.deleted));
     try {
-      const result = await api('message/open', { id: room.id, messageId: message.id });
-      if (selected !== room.id) return;
-      if (result.media) showMedia(room, result.kind, 'data:' + result.media.mime + ';base64,' + result.media.data, message.id);
-      else {
-        show('View once', [el('p', 'once-content', result.text), button('Close', closeModal)]);
-        mediaRoom = room.id;
-        mediaMessage = message.id;
-      }
-      await refresh();
-    } catch (error) { modalError(error); }
+      if(!active())return;
+      if(encrypted&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)))throw Error('View-once encryption unavailable.');
+      const context=encrypted?roomKeys.get(room.id)?.context:null;
+      const result = await api(encrypted?'encryption/once/open':'message/open', { id: room.id, messageId: message.id });
+      for(const r of state.rooms)if(r.id===room.id){const m=r.messages.find(m=>m.id===message.id);if(m){m.opened=true;m.unread=false;m.text='';m.cipher=null;m.encryptedMedia=false;}}
+      message.opened=true;
+      if(epoch===authEpoch)render();
+      if(!active())return;
+      let text=result.text,source=null;
+      if(result.kind!==message.kind)throw Error('Invalid view-once message.');
+      if(encrypted){
+        if(!context||roomKeys.get(room.id)?.context!==context||!result.cipher)throw Error('Encryption key unavailable.');
+        if(result.kind==='text')text=await QzuCrypto.decrypt(context,result.cipher,false);
+        else source=await QzuCrypto.decryptMedia(context,result.kind,result.cipher,false);
+      }else if(result.media)source='data:'+result.media.mime+';base64,'+result.media.data;
+      if(!active())return;
+      if(source)showMedia(room,result.kind,source,message.id);
+      else {show('View once',[el('p','once-content',text),button('Close',closeModal)]);mediaRoom=room.id;mediaMessage=message.id;}
+      haptic();
+    }catch(error){if(active())modalError(error);}
+    finally{if(epoch===authEpoch&&unlockToken)refresh().catch(()=>{});}
   });
-  show('View once', [el('p', '', 'This message cannot be reopened.'), open, button('Cancel', closeModal, 'secondary-button')]);
-  mediaRoom = room.id;
-  mediaMessage = message.id;
+  show('View once',[el('p','','This content can only be opened once. Closing it or leaving the app will permanently end the view.'),open,button('Cancel',closeModal,'secondary-button')]);
+  mediaRoom=room.id;mediaMessage=message.id;
 }
 
 function currentMediaRoom(){const room=state.rooms.find(r=>r.id===selected);return room&&!room.admin&&!room.readOnly&&(!encryptionRequired(room)||encryptionReady(room))?room:null;}
-$('cameraShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){resetOnce();choosePhoto(room,true);}});
-$('voiceShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){resetOnce();recordVoice(room);}});
+$('cameraShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){choosePhoto(room,true);}});
+const voiceControl=$('voiceShortcut');
+let voiceGesture=null;
+voiceControl.addEventListener('pointerdown',event=>{
+  if(event.button!==0||voiceGesture||recordingCleanup)return;
+  const room=currentMediaRoom();if(!room||!unlockToken)return;
+  event.preventDefault();voiceControl.setPointerCapture(event.pointerId);
+  const gesture={id:event.pointerId,x:event.clientX,y:event.clientY,action:'hold',session:null};
+  voiceGesture=gesture;haptic();
+  recordVoice(room,gesture).catch(error=>{if(voiceGesture===gesture)voiceGesture=null;showError(error);});
+});
+function voiceSwipe(dx,dy){return dx>=75&&dx>=dy?'cancel':dy>=65?'locked':'hold';}
+voiceControl.addEventListener('pointermove',event=>{
+  const g=voiceGesture;if(!g||event.pointerId!==g.id||g.action!=='hold')return;
+  const action=voiceSwipe(g.x-event.clientX,g.y-event.clientY);
+  if(action==='cancel'){g.action=action;g.session?.cancel();haptic();}
+  else if(action==='locked'){g.action=action;g.session?.lock();haptic();}
+});
+function endVoiceGesture(event, cancelled=false){
+  const g=voiceGesture;if(!g||g.id!==event.pointerId)return;
+  voiceGesture=null;
+  if(cancelled&&g.action!=='locked'){g.action='cancel';g.session?.cancel();return;}
+  if(g.action==='hold'){g.action='send';g.session?.send();}
+}
+voiceControl.addEventListener('pointerup',event=>endVoiceGesture(event));
+voiceControl.addEventListener('pointercancel',event=>endVoiceGesture(event,true));
+voiceControl.addEventListener('lostpointercapture',event=>endVoiceGesture(event,true));
+voiceControl.addEventListener('click',event=>{if(event.detail===0){const room=currentMediaRoom();if(room)recordVoice(room);}});
+function showAttachmentGrid(title,options){
+  const grid=el('div','attachment-grid'),handle=el('div','attachment-handle');
+  for(const control of options){
+    const label=control.textContent;
+    const icon=label.includes('Gallery')?'camera':label.includes('Camera')?'camera':label.includes('Voice')?'mic':label.toLowerCase().includes('once')?'eye':label.includes('reading')||label.includes('Timed')?'clock':'chat';
+    control.className='attachment-tile';control.prepend(svg(icon));grid.append(control);
+  }
+  show(title,[handle,grid,button('Close',closeModal,'secondary-button')]);
+  modal.classList.add('attachment-sheet');$('attachmentMenu').classList.add('sheet-open');
+  let y=null;handle.addEventListener('pointerdown',e=>{y=e.clientY;handle.setPointerCapture(e.pointerId);});
+  handle.addEventListener('pointerup',e=>{if(y!==null&&e.clientY-y>25)closeModal();y=null;});
+  haptic();
+}
 $('attachmentMenu').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
   if (!room || room.admin) return;
   if (room.encryption || (native && directRoom(room))) {
     if (!encryptionReady(room)) { showEncryption(room); return; }
-    resetOnce();
-    show('Encrypted attachments', [button('Gallery', () => choosePhoto(room), 'secondary-button'), button('Camera',()=>choosePhoto(room,true),'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button'), button('Close', closeModal)]);
+    const options=[button('Gallery', () => choosePhoto(room), 'secondary-button'),button('Camera',()=>choosePhoto(room,true),'secondary-button'),button('Voice message',()=>recordVoice(room),'secondary-button')];
+    if(state.capabilities?.encryptedOnce)options.unshift(button(viewOnce?'Disable view once':'Enable view once',()=>{setOnceMode(!viewOnce);rememberRoom();closeModal();},'secondary-button'));
+    showAttachmentGrid('Encrypted attachments',options);
     return;
   }
   const items = burnSeconds ? [] : [button('Gallery', () => choosePhoto(room), 'secondary-button'), button('Camera',()=>choosePhoto(room,true),'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
   if (!room.group && !burnSeconds) items.unshift(button(viewOnce ? 'Disable view once' : 'Enable view once', () => {
-    viewOnce = !viewOnce;
-    burnSeconds = 0;
-    $('attachmentMenu').classList.toggle('once-active', viewOnce);
-    $('message').placeholder = viewOnce ? 'View-once message' : 'Message';
+    setOnceMode(!viewOnce);rememberRoom();
     closeModal();
   }, 'secondary-button'));
   if (!room.group) items.unshift(button(burnSeconds ? 'Timed text · ' + burnSeconds + 's' : 'Burn after reading', () => {
@@ -2595,7 +2686,7 @@ $('attachmentMenu').addEventListener('click', () => {
       closeModal();
     }, 'secondary-button'))]);
   }, 'secondary-button'));
-  show('Message options', [...items, button('Close', closeModal)]);
+  showAttachmentGrid('Message options',items);
 });
 
 function blobData(blob) {
@@ -2614,16 +2705,17 @@ async function sendAttachment(room, kind, blob, once, cleaned=false) {
   if (blob.size > 2 * 1024 * 1024 || !blob.size) throw new Error('Attachment must be under 2 MB.');
   const epoch = authEpoch;
   if (room.encryption || (native && directRoom(room))) {
-    if (!encryptionReady(room) || once) throw Error('Verified encryption required.');
+    if (!encryptionReady(room)) throw Error('Verified encryption required.');
+    if(once&&!state.capabilities?.encryptedOnce)throw Error('Update the server before sending view-once content.');
     const cipher = await QzuCrypto.encryptMedia(roomKeys.get(room.id).context, kind, blob);
     if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden || room.expires <= serverNow()) throw Error('Chat unavailable.');
-    await api('encryption/message', { id: room.id, kind, cipher });
+    await api(once?'encryption/once/send':'encryption/message', { id: room.id, kind, cipher });
   } else {
     const data = await blobData(blob);
     if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden) throw new Error('Chat unavailable.');
     await api('message', { id: room.id, kind, mime: blob.type.split(';')[0], data, once });
   }
-  resetOnce();
+  if(!$('message').value.trim())resetOnce();
   closeModal();
   await refresh();
 }
@@ -2632,76 +2724,76 @@ function choosePhoto(room,camera=false){
   const input=el('input','photo-file');input.type='file';input.accept='image/jpeg,image/png,image/webp';if(camera)input.setAttribute('capture','environment');
   const preview=el('img','temporary-media photo-preview');preview.alt='Photo preview';preview.hidden=true;
   const status=el('p','media-status','Choose a photo');
-  const epoch=authEpoch;let prepared=null,selection=0;
-  const send=button(viewOnce?'Send once':'Send photo',async()=>{if(!prepared)return;send.disabled=true;status.textContent='Sending…';try{await sendAttachment(room,'image',prepared,viewOnce,true);}catch(error){send.disabled=false;status.textContent='';modalError(error);}});send.disabled=true;
+  const epoch=authEpoch,once=viewOnce;let prepared=null,selection=0;
+  const send=button(once?'Send once':'Send photo',async()=>{if(!prepared)return;send.disabled=true;status.textContent='Sending…';try{await sendAttachment(room,'image',prepared,once,true);}catch(error){send.disabled=false;status.textContent='';modalError(error);}});send.disabled=true;
   input.addEventListener('change',async()=>{const n=++selection,file=input.files?.[0];prepared=null;send.disabled=true;preview.hidden=true;if(mediaUrl){URL.revokeObjectURL(mediaUrl);mediaUrl=null;}if(!file)return;status.textContent='Preparing photo…';try{const blob=await QzuMetadata.cleanImage(file);if(epoch!==authEpoch||n!==selection||!body.contains(input)||document.hidden)return;prepared=blob;mediaUrl=URL.createObjectURL(blob);preview.src=mediaUrl;preview.hidden=false;status.textContent=Math.round(blob.size/1024)+' KB';send.disabled=false;}catch(error){status.textContent='';dialogError(error);}});
   show(camera?'Camera':'Gallery',[input,preview,status,send,button('Cancel',closeModal,'secondary-button')]);mediaRoom=room.id;
   // File chooser must be opened synchronously from the user's tap.
   input.click();
 }
 
-async function recordVoice(room) {
+async function recordVoice(room,gesture=null) {
+  const once=viewOnce;
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    if(voiceGesture===gesture)voiceGesture=null;
     info('Voice message', 'Recording is unavailable in this browser.');
     return;
   }
-  const label = el('p', '', 'Allow microphone access to record.');
-  const stop = button('Stop recording', () => {}, 'secondary-button');
-  stop.disabled = true;
-  show('Voice message', [label, stop, button('Cancel', closeModal, 'secondary-button')]);
-  mediaRoom = room.id;
-  const epoch = authEpoch;
-  let microphone;
-  try {
-    microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
-    if (epoch !== authEpoch || !body.contains(label) || document.hidden) {
-      microphone.getTracks().forEach(track => track.stop());
-      return;
-    }
-    const mime = ['audio/mp4', 'audio/webm', 'audio/ogg'].find(type => MediaRecorder.isTypeSupported(type));
-    if (!mime) {
-      microphone.getTracks().forEach(track => track.stop());
-      throw new Error('No supported recording format.');
-    }
-    const recorder = new MediaRecorder(microphone, { mimeType: mime, audioBitsPerSecond: 64000 });
-    const chunks = [];
-    let cancelled = false;
-    let timer,ticker;
-    const cleanup = () => {
-      cancelled = true;
-      clearTimeout(timer);clearInterval(ticker);
-      if (recorder.state !== 'inactive') recorder.stop();
-      microphone.getTracks().forEach(track => track.stop());
+  const epoch=authEpoch, label=el('p','voice-gesture-status','Allow microphone access to record.');
+  const panel=el('div','voice-gesture-panel'), controls=el('div','voice-gesture-controls');
+  const wave=el('canvas','voice-wave');wave.width=320;wave.height=38;
+  panel.append(label,wave,controls);
+  let microphone,recorder,context,source,analyser,ticker,timer,chunks=[],cancelled=false,instant=false,locked=!gesture,pausedAt=0,pausedTotal=0,started=0,finished=false;
+  const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&selected===room.id&&page==='chat'&&(!mobile.matches||mobileOpen)&&!document.hidden&&room.expires>serverNow()&&panel.isConnected;
+  const stopTracks=()=>{microphone?.getTracks().forEach(track=>track.stop());if(context){context.close().catch(()=>{});context=null;}clearInterval(ticker);clearTimeout(timer);};
+  const cleanup=()=>{cancelled=true;stopTracks();if(recorder&&recorder.state!=='inactive')recorder.stop();chunks=[];panel.remove();$('composer').classList.remove('voice-recording');if(recordingCleanup===cleanup)recordingCleanup=null;if(voiceGesture===gesture)voiceGesture=null;};
+  const cancel=()=>{cleanup();if(!gesture)closeModal();};
+  const stop=(send=false)=>{if(finished||cancelled||!recorder||recorder.state==='inactive')return;instant=send;recorder.stop();};
+  const pause=button('Pause',()=>{if(recorder?.state==='recording'){recorder.pause();pausedAt=Date.now();pause.textContent='Resume';}else if(recorder?.state==='paused'){recorder.resume();pausedTotal+=Date.now()-pausedAt;pausedAt=0;pause.textContent='Pause';}},'secondary-button');
+  const preview=button('Preview',()=>stop(false),'secondary-button');preview.disabled=true;
+  const sendNow=button('Send',()=>stop(true));sendNow.disabled=true;pause.disabled=true;
+  const discard=button('Discard',cancel,'secondary-button');
+  const lock=()=>{locked=true;controls.replaceChildren(discard,pause,preview,sendNow);label.textContent='Recording hands-free';motion(controls,'motion-page');};
+  if(gesture)gesture.session={cancel,lock,send:()=>stop(true)};
+  // A modal would make the pointer-capture target inert. Keep hold gestures in the composer.
+  if(gesture){$('composer').before(panel);$('composer').classList.add('voice-recording');controls.replaceChildren(discard);label.textContent='Hold · Slide left to cancel · Slide up to lock';}
+  else{show('Voice message',[panel]);lock();}
+  mediaRoom=room.id;
+  recordingCleanup=cleanup;
+  try{
+    microphone=await navigator.mediaDevices.getUserMedia({audio:true});
+    if(cancelled||!active()||gesture?.action==='cancel'){cleanup();return;}
+    if(gesture?.action==='send'){cleanup();return;}
+    const mime=['audio/mp4','audio/webm','audio/ogg'].find(type=>MediaRecorder.isTypeSupported(type));
+    if(!mime)throw Error('No supported recording format.');
+    recorder=new MediaRecorder(microphone,{mimeType:mime,audioBitsPerSecond:64000});
+    recorder.ondataavailable=event=>{if(!cancelled&&event.data.size)chunks.push(event.data);};
+    recorder.onerror=()=>{const visible=active();cleanup();if(visible)showError(Error('Recording interrupted.'));};
+    for(const track of microphone.getTracks())track.addEventListener('ended',()=>{if(!finished&&!cancelled)cancel();},{once:true});
+    recorder.onstop=async()=>{
+      if(finished)return;finished=true;stopTracks();
+      if(recordingCleanup===cleanup)recordingCleanup=null;
+      if(cancelled||!active()){cleanup();return;}
+      const blob=new Blob(chunks,{type:mime});chunks=[];
+      if(!blob.size){cleanup();if(!gesture)closeModal();return;}
+      panel.remove();$('composer').classList.remove('voice-recording');
+      if(instant){try{await sendAttachment(room,'audio',blob,once);return;}catch(error){if(epoch!==authEpoch||!unlockToken||document.hidden||selected!==room.id)return;/* Do not auto-retry: delivery may already have succeeded. */showError(error);return;}}
+      const player=el('audio','temporary-media');player.controls=true;
+      const send=button(once?'Send once':'Send recording',async()=>{send.disabled=true;try{await sendAttachment(room,'audio',blob,once);}catch(error){send.disabled=false;modalError(error);}});
+      show('Voice message',[player,send,button('Discard',closeModal,'secondary-button')]);mediaRoom=room.id;mediaUrl=URL.createObjectURL(blob);player.src=mediaUrl;
     };
-    recordingCleanup = cleanup;
-    recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
-    recorder.onstop = () => {
-      clearTimeout(timer);clearInterval(ticker);
-      microphone.getTracks().forEach(track => track.stop());
-      if (recordingCleanup === cleanup) recordingCleanup = null;
-      if (cancelled || epoch !== authEpoch || !body.contains(label)) return;
-      const blob = new Blob(chunks, { type: mime });
-      const send = button(viewOnce ? 'Send once' : 'Send recording', async () => {
-        send.disabled = true;
-        try { await sendAttachment(room, 'audio', blob, viewOnce); }
-        catch (error) { send.disabled = false; modalError(error); }
-      });
-      const player = el('audio', 'temporary-media');
-      player.controls = true;
-      show('Voice message', [player, send, button('Discard', closeModal, 'secondary-button')]);
-      mediaRoom = room.id;
-      mediaUrl = URL.createObjectURL(blob);
-      player.src = mediaUrl;
-    };
-    stop.disabled = false;
-    stop.addEventListener('click', () => { if (recorder.state !== 'inactive') recorder.stop(); });
-    recorder.start();
-    const started=Date.now();label.classList.add('recording-indicator');label.textContent='Recording · 0:00';ticker=setInterval(()=>{const seconds=Math.min(60,Math.floor((Date.now()-started)/1000));label.textContent='Recording · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');},200);
-    timer = setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 60_000);
-  } catch (error) {
-    microphone?.getTracks().forEach(track => track.stop());
-    if (epoch === authEpoch && body.contains(label)) modalError(error);
-  }
+    recorder.start();started=Date.now();pause.disabled=false;preview.disabled=false;sendNow.disabled=false;if(gesture?.action==='locked')lock();
+    try{const AudioCtx=window.AudioContext||window.webkitAudioContext;if(AudioCtx){context=new AudioCtx();source=context.createMediaStreamSource(microphone);analyser=context.createAnalyser();analyser.fftSize=256;source.connect(analyser);}}catch{}
+    ticker=setInterval(()=>{
+      if(!active()){cancel();return;}
+      const seconds=Math.floor(((pausedAt||Date.now())-started-pausedTotal)/1000);
+      label.textContent=(locked?'Recording':'‹ Slide left to cancel · ↑ Lock')+' · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
+      const ctx=wave.getContext('2d');if(!ctx)return;ctx.clearRect(0,0,wave.width,wave.height);
+      const data=new Uint8Array(128);if(analyser)analyser.getByteTimeDomainData(data);else data.fill(128);
+      ctx.fillStyle=getComputedStyle(wave).color;for(let i=0;i<40;i++){const h=Math.max(2,Math.abs(data[i*3]-128)/128*36);ctx.fillRect(i*8,(38-h)/2,4,h);}
+    },100);
+    timer=setTimeout(()=>stop(false),60000);
+  }catch(error){const visible=active();cleanup();if(visible)showError(error);}
 }
 
 function confirmUnsend(room, message) {
@@ -2856,7 +2948,7 @@ $('updateCenter').addEventListener('click', async () => {
   } catch (error) { showError(error); }
 });
 let pushPlugin=null,pushListenersReady=false,pushRetryAt=0,pushRegisterJob=null,pushRemovalJob=null;
-function pushOptedOut(){try{return localStorage.getItem('qzu-push-opt-out')==='1';}catch{return false;}}
+function pushOptedOut(){try{localStorage.removeItem('qzu-push-opt-out');}catch{}return false;}
 function shouldPromptPush(){try{return localStorage.getItem('qzu-push-permission-requested')!=='1';}catch{return false;}}
 function notePushPrompt(){try{localStorage.setItem('qzu-push-permission-requested','1');}catch{}}
 function pushAvailable(){return Boolean(state.push?.available&&(!state.push.platforms||state.push.platforms.includes(window.Capacitor?.getPlatform?.())));}
@@ -2908,8 +3000,8 @@ $('privateNotifications').addEventListener('click',()=>{
   if(native&&window.Capacitor.getPlatform()==='ios'){
     controls.push(el('p','','Internal notifications work in the app. Remote notifications require Apple Push Notification service.'),button('Enable iOS notification permissions',async()=>{try{const count=state.rooms.reduce((n,r)=>n+unreadCount(r),0);const result=await devicePlugin.setBadge({count,requestPermission:true});info('Notifications',result.granted?'Enabled.':'Permission not granted.');}catch(error){modalError(error);}}),button('Test local notification',async event=>{const control=event.currentTarget,epoch=authEpoch;control.disabled=true;control.textContent='Scheduling test…';let timer;try{const result=await Promise.race([devicePlugin.testLocalNotification(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Native notification test timed out. Rebuild the iOS app.')),12000);})]);if(!result?.scheduled)throw Error('Native test was not confirmed. Install the latest iOS build.');if(epoch===authEpoch&&unlockToken)info('Notifications','Local test scheduled for 5 seconds. Stay here or return to the Home Screen. Alerts: '+(result.alerts?'enabled':'disabled')+' · Sounds: '+(result.sounds?'enabled':'disabled')+' · Badges: '+(result.badges?'enabled':'disabled')+'.');}catch(error){if(epoch===authEpoch)modalError(error);}finally{clearTimeout(timer);control.disabled=false;control.textContent='Test local notification';}},'secondary-button'));
   }
-  if(registered&&!pushOptedOut())controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'),button('Turn off',async()=>{try{try{localStorage.setItem('qzu-push-opt-out','1');}catch{}await disablePrivatePush();closeModal();await refresh();}catch(error){modalError(error);}}));
-  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{if(pushRemovalJob)await pushRemovalJob;try{localStorage.removeItem('qzu-push-opt-out');}catch{}pushRetryAt=0;await registerPrivatePush(true);}catch(error){modalError(error);}}));if(!pushOptedOut())controls.push(button('Turn off',async()=>{try{localStorage.setItem('qzu-push-opt-out','1');await disablePrivatePush();closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button'));}
+  if(registered&&!pushOptedOut())controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'));
+  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{if(pushRemovalJob)await pushRemovalJob;try{localStorage.removeItem('qzu-push-opt-out');}catch{}pushRetryAt=0;await registerPrivatePush(true);}catch(error){modalError(error);}}));}
   else if(!native||window.Capacitor.getPlatform()!=='ios')controls.push(el('p','','Push delivery is not configured yet.'));
   if(state.push?.diagnostic)controls.push(el('p','','Last push result: '+state.push.diagnostic.result));
   controls.push(button('Close',closeModal,'secondary-button'));show('Private notifications',controls);

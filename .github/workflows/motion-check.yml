@@ -3,6 +3,8 @@ on:
   push:
     branches:
       - develop/v0.12.0
+      - develop/v0.12.1
+      - develop/v0.13.0
   pull_request:
     branches:
       - main

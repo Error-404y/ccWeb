@@ -15,7 +15,7 @@ import { versionedState } from './lib/live.mjs';
 import { contactStore } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
-import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment } from './lib/access.mjs';
+import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey } from './lib/access.mjs';
 import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
@@ -76,7 +76,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use((req, res, next) => express.json({
-  limit: ['/api/message', '/api/encryption/message','/api/report'].includes(req.path) ? '3mb' : '12kb',
+  limit: ['/api/message', '/api/encryption/message','/api/encryption/once/send','/api/report'].includes(req.path) ? '3mb' : '12kb',
   verify: (req, res, buffer) => { req.rawBody = buffer.toString('utf8'); }
 })(req, res, next));
 const cookieName = production ? '__Host-qzu': 'qzu';
@@ -267,6 +267,18 @@ app.use('/api',(req,res,next)=>{
   next();
 });
 app.post('/api/login/background-lock',guard('background-lock',10,60000),(req,res)=>{if(!req.deviceId||typeof req.body?.keepUnlocked!=='boolean')return res.status(400).json({error:'Registered device required.'});res.json({ok:unlocks.setIdle(req.account.id,req.get('x-qzu-unlock'),req.body.keepUnlocked)});});
+app.post('/api/admin/logout',guard('admin-logout',5,60000),(req,res)=>{
+  const a=req.account;
+  if(a.access_plan!=='admin'||!req.deviceId||req.body?.confirmed!==true)return res.status(403).json({error:'Confirmed admin logout required.'});
+  if(a.suspended&&(!a.suspended_until||a.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
+  if(!db.prepare('SELECT hash FROM support_keys WHERE account=? AND redeemed IS NOT NULL').get(a.id))return res.status(409).json({error:'Admin key unavailable.'});
+  // Assigned support cases belong to the slot; personal conversations and device secrets do not.
+  chats.erase(a.id,true);chats.hidePresence(a.id);prekeys.remove(a.id);push.remove(a.id);official.erase(a.id);unlocks.revokeAll(a.id);
+  db.prepare('DELETE FROM blocks WHERE owner=? OR target=?').run(a.id,a.id);
+  db.prepare('DELETE FROM security_activity WHERE owner=?').run(a.id);
+  db.prepare('UPDATE accounts SET deletion_hash=NULL,terms_version=0 WHERE id=?').run(a.id);
+  res.json(releaseSupportKey(db,a.id));
+});
 app.post('/api/account/deletion-code',guard('deletion-code',5,60000),(req,res)=>res.json({code:compliance.deletionCode(req.account.id)}));
 app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(req,res)=>{
   if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});
@@ -277,7 +289,7 @@ app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(
 app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(compliance.accept(req.account.id,req.body?.version)));
 app.use('/api',(req,res,next)=>{
   if(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
-  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&['/message','/encryption/message','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/invite','/contacts/open','/invite'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
+  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/invite','/contacts/open','/invite'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
   if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
   if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
@@ -310,9 +322,18 @@ app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.ac
 app.get('/api/admin/reports/media/:id',guard('report-media',40,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const media=compliance.media(req.params.id);if(!media)return res.sendStatus(404);res.set('Cache-Control','no-store').type(media.mime).send(Buffer.from(media.body));});
 app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action,req.account.id,req.body?.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
 app.post('/api/admin/reports/reinstate',guard('reinstate',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json(compliance.reinstate(req.body?.target,req.account.id,req.body?.notes??''));});
-const supportAccount = () => db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL").get();
+const activeSupportAccounts=()=>db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL AND device_id IS NOT NULL AND (suspended=0 OR suspended_until<=?)").all(Date.now());
+const supportAccount=(user=null)=>{
+  const agents=activeSupportAccounts();
+  if(user){
+    const existing=[...chats.rooms.values()].find(room=>room.supportAgent&&room.users.includes(user)&&agents.some(agent=>agent.id===room.supportAgent));
+    if(existing)return agents.find(agent=>agent.id===existing.supportAgent);
+  }
+  const load=id=>[...chats.rooms.values()].filter(room=>room.supportAgent===id).length;
+  return agents.sort((a,b)=>load(a.id)-load(b.id)||a.id.localeCompare(b.id))[0];
+};
 app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
-  const agent=supportAccount();
+  const agent=supportAccount(req.account.id);
   if(!agent||agent.id===req.account.id)return res.status(404).json({error:'Support unavailable.'});
   res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
 });
@@ -348,7 +369,7 @@ function androidUpdateLink() {
 app.get('/api/version', (req, res) => res.json({
   latest: version,
   notes: 'Account deletion, reporting, terms and Google Play distribution controls.',
-  changes: ['Account deletion in app and on the website','Terms of Service and privacy policy','User and message reports with moderator review','Reusable review access','Google Play distribution support'],
+  changes: ['GLITCH.exe startup with readiness-gated PIN','Native-style settings and animated attachment grid','Balanced transitions and microphone recording gestures','Eight reusable admin key slots with explicit logout','Encrypted view-once messages and default private notifications'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
@@ -378,6 +399,15 @@ app.post('/api/encryption/message', guard('encrypted-send', 80, 60000), (req, re
   if(!sent?.duplicate)notifyRoom(req.account.id,req.body.id);
   res.json(typeof sent==='string'?{id:sent}:sent);
 });
+app.post('/api/encryption/once/send',guard('encrypted-send',80,60000),(req,res)=>{
+  if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
+  const id=chats.sendEncrypted(req.account.id,req.body?.id,req.body?.cipher,req.body?.kind,null,null,true);
+  notifyRoom(req.account.id,req.body.id);res.json({id});
+});
+app.post('/api/encryption/once/open',guard('open',80,60000),(req,res)=>{
+  if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
+  res.json(chats.openOnce(req.account.id,req.body?.id,req.body?.messageId,Boolean(req.account.invisible),true));
+});
 app.post('/api/encryption/reaction',guard('encrypted-reaction',80,60000),(req,res)=>{if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});res.json(chats.reactEncrypted(req.account.id,req.body?.id,req.body?.messageId,req.body?.cipher));});
 app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
@@ -387,7 +417,7 @@ function stateData(a) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, encryptedOnce:true, live: true },
     prekeyCount:prekeys.count(a.id),
     official:official.snapshot(a.id),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
@@ -461,12 +491,12 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   if (!/^[A-Z0-9]{6}$/.test(code)) return res.status(400).json({
     error: 'Enter a 6-character code.'
   });
-  const agent=supportAccount();
   chats.sweep();
   const invite=chats.codes.get(code);
-  if(agent&&invite&&!invite.group&&invite.user!==req.account.id){
-    if(invite.user===agent.id)return res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
-    if(req.account.id===agent.id)return res.json({id:chats.openMobileSupport(invite.user,agent.id,true)});
+  if(invite&&!invite.group&&invite.user!==req.account.id){
+    const agents=activeSupportAccounts(),senderAdmin=agents.some(a=>a.id===req.account.id),targetAdmin=agents.some(a=>a.id===invite.user);
+    if(targetAdmin&&!senderAdmin)return res.json({id:chats.openMobileSupport(req.account.id,invite.user)});
+    if(senderAdmin&&!targetAdmin)return res.json({id:chats.openMobileSupport(invite.user,req.account.id,true)});
   }
   res.json(chats.requestConnection(req.account.id, code, req.body?.nickname));
 });
@@ -642,7 +672,7 @@ app.use(express.static(resolve(root, 'public'), {
   etag: false,
   lastModified: false
 }));
-app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
+app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
 app.use((req, res) => res.status(404).send('Not found'));
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
