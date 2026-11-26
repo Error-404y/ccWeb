@@ -62,6 +62,7 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
                 }
                 call.resolve(["publicKey": (raw as Data).base64EncodedString(), "signature": (signature as Data).base64EncodedString()])
             } catch {
+                print("[qzu] Secure device key failure: \((error as NSError).domain) \((error as NSError).code)")
                 call.reject("Secure device key unavailable. Use a physical iPhone.")
             }
         }
@@ -73,6 +74,7 @@ class QzuViewController: CAPBridgeViewController {
 
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(QzuDevice())
+        print("[qzu] QzuDevice registered: \(bridge != nil)")
         NotificationCenter.default.addObserver(self, selector: #selector(cover), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(uncover), name: UIApplication.didBecomeActiveNotification, object: nil)
     }

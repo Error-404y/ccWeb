@@ -7,13 +7,29 @@ const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : nul
 async function transport(path, options = {}) {
   if (!native) return fetch(path, options);
   if (!apiOrigin || !apiOrigin.startsWith('https://')) throw new Error('Mobile server unavailable.');
+  if (!window.Capacitor.isPluginAvailable('QzuDevice')) throw new Error('Native device plugin unavailable.');
   const headers = { ...options.headers };
   const timestamp = String(Date.now());
   const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
   const message = JSON.stringify(['qzu-device-v1', options.method || 'GET', path, timestamp, nonce, headers['X-QZU-Unlock'] || '', options.body || '']);
-  const result = await devicePlugin.sign({ message });
+  let result;
+  try {
+    if (path === '/api/session') console.info('[qzu] Signing session request');
+    result = await devicePlugin.sign({ message });
+  } catch (error) {
+    console.error('[qzu] Device signing failed:', String(error?.message || error));
+    throw new Error('Device signing failed.');
+  }
   Object.assign(headers, { 'X-QZU-Device': result.publicKey, 'X-QZU-Signature': result.signature, 'X-QZU-Time': timestamp, 'X-QZU-Nonce': nonce });
-  return fetch(apiOrigin + path, { ...options, headers, credentials: 'omit' });
+  try {
+    if (path === '/api/session') console.info('[qzu] Sending signed session request');
+    const response = await fetch(apiOrigin + path, { ...options, headers, credentials: 'omit' });
+    if (path === '/api/session') console.info('[qzu] Session HTTP status:', response.status);
+    return response;
+  } catch (error) {
+    console.error('[qzu] HTTPS request failed:', String(error?.message || error));
+    throw new Error('HTTPS connection unavailable.');
+  }
 }
 
 const el = (tag, cls, text) => {
@@ -235,10 +251,14 @@ async function api(path, data, quiet = false) {
       body: write ? JSON.stringify(data): undefined,
       cache: 'no-store',
       credentials: 'same-origin',
-      signal: AbortSignal.timeout(8000)
+      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
     });
   }
-  catch {
+  catch (error) {
+    if (native) {
+      console.error('[qzu] API startup/request error:', String(error?.message || error));
+      throw new Error(['Mobile server unavailable.', 'Native device plugin unavailable.', 'Device signing failed.', 'HTTPS connection unavailable.'].includes(error?.message) ? error.message : 'Mobile request failed. See Xcode console.');
+    }
     throw new Error('Connection unavailable.');
   }
   const result = await res.json().catch(() => ({}));
@@ -1418,6 +1438,7 @@ if (page === 'connect' && location.hash) {
   history.replaceState(null, '', location.pathname);
 }
 if (native) {
+  console.info('[qzu] Mobile startup; device plugin available:', window.Capacitor.isPluginAvailable('QzuDevice'), '; server:', apiOrigin);
   window.Capacitor.registerPlugin('App').addListener('appStateChange', ({ isActive }) => {
     if (!isActive) { if (!isPublicCheckout()) lock(); }
     else if (isPublicCheckout()) resumeCheckout?.();
