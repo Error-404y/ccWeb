@@ -1450,7 +1450,7 @@ async function showEncryption(room) {
     return;
   }
   const local = roomKeys.get(room.id);
-  if(!local?.context||!room.encryption.peer){info('Connecting securely','Encryption starts automatically. If this contact has not yet registered offline keys, they need to open the updated app once.');return;}
+  if(!local?.context||!room.encryption.peer){info('Connecting securely','No code comparison is needed. A contact who has not registered encryption keys must unlock the updated app before the first encrypted message can be sent.');return;}
   const code = local.context.code;
   const content = [
     el('p', '', 'Compare the entire safety code in person or through a separate trusted channel. Do not confirm unless every character matches.'),
@@ -1468,7 +1468,7 @@ async function showEncryption(room) {
   }));
   else content.push(el('p', '', room.encryption.peerConfirmed ? 'Both devices have confirmed.' : 'Waiting for your contact to confirm.'));
   content.push(button('Close', closeModal, 'secondary-button'));
-  show('Verify encrypted chat', content);
+  show('Encryption information', content);
 }
 $('encryptionStatus').addEventListener('click', () => {
   const room = state.rooms.find(item => item.id === selected);

@@ -53,3 +53,5 @@ test('Play build disables checkout and direct updater and exposes compliance act
 test('bottom navigation and profile controls exist',()=>{assert.match(html,/id="bottomNav"/);assert.match(html,/id="navUnread"/);assert.match(html,/id="profileAvatar"/);assert.ok(app.includes('attachMessageGesture'));assert.ok(!app.includes("button('Report',()=>showReport(room,{messageId:message.id}),'reply-action'"));});
 
 test('media shortcuts and text-free launch screen are wired',()=>{assert.match(html,/id="cameraShortcut"/);assert.match(html,/id="voiceShortcut"/);assert.ok(app.includes("$('cameraShortcut').addEventListener"));assert.ok(app.includes("$('voiceShortcut').addEventListener"));assert.doesNotMatch(html,/SYSTEM BOOT|Approved design direction|COMMUNICATION \/ REDEFINED/);});
+
+test('startup defers authentication and background lock is optional',()=>{assert.match(html,/id="backgroundPin"/);assert.ok(app.includes('if (bootPending || authBusy'));assert.ok(app.includes("event.animationName==='bootExit'"));assert.ok(app.includes("api('login/background-lock'"));assert.ok(app.includes("room.encryption.offline||room.encryption.peerConfirmed"));});
