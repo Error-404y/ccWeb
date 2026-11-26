@@ -20,6 +20,7 @@ import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
 import { handleAdminCommand } from './lib/admin.mjs';
 import { startAdminSocket } from './lib/admin-socket.mjs';
+import {complianceStore,TERMS_VERSION} from './lib/compliance.mjs';
 
 process.umask(0o077);
 const root = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,7 @@ const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
 const official=officialStore(db),feedback=feedbackStore(db),liveWaiters=new Map();
 const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET,firebase:loadFirebaseDelivery(process.env.QZU_FIREBASE_CREDENTIALS)});
+const compliance=complianceStore(db);compliance.sweep();setInterval(()=>compliance.sweep(),3600000).unref();
 let liveTotal=0;
 const contacts = contactStore(db);
 chats.contacts = contacts;
@@ -174,6 +176,7 @@ app.post('/api/access/renew', paymentRate('renewal', 10), (req, res) => {
 
 app.post('/api/session', (req, res) => {
   if (!req.account) {
+    if(compliance.suspended(req.deviceId))return res.status(403).json({error:'Device access suspended.'});
     if (!rate('new:' + req.ip, 20, 60 * 60_000)) return res.status(429).json({
       error: 'Try again later.'
     });
@@ -254,23 +257,38 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
   res.json({ ok: true });
 });
 
-app.use('/api', (req, res, next) => {
-  if (!unlocks.check(req.account.id, req.get('x-qzu-unlock'))) return res.status(423).json({
-    error: 'Locked.'
-  });
-  if (!accessStatus(req.account).active) return res.status(402).json({ error: 'qzu-Access renewal required.' });
+function deleteAccount(id){
+  chats.erase(id);compliance.purge(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
+}
+app.use('/api',(req,res,next)=>{
+  if(!unlocks.check(req.account.id,req.get('x-qzu-unlock')))return res.status(423).json({error:'Locked.'});
   next();
 });
-app.post('/api/logout', guard('logout', 3, 60000), (req,res) => {
-  if (req.body?.confirmed !== true) return res.status(400).json({error:'Confirmation required.'});
-  retireAccount(db,contacts,req.account.id);
-  chats.erase(req.account.id);
-  official.erase(req.account.id);push.remove(req.account.id);
-  unlocks.revokeAll(req.account.id);
-  chats.hidePresence(req.account.id);
+app.post('/api/account/deletion-code',guard('deletion-code',5,60000),(req,res)=>res.json({code:compliance.deletionCode(req.account.id)}));
+app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(req,res)=>{
+  if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});
+  deleteAccount(req.account.id);
   res.clearCookie(cookieName,{httpOnly:true,secure:production,sameSite:'strict',path:'/'});
   res.json({ok:true});
 });
+app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(compliance.accept(req.account.id,req.body?.version)));
+app.use('/api',(req,res,next)=>{
+  if(req.account.suspended)return res.status(403).json({error:'Account suspended.'});
+  if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
+  if(req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
+  next();
+});
+app.post('/api/report',guard('report',5,60000),(req,res)=>{
+  const room=chats.requireRoom(req.account.id,req.body?.id);
+  const messageId=req.body?.messageId;
+  let target;
+  if(messageId){const message=room.messages.find(m=>m.id===messageId&&!m.deleted);if(!message||message.sender===req.account.id)return res.status(400).json({error:'Message unavailable.'});target=message.sender;}
+  else target=room.group?room.users.find(m=>m!==req.account.id&&room.labels.get(m)===req.body?.member):room.users.find(m=>m!==req.account.id);
+  if(!target)return res.status(400).json({error:'Choose a contact.'});
+  res.json(compliance.report(req.account.id,target,room.id,req.body?.reason,req.body?.evidence??''));
+});
+app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json({items:compliance.list()});});
+app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action);if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
 const supportAccount = () => db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL").get();
 app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
   const agent=supportAccount();
@@ -345,6 +363,7 @@ app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 600
 function stateData(a) {
   return {
     now: Date.now(),
+    termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
     capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, live: true },
     official:official.snapshot(a.id),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id)},
@@ -570,12 +589,18 @@ app.use('/api', (req, res) => res.status(404).json({
 app.get('/healthz', (req, res) => res.json({ ok: true, version }));
 const escapePrivacy = value => String(value).replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
 app.get('/privacy.css', (req,res)=>res.sendFile(resolve(root,'public/privacy.css')));
-app.get(['/privacy','/privacy.html'], (req,res)=>{
+app.get(['/privacy','/privacy.html','/terms','/delete-account'], (req,res)=>{
   const name=process.env.QZU_PRIVACY_OPERATOR?.trim()||'qzu. developer (operator details pending)';
   const email=process.env.QZU_PRIVACY_EMAIL?.trim()||'';
   const contact=/^[A-Za-z0-9._+%-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)?'<a href="mailto:'+escapePrivacy(email)+'">'+escapePrivacy(email)+'</a>':'Settings &gt; Help &gt; Write Support (public email pending)';
-  const policy=readFileSync(resolve(root,'public/privacy.html'),'utf8').replace('__QZU_OPERATOR__',()=>escapePrivacy(name)).replace('__QZU_CONTACT__',()=>contact);
+  const policy=readFileSync(resolve(root,'public',req.path==='/terms'?'terms.html':req.path==='/delete-account'?'delete-account.html':'privacy.html'),'utf8').replace('__QZU_OPERATOR__',()=>escapePrivacy(name)).replace('__QZU_CONTACT__',()=>contact);
   res.type('html').send(policy);
+});
+app.post('/delete-account',express.urlencoded({extended:false,limit:'2kb'}),(req,res)=>{
+  if(!rate('delete-web:'+req.ip,5,60000))return res.status(429).type('text').send('Try again later.');
+  const id=compliance.byDeletionCode(req.body?.code);
+  if(!id||req.body?.confirm!=='yes')return res.status(400).type('text').send('Invalid deletion code or missing confirmation. Return to the deletion page and try again.');
+  deleteAccount(id);res.type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><title>Account deleted | qzu.</title><h1>Account deleted</h1><p>Your active account has been deleted. Limited records may remain as described in the privacy policy.</p><a href="/privacy">Privacy Policy</a></html>');
 });
 app.get('/downloads/' + apkName, (req, res) => {
   if (!existsSync(apkPath)) return res.sendStatus(404);
