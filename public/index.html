@@ -73,7 +73,7 @@
             <button id="qzuInfoOpen" type="button" class="contact official-contact" aria-label="qzu. official information" aria-pressed="false">
               <svg class="avatar" aria-hidden="true"><use href="#adminAvatar"/></svg>
               <span class="contact-body"><span class="contact-name">qzu. <svg class="admin-badge" role="img" aria-label="Verified qzu"><use href="#adminBadge"/></svg></span><span class="contact-preview">Official information</span></span>
-              <svg class="official-chevron" aria-hidden="true"><use href="#chevron"/></svg>
+              <span id="officialUnread" class="official-unread" role="status" aria-label="New official information" hidden></span><svg class="official-chevron" aria-hidden="true"><use href="#chevron"/></svg>
             </button>
           </div>
           <button id="supportOpen" class="contact support-entry" type="button" hidden><svg class="avatar" aria-hidden="true"><use href="#supportAvatar"/></svg><span class="contact-body"><span class="contact-name">qzu-Support <svg class="admin-badge" role="img" aria-label="Verified support"><use href="#adminBadge"/></svg></span><span class="contact-preview">Start a support chat</span></span><svg class="official-chevron" aria-hidden="true"><use href="#chevron"/></svg></button>
@@ -107,8 +107,10 @@
             <div class="official-channel-content">
               <div class="official-channel-intro"><svg class="wordmark" aria-hidden="true"><use href="#logo"/></svg><h1>Official information</h1><p>Important notices from qzu.</p></div>
               <article class="official-post"><div class="official-post-title"><strong>qzu.</strong><svg class="admin-badge" role="img" aria-label="Verified qzu"><use href="#adminBadge"/></svg></div><h2>Stay safe</h2><p>We never ask for your PIN, activation key or personal information in chats.</p><p>Keep your credentials private.</p></article>
+              <div id="officialPosts"></div>
             </div>
-            <footer class="admin-composer"><div class="read-only-bar"><svg aria-hidden="true"><use href="#lock"/></svg><span>Read-only channel</span></div></footer>
+            <form id="officialComposer" class="official-composer" hidden><label for="officialMessage">Publish to everyone</label><div><textarea id="officialMessage" maxlength="2000" rows="2" placeholder="Write an announcement…" aria-label="Announcement"></textarea><button id="officialSend" class="primary-button" type="submit" disabled>Publish</button></div></form>
+            <footer id="officialReadOnly" class="admin-composer"><div class="read-only-bar"><svg aria-hidden="true"><use href="#lock"/></svg><span>Read-only channel</span></div></footer>
           </section>
           <button id="extensionNotice" class="request-link" type="button" hidden></button>
           <div id="messages" class="messages" aria-label="Messages" hidden></div>
@@ -139,7 +141,7 @@
             <div id="qrBox" class="qr-box"><img id="qrImage" alt="Your invite QR code" hidden><svg id="qrPlaceholder"><use href="#qr"/></svg></div>
             <div class="code-line"><span id="inviteCode">– – – – – –</span><button id="copyCode" class="icon-button" aria-label="Copy code" disabled><svg><use href="#copy"/></svg></button></div>
             <div id="inviteTimer" class="invite-timer">No active code</div>
-            <button id="newCode" class="primary-button">New code</button>
+            <div class="invite-actions"><select id="inviteLifetime" aria-label="New code lifetime"><option value="5">5 min</option><option value="10" selected>10 min</option><option value="15">15 min</option></select><button id="newCode" class="primary-button">New code</button></div>
             <div class="separator"></div>
             <form id="connectForm" class="connect-form">
               <input id="enterCode" aria-label="Enter code" placeholder="Enter code" maxlength="6" autocapitalize="characters" autocomplete="off" spellcheck="false">

@@ -4,11 +4,12 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.9.6';
+const installedVersion = window.QZU_APP_VERSION || '0.10.0';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
 const updateReminders = new Map();
+let officialReadJob=null,officialRenderKey='',liveRevision='';
 
 async function transport(path, options = {}) {
   if (!native) return fetch(path, options);
@@ -641,6 +642,7 @@ function lock(reopen = true) {
   $('extensionNotice').hidden = true;
   $('supportOpen').hidden = true;
   $('qzuInfoChannel').hidden = true;
+  $('officialUnread').hidden=true;$('officialPosts').replaceChildren();$('officialMessage').value='';$('officialSend').disabled=true;$('officialComposer').hidden=true;officialRenderKey='';liveRevision='';
   $('qzuInfoOpen').classList.remove('active');
   $('qzuInfoOpen').setAttribute('aria-pressed', 'false');
   $('groupInvite').hidden = true;
@@ -818,6 +820,7 @@ function renderChat() {
   $('qzuInfoOpen').classList.toggle('active', infoOpen);
   $('qzuInfoOpen').setAttribute('aria-pressed', String(infoOpen));
   $('qzuInfoChannel').hidden = !infoOpen;
+  renderOfficial(infoOpen);
   $('chatPage').classList.toggle('thread-open', Boolean((current || infoOpen) && mobileOpen));
   const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
   $('chatCount').textContent = total ? String(total): '';
@@ -1451,15 +1454,17 @@ $('encryptionStatus').addEventListener('click', () => {
   else if (room) info('Connection security', 'This conversation uses transport encryption only. It is not end-to-end encrypted.');
 });
 
-async function refresh() {
+async function refresh(live=false) {
   const ticket = ++sequence;
-  const data = await api('state');
+  const data = await api(live&&liveRevision?'state/live?since='+liveRevision:'state');
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   online = true;
   offset = data.now - Date.now();
+  if(data.unchanged){liveRevision=data.revision;purgeExpired();maybePromptUpdate();return;}
   await prepareEncryptedRooms(data);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   state = data;
+  liveRevision=data.revision||'';
   if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && (!mediaMessage || room.messages.some(message => message.id === mediaMessage && !message.deleted)))) closeModal();
   if (replyTarget && !state.rooms.some(room => room.id === replyTarget.roomId && room.messages.some(message => message.id === replyTarget.id && !message.deleted))) clearReply();
   if (page === 'chat' && !selected) {
@@ -1582,6 +1587,45 @@ async function confirmSupport() {
 }
 $('supportOpen').addEventListener('click',confirmSupport);
 $('writeSupport').addEventListener('click',confirmSupport);
+function renderOfficial(open){
+  const feed=state.official||{posts:[],latest:0,seen:0,unread:false};
+  $('officialUnread').hidden=!feed.unread;
+  $('officialComposer').hidden=!state.supportAgent;
+  $('officialReadOnly').hidden=Boolean(state.supportAgent);
+  if(!open)return;
+  const key=JSON.stringify(feed.posts);
+  if(key!==officialRenderKey){
+    officialRenderKey=key;
+    const posts=$('officialPosts');posts.replaceChildren();
+    for(const post of feed.posts){
+      const article=el('article','official-post');
+      const head=el('div','official-post-title');
+      head.append(el('strong','','qzu.'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));
+      article.append(head,el('p','official-text',post.text));posts.append(article);
+    }
+  }
+  if(feed.unread&&canReadCurrent()&&!officialReadJob){
+    const epoch=authEpoch,latest=feed.latest;
+    officialReadJob=api('official/read',{id:latest},true).then(()=>{
+      if(epoch!==authEpoch||!state.official)return;
+      state.official.seen=Math.max(state.official.seen,latest);
+      state.official.unread=state.official.latest>state.official.seen;
+      $('officialUnread').hidden=!state.official.unread;
+    }).catch(()=>{}).finally(()=>{officialReadJob=null;});
+  }
+}
+$('officialMessage').addEventListener('input',()=>{$('officialSend').disabled=!$('officialMessage').value.trim();});
+$('officialComposer').addEventListener('submit',event=>{
+  event.preventDefault();
+  const text=$('officialMessage').value.trim();
+  if(!state.supportAgent||!text||selected!==officialChannel)return;
+  const publish=button('Publish to everyone',async()=>{
+    publish.disabled=true;
+    try{await api('official/publish',{text});$('officialMessage').value='';$('officialSend').disabled=true;closeModal();await refresh();}
+    catch(error){publish.disabled=false;modalError(error);}
+  });
+  show('Publish announcement?',[el('p','','This message will be visible to every qzu. account.'),publish,button('Cancel',closeModal,'secondary-button')]);
+});
 $('qzuInfoOpen').addEventListener('click', () => {
   if (unlockToken && !accessDue) selectRoom(officialChannel);
 });
@@ -1780,7 +1824,7 @@ $('groupInvite').addEventListener('click', () => {
 $('newCode').addEventListener('click', async() => {
   $('newCode').disabled = true;
   try {
-    await api('invite', {});
+    await api('invite', {minutes:Number($('inviteLifetime').value)});
     await refresh();
   } catch (e) {
     showError(e);
@@ -1797,6 +1841,10 @@ $('copyCode').addEventListener('click', async() => {
   } catch {
     info('Your code', inv.code);
   }
+});
+$('enterCode').addEventListener('paste',event=>{
+  const match=(event.clipboardData?.getData('text')||'').trim().match(/#([A-Z0-9]{6})$/i);
+  if(match){event.preventDefault();$('enterCode').value=match[1].toUpperCase();}
 });
 $('enterCode').addEventListener('input', () => {
   $('enterCode').value = $('enterCode').value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
@@ -1934,7 +1982,7 @@ $('appInfo').addEventListener('click', () => {
     ['Notifications', 'Stay in qzu. to receive messages. No push or sound notifications.'],
     ['Temporary chats', 'Conversations and messages are automatically removed from the server 30 minutes after the chat begins. No message backups are created.'],
     ['Anonymous access', 'No phone number, email address or public username is required.'],
-    ['Connection codes', 'Invite codes expire after 10 minutes. Generate a new code when needed.'],
+    ['Connection codes', 'New codes can last 5, 10 or 15 minutes. Generating a new code invalidates the previous one.'],
     ['Automatic lock', 'Leaving the tab locks qzu. Unlock with your login PIN.'],
     ['emg.exe', 'Your single-use emergency PIN removes your active chats for all participants. A replacement requires developer approval.'],
     ['Groups', 'Up to 12 anonymous members. Groups expire 30 minutes after creation. New members can see existing group messages.'],
@@ -2070,12 +2118,12 @@ setInterval(purgeExpired, 250);
 async function loop() {
   if (unlockToken && !accessDue && !document.hidden) {
     try {
-      await refresh();
+      await refresh(Boolean(state.capabilities?.live));
     } catch {
       if (unlockToken && !accessDue) lock();
     }
   }
-  setTimeout(loop, 1500);
+  setTimeout(loop, unlockToken&&state.capabilities?.live?500:1500);
 }
 updatePages();
 getSession();
@@ -2586,12 +2634,14 @@ async function installUpdate(release) {
 
 function showUpdatePrompt(release) {
   const logo = svg('logo', 'wordmark update-wordmark');
-  const description = el('p', 'update-description', 'A new version is available.');
+  const description = el('p', 'update-description', 'Version '+release.latest+' is available. Installed: '+installedVersion+'.');
+  const changes=el('ul','update-changes');for(const change of release.changes||[release.notes])if(change)changes.append(el('li','',change));
   const actions = el('div', 'update-actions');
   actions.append(button('Remind me later', () => { deferUpdate(release.latest); closeModal(); }, 'secondary-button update-later'));
   if (updateDownload(release)) actions.append(button('Install now', () => installUpdate(release), 'primary-button update-install'));
   else actions.classList.add('update-single');
-  show('Update available', [logo, description, actions]);
+  const details=[logo,description,changes];if(!updateDownload(release))details.push(el('p','access-mini','No install link is available for this device yet.'));
+  show('Update available', [...details,actions]);
   modal.classList.add('update-sheet');
   $('modalClose').hidden = true;
 }
@@ -2615,7 +2665,8 @@ $('updateCenter').addEventListener('click', async () => {
   try {
     const release = await api('version');
     if (newerVersion(release.latest)) { pendingUpdate = release; showUpdatePrompt(release); return; }
-    show('Update center', [el('strong', '', 'You are up to date'), el('p', '', 'Installed: ' + installedVersion + ' · Server release: ' + release.latest), el('p', '', release.notes), button('Close', closeModal)]);
+    const changes=el('ul','update-changes');for(const change of release.changes||[release.notes])if(change)changes.append(el('li','',change));
+    show('Update center', [el('strong', '', 'You are up to date'), el('p', '', 'Installed: ' + installedVersion + ' · Server release: ' + release.latest),changes, button('Close', closeModal)]);
   } catch (error) { showError(error); }
 });
 const backgroundChoices = ['plain', 'grid', 'dots'];

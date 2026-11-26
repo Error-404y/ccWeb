@@ -34,3 +34,10 @@ test('Help provides concise notes and an actionable support inbox', () => {
   assert.ok(app.includes("Support is currently unavailable."));
   assert.ok(!app.includes("if (!unlockToken || !state.supportAvailable) return;"));
 });
+
+test('official channel exposes an admin composer and unread indicator',()=>{
+  assert.match(html,/id="officialUnread"[^>]*hidden/);
+  assert.match(html,/id="officialComposer"[^>]*hidden/);
+  assert.ok(app.includes("officialComposer').hidden=!state.supportAgent"));
+  assert.ok(app.includes("api('official/publish',{text})"));
+});

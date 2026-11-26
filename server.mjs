@@ -6,6 +6,8 @@ import QRCode from 'qrcode';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { Chats } from './lib/chats.mjs';
+import { officialStore } from './lib/official.mjs';
+import { versionedState } from './lib/live.mjs';
 import { contactStore, retireAccount } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
@@ -29,6 +31,8 @@ const devices = deviceVerifier();
 const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
+const official=officialStore(db),liveWaiters=new Map();
+let liveTotal=0;
 const contacts = contactStore(db);
 chats.contacts = contacts;
 const unlocks = new Unlocks(), sendingResets = new Map();
@@ -255,6 +259,7 @@ app.post('/api/logout', guard('logout', 3, 60000), (req,res) => {
   if (req.body?.confirmed !== true) return res.status(400).json({error:'Confirmation required.'});
   retireAccount(db,contacts,req.account.id);
   chats.erase(req.account.id);
+  official.erase(req.account.id);
   unlocks.revokeAll(req.account.id);
   chats.hidePresence(req.account.id);
   res.clearCookie(cookieName,{httpOnly:true,secure:production,sameSite:'strict',path:'/'});
@@ -297,7 +302,8 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Direct support chat and admin request inbox with accept/reject.',
+  notes: 'Official announcements, live chat updates, safer verification and improved privacy.',
+  changes: ['Official announcements and unread dot','Authenticated live updates','Improved encryption verification and deletion','Flexible connection-code lifetime','Refined interface and Update Center'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
@@ -327,12 +333,11 @@ app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 600
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
   res.json(chats.getEncryptedMedia(req.account.id, req.params.room, req.params.message));
 });
-app.get('/api/state', (req, res) => {
-  const a = req.account;
-  chats.markPresent(a.id, Boolean(a.invisible));
-  res.json({
+function stateData(a) {
+  return {
     now: Date.now(),
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2 },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, live: true },
+    official:official.snapshot(a.id),
     access: accessStatus(a),
     supportAgent: a.access_plan==='admin',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
@@ -345,9 +350,37 @@ app.get('/api/state', (req, res) => {
     invisible: Boolean(a.invisible),
     resetPending: Boolean(a.request),
     resetDelivered: Boolean(a.request && a.request_sent)
-  });
+  };
+}
+app.get('/api/state',(req,res)=>{
+  chats.markPresent(req.account.id,Boolean(req.account.invisible));
+  res.json(versionedState(stateData(req.account)));
 });
-app.post('/api/invite', guard('invite', 15, 60_000), (req, res) => res.json(chats.newCode(req.account.id)));
+app.get('/api/state/live',guard('live',180,60000),(req,res,next)=>{
+  const since=req.query.since,id=req.account.id,token=req.get('x-qzu-unlock');
+  if(typeof since!=='string'||!/^[a-f0-9]{64}$/.test(since))return res.status(400).json({error:'Invalid state revision.'});
+  chats.markPresent(id,Boolean(req.account.invisible));
+  const immediate=versionedState(stateData(req.account),since);
+  if(!immediate.unchanged||liveTotal>=300||(liveWaiters.get(id)||0)>=2)return res.json(immediate);
+  liveTotal++;liveWaiters.set(id,(liveWaiters.get(id)||0)+1);
+  const deadline=Date.now()+4500;
+  let timer,closed=false;
+  const cleanup=()=>{if(closed)return;closed=true;clearInterval(timer);liveTotal--;const count=liveWaiters.get(id)-1;if(count)liveWaiters.set(id,count);else liveWaiters.delete(id);};
+  res.once('close',cleanup);
+  timer=setInterval(()=>{
+    if(closed)return;
+    try{
+      if(!unlocks.check(id,token)){cleanup();return res.status(423).json({error:'Locked.'});}
+      const account=db.prepare('SELECT * FROM accounts WHERE id=?').get(id);
+      if(!account||account.pin_state==='retired'||!accessStatus(account).active){cleanup();return res.status(402).json({error:'Access unavailable.'});}
+      const current=versionedState(stateData(account),since);
+      if(!current.unchanged||Date.now()>=deadline){cleanup();res.json(current);}
+    }catch(error){cleanup();next(error);}
+  },500);
+});
+app.post('/api/official/publish',guard('official-publish',10,60000),(req,res)=>res.json(official.publish(req.body?.text,req.account.access_plan==='admin')));
+app.post('/api/official/read',guard('official-read',60,60000),(req,res)=>res.json(official.mark(req.account.id,req.body?.id)));
+app.post('/api/invite',guard('invite',15,60000),(req,res)=>res.json(chats.newCode(req.account.id,req.body?.minutes??10)));
 app.get('/api/qr', async(req, res) => {
   const inv = chats.ensureInvite(req.account.id);
   const origin = publicOrigin || req.protocol + '://' + req.get('host');
