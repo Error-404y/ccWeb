@@ -2346,3 +2346,5 @@ dialog.update-sheet[open] .modal-head h2 {
 @keyframes bootScan{0%{opacity:0;top:0}20%{opacity:.8}100%{opacity:0;top:100%}}
 @keyframes bootProgress{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 @media(prefers-reduced-motion:reduce){#bootSplash{display:none!important}.swipe-reply{transition:none}}
+
+.trusted-action{color:#159a64!important;font-weight:650}

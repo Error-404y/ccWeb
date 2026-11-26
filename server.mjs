@@ -349,7 +349,7 @@ app.post('/api/encryption/key', guard('encryption-key', 20, 60000), (req, res) =
 });
 app.post('/api/encryption/confirm', guard('encryption-confirm', 20, 60000), (req, res) => {
   if(typeof req.body?.code!=='string')return res.status(400).json({error:'Update qzu. to verify the safety code.'});
-  res.json(chats.confirmRoomKey(req.account.id, req.body?.id,req.body.code));
+  res.json(chats.confirmRoomKey(req.account.id, req.body?.id,req.body.code,req.body?.automatic===true));
 });
 app.post('/api/encryption/message', guard('encrypted-send', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });

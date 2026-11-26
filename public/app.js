@@ -557,7 +557,7 @@ function showLockedEmergency() {
       input.value = '';
       pendingInvite = '';
       roomKeys.clear();
-      roomKeyJobs.clear();
+      roomKeyJobs.clear();if(native)await roomVault('clear','').catch(()=>{});
       lock(false);
 
       show('emg.exe', [
@@ -1140,7 +1140,6 @@ async function acknowledgeMessages() {
   const epoch = authEpoch;
   const entries = [];
   for (const room of state.rooms) {
-    if (room.readOnly) continue;
     const delivered = [];
     const read = [],seen=[];
     for (const message of room.messages) {
@@ -1341,7 +1340,7 @@ function dropExpiredKeys(rooms = null) {
 setInterval(dropExpiredKeys, 1000);
 async function prepareEncryptedRooms(data) {
   const epoch=authEpoch;dropExpiredKeys(data.rooms);
-  if(native)await roomVault('prune','',{rooms:data.rooms.filter(directRoom).map(r=>r.id)}).catch(()=>{});
+  if(native&&epoch===authEpoch&&unlockToken)await roomVault('prune','',{rooms:data.rooms.filter(directRoom).map(r=>r.id)}).catch(()=>{});
   for (const room of data.rooms) {
     if (!directRoom(room) || (!native && !room.encryption)) continue;
     room.encryptionStatus = 'waiting';
@@ -1353,6 +1352,7 @@ async function prepareEncryptedRooms(data) {
         if(local&&!encryption.own){await api('encryption/key',{id:room.id,record:local.record},true);encryption.own=local.record;}
       }catch(error){room.encryptionStatus='error';}
     }
+    if(epoch!==authEpoch||!unlockToken)return;
     if(local)local.until=until;
     if (!data.capabilities?.encryptedDirect || data.capabilities.encryptedProtocol !== 2 || !encryption || !globalThis.crypto?.subtle) room.encryptionStatus = 'unavailable';
     else if (encryption.own && !local) room.encryptionStatus = 'lost';
@@ -1435,12 +1435,12 @@ async function refresh(live=false) {
   online = true;
   offset = data.now - Date.now();
   if(!data.unchanged&&data.termsAccepted!==true){termsPending=true;updatePages();showTermsGate(data.termsVersion||1);return;}
-  if(data.unchanged){liveRevision=data.revision;purgeExpired();maybePromptUpdate();return;}
+  if(data.unchanged){liveRevision=state.rooms.some(r=>directRoom(r)&&r.encryption&&['waiting','error'].includes(r.encryptionStatus))?'':data.revision;purgeExpired();maybePromptUpdate();void acknowledgeMessages();return;}
   await prepareEncryptedRooms(data);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   scrubRemovedRooms(state.rooms,data.rooms);
   state = data;
-  liveRevision=data.revision||'';
+  liveRevision=data.rooms.some(r=>directRoom(r)&&r.encryption&&['waiting','error'].includes(r.encryptionStatus))?'':data.revision||'';
   if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && (!mediaMessage || room.messages.some(message => message.id === mediaMessage && !message.deleted)))) closeModal();
   if (replyTarget && !state.rooms.some(room => room.id === replyTarget.roomId && room.messages.some(message => message.id === replyTarget.id && !message.deleted))) clearReply();
   if (page === 'chat' && !selected) {
@@ -1791,7 +1791,7 @@ $('deleteChat').addEventListener('click', () => {
     try {
       const result=await api('chat/delete', {id});
       closeModal();
-      if (!result.requested) clearVolatile();
+      if (!result.requested){const remaining=state.rooms.filter(r=>r.id!==id);scrubRemovedRooms(state.rooms,remaining);state.rooms=remaining;selectRoom(null,false);}
       await refresh();
       if(result.requested)info('Deletion requested','Support can now delete this conversation for both sides.');
     } catch (e) {
@@ -2304,7 +2304,7 @@ $('chatOptions').addEventListener('click', () => {
   if(room.support){show('Chat options',[button('Report support conversation',()=>showReport(room),'secondary-button'),button('Close',closeModal,'secondary-button')]);return;}
   if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
   if (!room.group) {
-    if(room.contact)controls.push(button('Manage contact',()=>showContactManagement(room.contact),'secondary-button'));
+    if(room.contact){controls.push(button(room.contact.personallyTrusted?'Remove trusted contact':'Add trusted contact',async()=>{try{await api('contacts/update',{id:room.contact.id,trusted:!room.contact.personallyTrusted});closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button trusted-action'));controls.push(button('Manage contact',()=>showContactManagement(room.contact),'secondary-button'));}
     if (encryptionRequired(room) && directRoom(room)) controls.push(button('Verify encryption', () => showEncryption(room), 'secondary-button'));
     if (!room.extended) controls.push(button('Extend chat', () => showExtension(room), 'secondary-button'));
   }
