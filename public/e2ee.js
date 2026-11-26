@@ -43,7 +43,7 @@
   async function verifyRecord(room, record) {
     const subtle = globalThis.crypto.subtle;
     const identity = await subtle.importKey('raw', un64(record.identity), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
-    if (!await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, identity, derToRaw(record.signature), tuple('qzu-room-key-v1', room, record.key))) throw Error('Invalid signed encryption key.');
+    if (!await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, identity, derToRaw(record.signature), tuple('qzu-room-key-v1', record.prekey||room, record.key))) throw Error('Invalid signed encryption key.');
     return subtle.importKey('raw', un64(record.key), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
   }
   async function establish(room, local, own, peer) {

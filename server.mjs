@@ -8,6 +8,7 @@ import { resolve, dirname } from 'node:path';
 import { Chats } from './lib/chats.mjs';
 import { officialStore } from './lib/official.mjs';
 import { feedbackStore } from './lib/feedback.mjs';
+import { prekeyStore } from './lib/prekeys.mjs';
 import { privatePush } from './lib/push.mjs';
 import { loadFirebaseDelivery } from './lib/firebase-push.mjs';
 import { versionedState } from './lib/live.mjs';
@@ -37,7 +38,7 @@ const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
 const official=officialStore(db),feedback=feedbackStore(db),liveWaiters=new Map();
 const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET,firebase:loadFirebaseDelivery(process.env.QZU_FIREBASE_CREDENTIALS),unread:account=>chats.snapshot(account).reduce((n,room)=>n+room.messages.filter(m=>m.unread).length,0)});
-const compliance=complianceStore(db);compliance.sweep();setInterval(()=>compliance.sweep(),3600000).unref();
+const compliance=complianceStore(db);const prekeys=prekeyStore(db);chats.prekeys=prekeys;prekeys.sweep();setInterval(()=>prekeys.sweep(),3600000).unref();compliance.sweep();setInterval(()=>compliance.sweep(),3600000).unref();
 let liveTotal=0;
 const contacts = contactStore(db);
 chats.contacts = contacts;
@@ -251,7 +252,7 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
     });
   }
 
-  chats.erase(req.account.id);
+  chats.erase(req.account.id);prekeys.remove(req.account.id);
   push.remove(req.account.id);
   recordActivity(db, req.account.id, 'Emergency PIN used');
   unlocks.revokeAll(req.account.id);
@@ -259,7 +260,7 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
 });
 
 function deleteAccount(id){
-  chats.erase(id);compliance.purge(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
+  chats.erase(id);prekeys.remove(id);compliance.purge(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
 }
 app.use('/api',(req,res,next)=>{
   if(!unlocks.check(req.account.id,req.get('x-qzu-unlock')))return res.status(423).json({error:'Locked.'});
@@ -363,6 +364,7 @@ app.post('/api/chat/fingerprint', guard('fingerprint', 15, 60000), (req, res) =>
   if (ids.some(id => !id || !/^[a-f0-9]{64}$/.test(id))) return res.status(400).json({ error: 'Both participants need registered mobile devices.' });
   res.json({ code: createHash('sha256').update('qzu-device-pair-v1:' + ids.sort().join(':')).digest('hex').toUpperCase() });
 });
+app.post('/api/encryption/prekeys',guard('prekeys',6,60000),(req,res)=>res.json(prekeys.register(req.account.id,req.deviceId,req.body?.items)));
 app.post('/api/encryption/key', guard('encryption-key', 20, 60000), (req, res) => {
   res.json(chats.publishRoomKey(req.account.id, req.body?.id, req.deviceId, req.body?.record));
 });
@@ -385,7 +387,8 @@ function stateData(a) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, live: true },
+    prekeyCount:prekeys.count(a.id),
     official:official.snapshot(a.id),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
     access: accessStatus(a),
