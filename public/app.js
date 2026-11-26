@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.8.3';
+const installedVersion = window.QZU_APP_VERSION || '0.9.0';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -113,7 +113,7 @@ const acknowledgedDelivery = new Set();
 const acknowledgedRead = new Set();
 
 function routeName(path) {
-  return path === '/settings' ? 'settings': path === '/connect' ? 'connect': 'chat';
+  return path === '/settings' || path.startsWith('/settings/') ? 'settings': path === '/connect' ? 'connect': 'chat';
 }
 
 function updatePages() {
@@ -146,7 +146,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('a[href]');
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const url = new URL(a.href);
-  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/'].includes(url.pathname)) return;
+  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/about', '/'].includes(url.pathname)) return;
   e.preventDefault();
   if (unlockToken) navigate(url.pathname);
 });
@@ -160,7 +160,7 @@ const clock = ms => {
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 };
 const serverNow = () => Date.now() + offset;
-const nameFor = room => room.admin ? (room.support ? 'Admin' : 'Announcements') : (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
+const nameFor = room => room.admin ? (room.support ? 'Admin' : 'Announcements') : room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
   cancelAnimationFrame(scanFrame);
@@ -777,12 +777,13 @@ function renderChat() {
   $('qzuInfoChannel').hidden = !infoOpen;
   $('chatPage').classList.toggle('thread-open', Boolean((current || infoOpen) && mobileOpen));
   $('chatCount').textContent = rooms.length ? String(rooms.length): '';
-  const key = JSON.stringify([privacyMode, rooms.map(r => [r.id, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.id === selected])]);
+  const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
+  const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
     list.replaceChildren();
-    if (!rooms.length) {
+    if (!rooms.length && !savedContacts.length) {
       const box = el('div', 'empty-list');
       box.append(el('p', '', 'No chats'));
       const a = el('a', 'subtle-link', 'New chat');
@@ -805,12 +806,29 @@ function renderChat() {
         name.append(badge);
       }
 
-      const preview = last ? (privacyMode ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
+      const preview = r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
-      content.append(name, el('span', 'contact-preview', preview));
+      content.append(name, el('span', 'contact-preview' + (r.contact?.warning ? ' contact-warning' : ''), preview));
       b.append(svg(r.admin ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       b.addEventListener('click', () => selectRoom(r.id));
       list.append(b);
+    }
+    for (const contact of savedContacts.filter(c=>!rooms.some(r=>r.contact?.id===c.id))) {
+      const row = el('button','contact saved-contact');
+      row.type='button';
+      const content=el('div','contact-body');
+      content.append(el('span','contact-name',contact.nickname),el('span','contact-preview'+(contact.warning?' contact-warning':''),contact.warning?'Contact deletion incoming':'Start a new chat'));
+      row.append(svg('avatar','avatar'),content,svg('chevron','official-chevron'));
+      row.addEventListener('click',async()=>{
+        row.disabled=true;
+        try {
+          const result=await api('contacts/open',{id:contact.id});
+          await refresh();
+          selectRoom(result.id);
+        }catch(error){showError(error);}
+        finally{row.disabled=false;}
+      });
+      list.append(row);
     }
     list.scrollTop = top;
   }
@@ -1182,6 +1200,9 @@ function renderConnect() {
 
 function renderSettings() {
   if (page !== 'settings') return;
+  const category = location.pathname.split('/')[2] || 'main';
+  for (const panel of document.querySelectorAll('[data-settings-category]')) panel.hidden = panel.dataset.settingsCategory !== category;
+  $('settingsBack').href = category === 'main' ? '/chat' : '/settings';
   $('resetPin').disabled = !state.pinState || Boolean(state.resetDelivered) || ['new', 'approved'].includes(state.pinState);
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
   $('emergency').disabled = !state.pinState;
@@ -1231,6 +1252,7 @@ function clearVolatile() {
   acknowledgedRead.clear();
   sequence++;
   state.rooms = [];
+  state.contacts = [];
   state.invite = null;
   selected = null;
   mobileOpen = false;
@@ -1406,6 +1428,25 @@ function offerPin() {
     note: 'Choose a different PIN from your login PIN. Single-use.'
   });
 }
+$('logout').addEventListener('click',()=>{
+  const confirm=button('Log out',async()=>{
+    confirm.disabled=true;
+    try{
+      await api('logout',{confirmed:true});
+      roomKeys.clear();
+      roomKeyJobs.clear();
+      sessionReady=false;
+      needsSetup=false;
+      forgetInvoice(false);
+      forgetInvoice(true);
+      lock(false);
+      history.replaceState(null,'','/chat');
+      navigate('/chat',false);
+      await getSession();
+    }catch(error){modalError(error);confirm.disabled=false;}
+  },'primary-button danger-button');
+  show('Are you sure?',[el('p','','This account cannot be recovered. A new activation key is required.'),confirm,button('Cancel',closeModal,'secondary-button')]);
+});
 $('changeLogin').addEventListener('click', () => {
   pinDialog('Change login PIN', ['Current PIN', 'New PIN', 'Confirm PIN'], 'Save', async values => {
     if (values[1] !== values[2]) throw new Error('PINs do not match.');
@@ -1637,29 +1678,38 @@ $('copyCode').addEventListener('click', async() => {
 $('enterCode').addEventListener('input', () => {
   $('enterCode').value = $('enterCode').value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 });
-$('connectForm').addEventListener('submit', async e => {
+function askNickname(action, submitLabel = 'Continue') {
+  const field=el('input','nickname-input');
+  field.type='text';
+  field.maxLength=40;
+  field.placeholder='Nickname';
+  field.autocomplete='off';
+  field.setAttribute('aria-label','Contact nickname');
+  const save=button(submitLabel,async()=>{
+    const value=field.value.trim();
+    if(!value)return;
+    save.disabled=true;
+    try { await action(value); }
+    catch(error){modalError(error);save.disabled=false;}
+  });
+  save.disabled=true;
+  field.addEventListener('input',()=>{save.disabled=!field.value.trim();});
+  field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!save.disabled){event.preventDefault();save.click();}});
+  show('Give your contact a nickname',[field,el('p','','Only visible to you.'),save,button('Cancel',closeModal,'secondary-button')]);
+}
+$('connectForm').addEventListener('submit', e => {
   e.preventDefault();
-  const code = $('enterCode').value.trim();
-  if (!/^[A-Z0-9]{6}$/.test(code)) {
-    info('Connect', 'Enter a 6-character code.');
-    return;
-  }
-  const submit = $('connectForm').querySelector('button');
-  submit.disabled = true;
-  try {
-    const result = await api('connect', {
-      code
-    });
+  const code=$('enterCode').value.trim().toUpperCase();
+  if(!/^[A-Z0-9]{6}$/.test(code)){info('Connect','Enter a 6-character code.');return;}
+  askNickname(async nickname=>{
+    const result=await api('connect',{code,nickname});
+    closeModal();
     await refresh();
-    $('enterCode').value = '';
+    $('enterCode').value='';
     navigate('/chat');
-    if (result.id) selectRoom(result.id);
-    else info('Request sent', 'The recipient must accept your connection.');
-  } catch (err) {
-    showError(err);
-  } finally {
-    submit.disabled = false;
-  }
+    if(result.id)selectRoom(result.id);
+    else info('Request sent','Awaiting approval.');
+  },'Send request');
 });
 
 function loadScanner() {
@@ -1940,13 +1990,15 @@ $('connectionRequests').addEventListener('click', () => {
       const actions = el('div', 'request-actions');
       for (const accept of [false, true]) {
         actions.append(button(accept ? 'Accept' : 'Decline', async () => {
-          try {
-            const result = await api('connection/respond', { id: request.id, accept });
+          const respond=async nickname=>{
+            const result=await api('connection/respond',{id:request.id,accept,nickname});
             closeModal();
             await refresh();
-            if (result.id) selectRoom(result.id);
-          } catch (error) { modalError(error); }
-        }, accept ? 'primary-button' : 'secondary-button'));
+            if(result.id)selectRoom(result.id);
+          };
+          if(accept&&!request.group){askNickname(respond,'Accept');return;}
+          try{await respond(undefined);}catch(error){modalError(error);}
+        },accept?'primary-button':'secondary-button'));
       }
       item.append(actions);
     }

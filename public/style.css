@@ -2258,3 +2258,9 @@ dialog.update-sheet[open] .modal-head h2 {
 
 .update-actions.update-single { display: flex; }
 .update-actions.update-single > button { width: 100%; flex: 1; }
+
+.settings-category-link { text-decoration: none; color: inherit; }
+.settings-panel[hidden] { display: none; }
+.logout-row, .logout-row span, .logout-row svg { color: #e63845 !important; }
+.contact-warning { color: #e63845 !important; }
+.nickname-input { width: 100%; min-height: 48px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--sub); font-size: 16px; }
