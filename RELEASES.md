@@ -2,7 +2,7 @@
 
 ## Before using automatic deployment
 
-The server currently keeps temporary conversations in RAM; a restart ends them. Review changes before merging to main. The deployment script checks tracked changes, requires a fast-forward, tests the candidate in a temporary directory, refuses changed runtime dependencies and verifies the running version after restart. It rolls back code, not database migrations. Back up SQLite before deploying schema changes. The first installation of the deployment script is manual. Enable the timer only after manually deploying and confirming the health endpoint, and after accepting automatic restart behavior.
+The server keeps ordinary temporary conversations in RAM; a restart ends them. Starting in 0.9.3, mobile support conversations are an exception: support text and metadata are stored in the private server SQLite database until an admin deletes them, an admin-selected timer expires, or a participant invokes emergency/account erasure. They are transport-encrypted, not end-to-end encrypted, and SQLite/backups may retain historical copies. The Help screen informs users before opening support. Legacy command-line support remains temporary. Review changes before merging to main. The deployment script checks tracked changes, requires a fast-forward, tests the candidate in a temporary directory, refuses changed runtime dependencies and verifies the running version after restart. It rolls back code, not database migrations. Back up SQLite before deploying schema changes. The first installation of the deployment script is manual. Enable the timer only after manually deploying and confirming the health endpoint, and after accepting automatic restart behavior.
 
 On Oracle, after deployment and testing:
 ```sh

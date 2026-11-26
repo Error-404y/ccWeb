@@ -28,6 +28,7 @@ const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).
 const devices = deviceVerifier();
 const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
+chats.attachSupportStore(db);
 const contacts = contactStore(db);
 chats.contacts = contacts;
 const unlocks = new Unlocks(), sendingResets = new Map();
@@ -292,9 +293,13 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Verified two-way qzu-Support accounts.',
+  notes: 'Help center, persistent support conversations and admin-only retention controls.',
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
+app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
+  if(req.account.access_plan!=='admin')return res.status(403).json({error:'Support admin required.'});
+  res.json(chats.setSupportTimer(req.account.id,req.body?.id,req.body?.mode,true));
+});
 app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
 app.post('/api/message/burn-open', guard('burn-open', 80, 60000), (req, res) => res.json(chats.openBurn(req.account.id, req.body?.id, req.body?.messageId, Boolean(req.account.invisible))));
 app.post('/api/chat/fingerprint', guard('fingerprint', 15, 60000), (req, res) => {
@@ -373,7 +378,7 @@ app.post('/api/connection/respond', guard('connection-response', 30, 60_000), (r
 });
 
 app.post('/api/message/unsend', guard('unsend', 40, 60_000), (req, res) => {
-  chats.unsend(req.account.id, req.body?.id, req.body?.messageId);
+  chats.unsend(req.account.id, req.body?.id, req.body?.messageId, req.account.access_plan==='admin');
   res.json({ ok: true });
 });
 
@@ -449,10 +454,8 @@ app.post('/api/receipts', guard('receipts', 100, 60_000), (req, res) => {
 });
 
 app.post('/api/chat/delete', (req, res) => {
-  chats.remove(req.account.id, req.body?.id);
-  res.json({
-    ok: true
-  });
+  const result=chats.remove(req.account.id, req.body?.id, req.account.access_plan==='admin');
+  res.json({ok:true,...result});
 });
 app.post('/api/pin/issue', guard('pin-issue', 5, 60_000), (req, res) => {
   const pin = issuePin(db, req.account.id, req.body?.pin);
@@ -516,7 +519,7 @@ app.use(express.static(resolve(root, 'public'), {
   etag: false,
   lastModified: false
 }));
-app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
+app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
 app.use((req, res) => res.status(404).send('Not found'));
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);

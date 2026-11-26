@@ -20,7 +20,7 @@ test('support key is separate, device bound, single use and expires',()=>{
   assert.equal(db.prepare('SELECT access_plan FROM accounts WHERE id=?').get(user.id).access_plan,'lifetime');
   db.close();
 });
-test('mobile support conversations are two-way, isolated and expire',()=>{
+test('mobile support conversations are two-way, isolated and persistent by default',()=>{
   let now=100;
   const chats=new Chats(()=>now);chats.requireEncryptedDirect=true;
   const id=chats.openMobileSupport('user','agent');
@@ -34,5 +34,56 @@ test('mobile support conversations are two-way, isolated and expire',()=>{
   assert.throws(()=>chats.send('outsider',id,'No'));
   assert.equal(chats.snapshot('outsider').length,0);
   now+=CHAT_TTL;
-  assert.equal(chats.snapshot('agent').length,0);
+  assert.equal(chats.snapshot('agent').length,1);
+  assert.equal(chats.snapshot('user')[0].persistent,true);
+});
+
+test('only authenticated support agent controls timers and deletion',()=>{
+  let now=100;
+  const chats=new Chats(()=>now),id=chats.openMobileSupport('user','agent');
+  assert.throws(()=>chats.setSupportTimer('user',id,'48h',true));
+  assert.throws(()=>chats.setSupportTimer('agent',id,'48h'));
+  assert.throws(()=>chats.setSupportTimer('agent',id,'1y',true));
+  assert.throws(()=>chats.extend('user',id,'request'));
+  const direct=chats.connectPair('agent','other');
+  assert.throws(()=>chats.setSupportTimer('agent',direct,'48h',true));
+  assert.equal(chats.setSupportTimer('agent',id,'24h',true).expires,now+86400000);
+  assert.equal(chats.setSupportTimer('agent',id,'30m',true).expires,now+86400000+CHAT_TTL);
+  assert.equal(chats.setSupportTimer('agent',id,'48h',true).expires,now+172800000);
+  assert.equal(chats.setSupportTimer('agent',id,'keep',true).persistent,true);
+  assert.equal(chats.remove('user',id).requested,true);
+  assert.equal(chats.snapshot('agent').find(r=>r.id===id).deletionRequested,true);
+  const message=chats.send('user',id,'Hello');
+  assert.throws(()=>chats.unsend('agent',id,message));
+  chats.unsend('agent',id,message,true);
+  assert.equal(chats.snapshot('user')[0].messages[0].deleted,true);
+  assert.throws(()=>chats.remove('agent',id));
+  chats.remove('agent',id,true);
+  assert.equal(chats.snapshot('user').length,0);
+  const next=chats.openMobileSupport('user','agent');
+  chats.setSupportTimer('agent',next,'10m',true);
+  now+=600000;
+  assert.equal(chats.snapshot('user').length,0);
+});
+
+test('support storage survives restart, preserves requests and expires on schedule',()=>{
+  const db=openAccounts(':memory:');
+  let now=100;
+  let chats=new Chats(()=>now);chats.attachSupportStore(db);
+  const id=chats.openMobileSupport('user','agent');
+  const message=chats.send('user',id,'Persist me');
+  chats.react('agent',id,message,'👍');
+  chats.acknowledge('agent',[{id,read:[message]}]);
+  chats.remove('user',id);
+  chats=new Chats(()=>now);chats.attachSupportStore(db);
+  assert.equal(chats.snapshot('agent')[0].messages[0].text,'Persist me');
+  assert.equal(chats.snapshot('agent')[0].messages[0].reactions[0].count,1);
+  assert.equal(chats.snapshot('user')[0].messages[0].status,'read');
+  assert.equal(chats.snapshot('agent')[0].deletionRequested,true);
+  chats.setSupportTimer('agent',id,'10m',true);
+  now+=600000;
+  chats=new Chats(()=>now);chats.attachSupportStore(db);
+  assert.equal(chats.snapshot('user').length,0);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM mobile_support_rooms').get().n,0);
+  db.close();
 });

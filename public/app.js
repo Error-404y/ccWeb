@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.9.2';
+const installedVersion = window.QZU_APP_VERSION || '0.9.3';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -146,7 +146,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('a[href]');
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const url = new URL(a.href);
-  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/about', '/'].includes(url.pathname)) return;
+  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/about', '/'].includes(url.pathname)) return;
   e.preventDefault();
   if (unlockToken) navigate(url.pathname);
 });
@@ -160,6 +160,7 @@ const clock = ms => {
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 };
 const serverNow = () => Date.now() + offset;
+const supportClock = (room,now) => room.persistent ? 'No expiry' : room.mobileSupport && room.expires-now >= 3600000 ? Math.ceil((room.expires-now)/60000/60)+'h' : clock(room.expires-now);
 const nameFor = room => room.support ? (room.supportAgent ? 'Contact ' + room.id.slice(0,4).toUpperCase() : 'qzu-Support') : room.admin ? 'Announcements' : room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
@@ -820,7 +821,7 @@ function renderChat() {
   const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
   $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.id === selected])]);
+  const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -850,10 +851,10 @@ function renderChat() {
         name.append(badge);
       }
 
-      const preview = identityChanged(r) ? 'Contact identity changed' : r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode || r.contact?.muted ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
+      const preview = r.deletionRequested ? 'Deletion requested' : identityChanged(r) ? 'Contact identity changed' : r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode || r.contact?.muted ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
       content.append(name, el('span', 'contact-preview' + (r.contact?.warning || identityChanged(r) ? ' contact-warning' : ''), preview));
-      b.append(svg(r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
+      b.append(svg(r.support && !r.supportAgent ? 'supportAvatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       b.addEventListener('click', () => selectRoom(r.id));
       list.append(b);
     }
@@ -889,22 +890,24 @@ function renderChat() {
   renderEncryptionNotice(current);
   $('adminComposer').hidden = !readOnly;
   $('deleteChat').hidden = readOnly;
+  $('deleteChat').title = current?.mobileSupport && !current?.supportAgent ? 'Request deletion' : 'Delete chat';
+  $('deleteChat').setAttribute('aria-label',$('deleteChat').title);
   $('attachmentMenu').hidden = Boolean(current?.support || ((current?.encryption || (native && directRoom(current))) && !encryptionReady(current)));
   const encryptionStatus = $('encryptionStatus');
   encryptionStatus.hidden = !current;
   encryptionStatus.textContent = !current ? '' : directRoom(current) && (native || current.encryption) ? encryptionReady(current) ? '🔒 Verified encrypted chat' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Encryption key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption' : 'Not end-to-end encrypted';
   $('threadBadge').hidden = !isAdmin || Boolean(current?.supportAgent);
-  $('threadAvatar').setAttribute('href', readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
+  $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
-  $('chatOptions').hidden = !current || isAdmin;
+  $('chatOptions').hidden = !current || (isAdmin && !(current.supportAgent && state.supportAgent));
   $('presenceLabel').hidden = !current || isAdmin;
   $('presenceLabel').textContent = current?.group ? (current.activeCount || 0) + ' active' : current?.activeCount ? 'Active' : 'Offline';
   $('presenceLabel').classList.toggle('online', Boolean(current?.activeCount));
   $('memberCount').hidden = !current?.group;
   $('memberCount').textContent = current?.group ? current.memberCount + ' members' : '';
-  $('expiryProgress').hidden = !current;
-  $('extensionNotice').hidden = !current?.extension;
-  $('extensionNotice').textContent = current?.extension?.incoming ? 'Chat extension requested · Review' : 'Waiting for extension approval';
+  $('expiryProgress').hidden = !current || current.persistent;
+  $('extensionNotice').hidden = !current?.extension && !current?.deletionRequested;
+  $('extensionNotice').textContent = current?.deletionRequested ? 'Deletion requested · Awaiting support action' : current?.extension?.incoming ? 'Chat extension requested · Review' : 'Waiting for extension approval';
   $('typingIndicator').hidden = !current?.typing?.length;
   $('typingLabel').textContent = current?.typing?.length ? (current.group ? current.typing.join(', ') : 'Contact') + (current.typing.length === 1 ? ' is typing' : ' are typing') : '';
   renderReply();
@@ -918,7 +921,7 @@ function renderChat() {
   }
   $('threadName').textContent = nameFor(current);
   addContactMarks($('threadName'),current.contact,current);
-  $('chatTimer').textContent = clock(current.expires - now);
+  $('chatTimer').textContent = supportClock(current,now);
   updateExpiry(current);
   const container = $('messages');
   const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.deleted, message.reactions, message.reply, message.burnSeconds, message.burnAt, message.encryptedMedia, current.encryptionStatus]));
@@ -950,6 +953,7 @@ function renderChat() {
 }
 
 function updateExpiry(room) {
+  if (room.persistent) return;
   const remaining = Math.max(0, room.expires - serverNow());
   const bar = $('expiryProgress');
   bar.max = room.expires - room.created;
@@ -1256,6 +1260,7 @@ function renderSettings() {
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
+  $('writeSupport').disabled = !state.supportAvailable;
   if (!invisibleSaving) $('invisibleMode').checked = Boolean(state.invisible);
   $('invisibleMode').disabled = invisibleSaving || !unlockToken;
 }
@@ -1285,7 +1290,7 @@ function purgeExpired() {
   }
   const room = state.rooms.find(r => r.id === selected);
   if (room) {
-    $('chatTimer').textContent = clock(room.expires - now);
+    $('chatTimer').textContent = supportClock(room,now);
     updateExpiry(room);
   }
   if (page === 'connect' && state.invite) $('inviteTimer').textContent = clock(state.invite.expires - now);
@@ -1511,11 +1516,17 @@ $('changeLogin').addEventListener('click', () => {
     info('qzu.', 'PIN changed.');
   });
 });
-$('supportOpen').addEventListener('click',async()=>{
-  const open=$('supportOpen');open.disabled=true;
-  try{const result=await api('support/open',{});await refresh();navigate('/chat');selectRoom(result.id);}
-  catch(error){showError(error);}finally{open.disabled=false;}
-});
+function confirmSupport() {
+  if (!unlockToken || !state.supportAvailable) return;
+  const yes=button('Yes',async()=>{
+    yes.disabled=true;
+    try {const result=await api('support/open',{});await refresh();closeModal();navigate('/chat');selectRoom(result.id);}
+    catch(error){yes.disabled=false;modalError(error);}
+  });
+  show('Contact Support',[el('p','','Do you want to contact Support through chat?'),el('p','','Support messages are stored on the server until deleted or until an admin sets an expiry. They are not end-to-end encrypted.'),yes,button('No',closeModal,'secondary-button')]);
+}
+$('supportOpen').addEventListener('click',confirmSupport);
+$('writeSupport').addEventListener('click',confirmSupport);
 $('qzuInfoOpen').addEventListener('click', () => {
   if (unlockToken && !accessDue) selectRoom(officialChannel);
 });
@@ -1644,21 +1655,22 @@ $('deleteChat').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === id);
   if (!room || room.readOnly) return;
   const leave = room.group && !room.canInvite;
-  const confirm = button(leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
+  const requestDeletion = room.mobileSupport && !room.supportAgent;
+  if (requestDeletion && room.deletionRequested) return info('Deletion requested','Support has received your request.');
+  const confirm = button(requestDeletion ? 'Request deletion' : leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
     confirm.disabled = true;
     try {
-      await api('chat/delete', {
-        id
-      });
+      const result=await api('chat/delete', {id});
       closeModal();
-      clearVolatile();
+      if (!result.requested) clearVolatile();
       await refresh();
+      if(result.requested)info('Deletion requested','Support can now delete this conversation for both sides.');
     } catch (e) {
       confirm.disabled = false;
       modalError(e);
     }
   }, 'primary-button danger-button');
-  show(leave ? 'Leave group?' : 'Delete chat?', [el('p', '', leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, button('Cancel', closeModal, 'secondary-button')]);
+  show(requestDeletion ? 'Request deletion?' : leave ? 'Leave group?' : 'Delete chat?', [el('p', '', requestDeletion ? 'Ask support to delete this conversation for both participants.' : leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, button('Cancel', closeModal, 'secondary-button')]);
 });
 try {
   privacyMode = localStorage.getItem('qzu-privacy') === '1';
@@ -2095,7 +2107,7 @@ function messageActions(room, message) {
       mediaMessage = message.id;
     }, 'secondary-button'));
   }
-  if (message.mine && !message.deleted) controls.push(button('Unsend', () => confirmUnsend(room, message), 'primary-button danger-button'));
+  if ((message.mine || (room.supportAgent && state.supportAgent)) && !message.deleted) controls.push(button(message.mine ? 'Unsend' : 'Delete for both', () => confirmUnsend(room, message), 'primary-button danger-button'));
   controls.push(button('Close', closeModal, 'secondary-button'));
   show('Message', controls);
   mediaRoom = room.id;
@@ -2127,7 +2139,15 @@ async function showFingerprint(room) {
 }
 $('chatOptions').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
-  if (!room || room.admin) return;
+  if (!room) return;
+  if (room.supportAgent && state.supportAgent) {
+    const control=(label,mode)=>button(label,async()=>{
+      try {await api('support/lifetime',{id:room.id,mode});closeModal();await refresh();}catch(error){modalError(error);}
+    },'secondary-button');
+    show('Support admin controls',[el('p','',room.deletionRequested?'The user has requested deletion.':'Manage retention for both participants.'),el('p','','Timers delete the conversation for both sides. +30 minutes adds to the existing timer, or starts a 30-minute timer if none is active.'),control('10 minutes from now','10m'),control('+30 minutes','30m'),control('24 hours from now','24h'),control('48 hours from now','48h'),control('Keep until deleted','keep'),button('Delete for both',()=>{$('deleteChat').click();},'primary-button danger-button'),button('Close',closeModal,'secondary-button')]);
+    return;
+  }
+  if (room.admin) return;
   const controls = [];
   if (!room.group) {
     if(room.contact)controls.push(button('Manage contact',()=>showContactManagement(room.contact),'secondary-button'));
@@ -2403,7 +2423,7 @@ async function recordVoice(room) {
 }
 
 function confirmUnsend(room, message) {
-  const confirm = button('Unsend', async () => {
+  const confirm = button(message.mine ? 'Unsend' : 'Delete for both', async () => {
     confirm.disabled = true;
     try {
       await api('message/unsend', { id: room.id, messageId: message.id });
@@ -2414,7 +2434,7 @@ function confirmUnsend(room, message) {
       modalError(error);
     }
   }, 'primary-button danger-button');
-  show('Unsend message?', [el('p', '', 'Remove this message for everyone in the chat. Saved copies cannot be removed.'), confirm, button('Cancel', closeModal, 'secondary-button')]);
+  show(message.mine ? 'Unsend message?' : 'Delete message for both?', [el('p', '', 'Remove this message for everyone in the chat. Saved copies cannot be removed.'), confirm, button('Cancel', closeModal, 'secondary-button')]);
   mediaRoom = room.id;
   mediaMessage = message.id;
 }
