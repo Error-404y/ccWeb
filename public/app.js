@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.12.0';
+const installedVersion = window.QZU_APP_VERSION || '0.12.1';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -133,8 +133,8 @@ function markDisconnected(){online=false;liveRevision='';updateConnection();}
 const motionAllowed=()=>!matchMedia('(prefers-reduced-motion: reduce)').matches;
 function motion(node,cls){if(!node||!motionAllowed()||document.hidden)return;node.classList.remove(cls);void node.offsetWidth;node.classList.add(cls);node.addEventListener('animationend',event=>{if(event.target===node)node.classList.remove(cls);},{once:true});}
 function haptic(){if(native&&!document.hidden)devicePlugin.haptic().catch(()=>{});}
-function rememberRoom(){if(typeof selected!=='string'||page!=='chat'||!unlockToken)return;const field=$('message'),view=$('messages');if(field.value)drafts.set(selected,field.value);else drafts.delete(selected);if(renderedRoom===selected&&(!mobile.matches||mobileOpen))scrollMemory.set(selected,{top:view.scrollTop,bottom:view.scrollHeight-view.scrollTop-view.clientHeight<100});}
-function restoreDraft(id){$('message').value=drafts.get(id)||'';}
+function rememberRoom(){if(typeof selected!=='string'||page!=='chat'||!unlockToken)return;const field=$('message'),view=$('messages');if(field.value)drafts.set(selected,{text:field.value,once:viewOnce,burn:burnSeconds});else drafts.delete(selected);if(renderedRoom===selected&&(!mobile.matches||mobileOpen))scrollMemory.set(selected,{top:view.scrollTop,bottom:view.scrollHeight-view.scrollTop-view.clientHeight<100});}
+function restoreDraft(id){const draft=drafts.get(id);$('message').value=draft?.text||'';resetOnce();if(draft?.once)setOnceMode(true);else if(draft?.burn){burnSeconds=draft.burn;$('attachmentMenu').classList.add('once-active');$('message').placeholder='Timed text · '+burnSeconds+'s';}}
 function updatePages() {
   updateNavigation();
   for (const name of ['chat', 'settings', 'connect']) {const node=$(name+'Page'),hidden=!unlockToken||accessDue||termsPending||suspendedAccount||name!==page;if(node.hidden&&!hidden)motion(node,'motion-page');node.hidden=hidden;}
@@ -147,7 +147,7 @@ function navigate(path, push = true) {
   const nextPage = routeName(location.pathname);
   if (page !== nextPage) {
     rememberRoom();
-    resetOnce();
+    if(nextPage==='chat')restoreDraft(selected);else resetOnce();
     closeModal();
     stopTyping();
     clearReply();
@@ -1080,9 +1080,9 @@ function renderMessage(room, message) {
       try { await api('message/burn-open', { id: room.id, messageId: message.id }); await refresh(); } catch (error) { showError(error); }
     }, 'media-message'));
   } else if (message.once) {
-    const label = message.opened ? 'Opened' : message.mine ? 'View-once message' : 'Open once';
+    const label = message.opened ? 'Opened · View once' : message.mine ? 'View-once '+(message.kind==='image'?'photo':message.kind==='audio'?'audio':'message') : 'Open '+(message.kind==='image'?'photo':message.kind==='audio'?'audio':'message')+' once';
     const open = button(label, () => openOnceMessage(room, message), 'media-message');
-    open.disabled = message.mine || message.opened;
+    open.disabled = message.mine || message.opened || (room.encryption&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)));
     content.append(open);
   } else if (message.kind === 'image' || message.kind === 'audio') {
     const open = button('', () => openMedia(room, message), 'media-message media-tile');open.setAttribute('aria-label',message.kind==='image'?'View photo':'Play voice message');open.append(svg(message.kind==='image'?'camera':'mic'),el('span','',message.kind==='image'?'Photo':'Voice message'));
@@ -1184,7 +1184,7 @@ async function acknowledgeMessages() {
     const read = [],seen=[];
     for (const message of room.messages) {
       if (message.mine || message.deleted) continue;
-      if(room.encryption&&!message.decrypted&&message.kind==='text')continue;
+      if(room.encryption&&!message.once&&!message.decrypted&&message.kind==='text')continue;
       if (!acknowledgedDelivery.has(message.id)) delivered.push(message.id);
       const node = document.getElementById('message-' + message.id);
       const view = $('messages').getBoundingClientRect();
@@ -1460,7 +1460,7 @@ async function prepareEncryptedRooms(data,ticket) {
     for (const message of room.messages) {
       message.text = message.deleted ? '' : 'Encrypted message — locked';
       message.reply = null;
-      if (message.deleted || !encryptionReady(room)) continue;
+      if (message.once || message.deleted || !encryptionReady(room)) continue;
       if (message.encryptedMedia) { message.text = 'Encrypted attachment'; continue; }
       if (!message.cipher) continue;
       const nonce = String(message.mine) + ':' + message.cipher.iv;
@@ -1817,7 +1817,7 @@ async function sendMessage() {
     return;
   }
   if (!text) return;
-  const epoch = authEpoch;
+  const epoch = authEpoch, once=viewOnce;
   sendingMessage = true;
   updateSendButton();
 
@@ -1826,20 +1826,20 @@ async function sendMessage() {
       if (!encryptionReady(room)) throw Error('Verify encryption before sending.');
       const cipher = await QzuCrypto.encrypt(roomKeys.get(id).context, text);
       if (epoch !== authEpoch || document.hidden || !unlockToken || selected !== id || room.expires <= serverNow()) throw Error('Chat unavailable.');
-      const replyCipher=state.capabilities?.encryptedExtras&&replyTarget?.roomId===id?await QzuCrypto.encryptReply(roomKeys.get(id).context,cipher.iv,replyTarget.id):null;
+      const replyCipher=!once&&state.capabilities?.encryptedExtras&&replyTarget?.roomId===id?await QzuCrypto.encryptReply(roomKeys.get(id).context,cipher.iv,replyTarget.id):null;
       if(epoch!==authEpoch||!unlockToken||document.hidden||selected!==id)throw Error('Chat unavailable.');
-      if(state.capabilities?.queuedSends){
+      if(once){if(!state.capabilities?.encryptedOnce)throw Error('Update the server before sending view-once content.');if(!online)throw Error('Reconnect to send view-once content. Your draft is kept.');await api('encryption/once/send',{id,cipher});}
+      else if(state.capabilities?.queuedSends){
         if(outbox.size>=30)throw Error('Outgoing queue is full. Wait for messages to send.');
         const requestId=crypto.randomUUID(),payload={id,cipher,requestId,...(replyCipher?{replyCipher}:{})};
         outbox.set(requestId,{room:id,payload,binding:roomKeys.get(id).context.code,at:Date.now(),failed:false,sending:false});
         if(selected===id&&$('message').value.trim()===text){$('message').value='';drafts.delete(id);resetOnce();clearReply();stopTyping();}
         haptic();updateConnection();renderChat();$('messages').scrollTop=$('messages').scrollHeight;void flushOutbox();return;
       }
-      if(!online)throw Error('Reconnect to send this message.');
-      await api('encryption/message', { id, cipher,...(replyCipher?{replyCipher}:{}) });
+      else {if(!online)throw Error('Reconnect to send this message.');await api('encryption/message', { id, cipher,...(replyCipher?{replyCipher}:{}) });}
     } else {
       if(!online)throw Error('Reconnect to send this message. Your draft is kept.');
-      await api('message', { id, text, once: viewOnce, burnSeconds, replyTo: burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
+      await api('message', { id, text, once, burnSeconds, replyTo: once||burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
     }
 
     if (epoch !== authEpoch) return;
@@ -2278,6 +2278,7 @@ function previewText(message) {
   return message.text;
 }
 
+function setOnceMode(value){viewOnce=value;burnSeconds=0;if(value)clearReply();$('attachmentMenu').classList.toggle('once-active',value);$('message').placeholder=value?'View-once message':'Message';}
 function resetOnce() {
   viewOnce = false;
   burnSeconds = 0;
@@ -2546,35 +2547,49 @@ async function openMedia(room, message) {
 }
 
 async function openOnceMessage(room, message) {
+  if(message.mine||message.opened||message.deleted)return;
+  const epoch=authEpoch,encrypted=Boolean(room.encryption);
   const open = button('Open once', async () => {
     open.disabled = true;
+    const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&!document.hidden&&selected===room.id&&body.contains(open)&&state.rooms.some(r=>r.id===room.id&&r.expires>serverNow()&&r.messages.some(m=>m.id===message.id&&!m.deleted));
     try {
-      const result = await api('message/open', { id: room.id, messageId: message.id });
-      if (selected !== room.id) return;
-      if (result.media) showMedia(room, result.kind, 'data:' + result.media.mime + ';base64,' + result.media.data, message.id);
-      else {
-        show('View once', [el('p', 'once-content', result.text), button('Close', closeModal)]);
-        mediaRoom = room.id;
-        mediaMessage = message.id;
-      }
-      await refresh();
-    } catch (error) { modalError(error); }
+      if(!active())return;
+      if(encrypted&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)))throw Error('View-once encryption unavailable.');
+      const context=encrypted?roomKeys.get(room.id)?.context:null;
+      const result = await api(encrypted?'encryption/once/open':'message/open', { id: room.id, messageId: message.id });
+      for(const r of state.rooms)if(r.id===room.id){const m=r.messages.find(m=>m.id===message.id);if(m){m.opened=true;m.unread=false;m.text='';m.cipher=null;m.encryptedMedia=false;}}
+      message.opened=true;
+      if(epoch===authEpoch)render();
+      if(!active())return;
+      let text=result.text,source=null;
+      if(result.kind!==message.kind)throw Error('Invalid view-once message.');
+      if(encrypted){
+        if(!context||roomKeys.get(room.id)?.context!==context||!result.cipher)throw Error('Encryption key unavailable.');
+        if(result.kind==='text')text=await QzuCrypto.decrypt(context,result.cipher,false);
+        else source=await QzuCrypto.decryptMedia(context,result.kind,result.cipher,false);
+      }else if(result.media)source='data:'+result.media.mime+';base64,'+result.media.data;
+      if(!active())return;
+      if(source)showMedia(room,result.kind,source,message.id);
+      else {show('View once',[el('p','once-content',text),button('Close',closeModal)]);mediaRoom=room.id;mediaMessage=message.id;}
+      haptic();
+    }catch(error){if(active())modalError(error);}
+    finally{if(epoch===authEpoch&&unlockToken)refresh().catch(()=>{});}
   });
-  show('View once', [el('p', '', 'This message cannot be reopened.'), open, button('Cancel', closeModal, 'secondary-button')]);
-  mediaRoom = room.id;
-  mediaMessage = message.id;
+  show('View once',[el('p','','This content can only be opened once. Closing it or leaving the app will permanently end the view.'),open,button('Cancel',closeModal,'secondary-button')]);
+  mediaRoom=room.id;mediaMessage=message.id;
 }
 
 function currentMediaRoom(){const room=state.rooms.find(r=>r.id===selected);return room&&!room.admin&&!room.readOnly&&(!encryptionRequired(room)||encryptionReady(room))?room:null;}
-$('cameraShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){resetOnce();choosePhoto(room,true);}});
-$('voiceShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){resetOnce();recordVoice(room);}});
+$('cameraShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){choosePhoto(room,true);}});
+$('voiceShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){recordVoice(room);}});
 $('attachmentMenu').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
   if (!room || room.admin) return;
   if (room.encryption || (native && directRoom(room))) {
     if (!encryptionReady(room)) { showEncryption(room); return; }
-    resetOnce();
-    show('Encrypted attachments', [button('Gallery', () => choosePhoto(room), 'secondary-button'), button('Camera',()=>choosePhoto(room,true),'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button'), button('Close', closeModal)]);
+    const options=[button('Gallery', () => choosePhoto(room), 'secondary-button'),button('Camera',()=>choosePhoto(room,true),'secondary-button'),button('Voice message',()=>recordVoice(room),'secondary-button')];
+    if(state.capabilities?.encryptedOnce)options.unshift(button(viewOnce?'Disable view once':'Enable view once',()=>{setOnceMode(!viewOnce);rememberRoom();closeModal();},'secondary-button'));
+    show('Encrypted attachments',[...options,button('Close',closeModal)]);
     return;
   }
   const items = burnSeconds ? [] : [button('Gallery', () => choosePhoto(room), 'secondary-button'), button('Camera',()=>choosePhoto(room,true),'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
@@ -2614,10 +2629,11 @@ async function sendAttachment(room, kind, blob, once, cleaned=false) {
   if (blob.size > 2 * 1024 * 1024 || !blob.size) throw new Error('Attachment must be under 2 MB.');
   const epoch = authEpoch;
   if (room.encryption || (native && directRoom(room))) {
-    if (!encryptionReady(room) || once) throw Error('Verified encryption required.');
+    if (!encryptionReady(room)) throw Error('Verified encryption required.');
+    if(once&&!state.capabilities?.encryptedOnce)throw Error('Update the server before sending view-once content.');
     const cipher = await QzuCrypto.encryptMedia(roomKeys.get(room.id).context, kind, blob);
     if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden || room.expires <= serverNow()) throw Error('Chat unavailable.');
-    await api('encryption/message', { id: room.id, kind, cipher });
+    await api(once?'encryption/once/send':'encryption/message', { id: room.id, kind, cipher });
   } else {
     const data = await blobData(blob);
     if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden) throw new Error('Chat unavailable.');
@@ -2632,8 +2648,8 @@ function choosePhoto(room,camera=false){
   const input=el('input','photo-file');input.type='file';input.accept='image/jpeg,image/png,image/webp';if(camera)input.setAttribute('capture','environment');
   const preview=el('img','temporary-media photo-preview');preview.alt='Photo preview';preview.hidden=true;
   const status=el('p','media-status','Choose a photo');
-  const epoch=authEpoch;let prepared=null,selection=0;
-  const send=button(viewOnce?'Send once':'Send photo',async()=>{if(!prepared)return;send.disabled=true;status.textContent='Sending…';try{await sendAttachment(room,'image',prepared,viewOnce,true);}catch(error){send.disabled=false;status.textContent='';modalError(error);}});send.disabled=true;
+  const epoch=authEpoch,once=viewOnce;let prepared=null,selection=0;
+  const send=button(once?'Send once':'Send photo',async()=>{if(!prepared)return;send.disabled=true;status.textContent='Sending…';try{await sendAttachment(room,'image',prepared,once,true);}catch(error){send.disabled=false;status.textContent='';modalError(error);}});send.disabled=true;
   input.addEventListener('change',async()=>{const n=++selection,file=input.files?.[0];prepared=null;send.disabled=true;preview.hidden=true;if(mediaUrl){URL.revokeObjectURL(mediaUrl);mediaUrl=null;}if(!file)return;status.textContent='Preparing photo…';try{const blob=await QzuMetadata.cleanImage(file);if(epoch!==authEpoch||n!==selection||!body.contains(input)||document.hidden)return;prepared=blob;mediaUrl=URL.createObjectURL(blob);preview.src=mediaUrl;preview.hidden=false;status.textContent=Math.round(blob.size/1024)+' KB';send.disabled=false;}catch(error){status.textContent='';dialogError(error);}});
   show(camera?'Camera':'Gallery',[input,preview,status,send,button('Cancel',closeModal,'secondary-button')]);mediaRoom=room.id;
   // File chooser must be opened synchronously from the user's tap.
@@ -2641,6 +2657,7 @@ function choosePhoto(room,camera=false){
 }
 
 async function recordVoice(room) {
+  const once=viewOnce;
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     info('Voice message', 'Recording is unavailable in this browser.');
     return;
@@ -2681,9 +2698,9 @@ async function recordVoice(room) {
       if (recordingCleanup === cleanup) recordingCleanup = null;
       if (cancelled || epoch !== authEpoch || !body.contains(label)) return;
       const blob = new Blob(chunks, { type: mime });
-      const send = button(viewOnce ? 'Send once' : 'Send recording', async () => {
+      const send = button(once ? 'Send once' : 'Send recording', async () => {
         send.disabled = true;
-        try { await sendAttachment(room, 'audio', blob, viewOnce); }
+        try { await sendAttachment(room, 'audio', blob, once); }
         catch (error) { send.disabled = false; modalError(error); }
       });
       const player = el('audio', 'temporary-media');

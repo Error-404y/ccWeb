@@ -70,3 +70,5 @@ test('Android notification setup prompts once by default and preserves opt-out',
  assert.ok(app.includes("localStorage.getItem('qzu-push-opt-out')==='1'"));
  assert.ok(app.includes("localStorage.setItem('qzu-push-permission-requested','1')"));
 });
+
+test('encrypted view-once uses dedicated endpoints and never queues as ordinary text',()=>{assert.ok(app.includes("api('encryption/once/send',{id,cipher})"));assert.ok(app.includes("encrypted?'encryption/once/open':'message/open'"));assert.ok(app.includes("message.once || message.deleted || !encryptionReady(room)"));assert.ok(app.includes("once?'encryption/once/send':'encryption/message'"));assert.ok(app.includes("if(draft?.once)setOnceMode(true)"));});
