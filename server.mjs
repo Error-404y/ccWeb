@@ -567,6 +567,15 @@ app.use('/api', (req, res) => res.status(404).json({
   error: 'Not found.'
 }));
 app.get('/healthz', (req, res) => res.json({ ok: true, version }));
+const escapePrivacy = value => String(value).replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+app.get('/privacy.css', (req,res)=>res.sendFile(resolve(root,'public/privacy.css')));
+app.get(['/privacy','/privacy.html'], (req,res)=>{
+  const name=process.env.QZU_PRIVACY_OPERATOR?.trim()||'qzu. developer (operator details pending)';
+  const email=process.env.QZU_PRIVACY_EMAIL?.trim()||'';
+  const contact=/^[A-Za-z0-9._+%-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)?'<a href="mailto:'+escapePrivacy(email)+'">'+escapePrivacy(email)+'</a>':'Settings &gt; Help &gt; Write Support (public email pending)';
+  const policy=readFileSync(resolve(root,'public/privacy.html'),'utf8').replace('__QZU_OPERATOR__',()=>escapePrivacy(name)).replace('__QZU_CONTACT__',()=>contact);
+  res.type('html').send(policy);
+});
 app.get('/downloads/' + apkName, (req, res) => {
   if (!existsSync(apkPath)) return res.sendStatus(404);
   res.download(apkPath, apkName);

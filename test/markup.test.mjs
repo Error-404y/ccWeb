@@ -45,3 +45,5 @@ test('official channel exposes an admin composer and unread indicator',()=>{
 test('admin-only settings section and feedback route',()=>{assert.match(html,/id="adminInterface" hidden/);assert.match(html,/data-settings-category="admin-feedback" hidden/);assert.ok(app.includes("$('adminInterface').hidden=!state.supportAgent"));assert.ok(!app.includes('Messages are not yet end-to-end encrypted.'));});
 
 test('chat headers only expose actionable direct-chat encryption controls',()=>{assert.ok(app.includes('encryptionStatus.hidden = !showDirectSecurity'));assert.ok(app.includes("!showDirectSecurity ? ''"));assert.ok(!app.includes('Not end-to-end encrypted'));assert.ok(!app.includes("info('Connection security'"));assert.ok(!app.includes("['End-to-end encryption', 'Not implemented']"));assert.ok(app.includes('Transport encryption; server can access content'));});
+
+test('privacy policy is linked in app settings',()=>{assert.match(html,/id="privacyPolicy"/);assert.ok(app.includes("new URL('/privacy',apiOrigin)"));});

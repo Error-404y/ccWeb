@@ -2638,6 +2638,11 @@ $('invisibleMode').addEventListener('change', async () => {
   }
 });
 
+$('privacyPolicy').addEventListener('click',async()=>{
+  const url=new URL('/privacy',apiOrigin).href;
+  try{if(native)await devicePlugin.openUpdate({url});else location.assign(url);}
+  catch(error){showError(error);}
+});
 $('securityCenter').addEventListener('click', () => {
   const list = el('div', 'security-list');
   const items = [
