@@ -900,8 +900,9 @@ function renderChat() {
   $('deleteChat').setAttribute('aria-label',$('deleteChat').title);
   $('attachmentMenu').hidden = Boolean(current?.support || ((current?.encryption || (native && directRoom(current))) && !encryptionReady(current)));
   const encryptionStatus = $('encryptionStatus');
-  encryptionStatus.hidden = !current;
-  encryptionStatus.textContent = !current ? '' : directRoom(current) && (native || current.encryption) ? encryptionReady(current) ? '🔒 Verified encrypted chat' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Encryption key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption' : current.mobileSupport ? 'Server-stored · Not end-to-end encrypted' : 'Not end-to-end encrypted';
+  const showDirectSecurity = encryptionRequired(current) && directRoom(current);
+  encryptionStatus.hidden = !showDirectSecurity;
+  encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? '🔒 Verified' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption';
   $('threadBadge').hidden = !isAdmin || Boolean(current?.supportAgent);
   $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
@@ -1475,8 +1476,7 @@ async function showEncryption(room) {
 }
 $('encryptionStatus').addEventListener('click', () => {
   const room = state.rooms.find(item => item.id === selected);
-  if (directRoom(room)) showEncryption(room);
-  else if (room) info('Connection security', 'This conversation uses transport encryption only. It is not end-to-end encrypted.');
+  if (encryptionRequired(room) && directRoom(room)) showEncryption(room);
 });
 
 async function refresh(live=false) {
@@ -2061,7 +2061,7 @@ $('appInfo').addEventListener('click', () => {
     ['Automatic lock', 'Leaving the tab locks qzu. Unlock with your login PIN.'],
     ['emg.exe', 'Your single-use emergency PIN removes your active chats for all participants. A replacement requires developer approval.'],
     ['Groups', 'Up to 12 anonymous members. Groups expire 30 minutes after creation. New members can see existing group messages.'],
-    ['Privacy mode', 'Hide chat previews and blur messages until you reveal them. This is a visual privacy feature, not encryption.'],
+    ['Privacy mode', 'Hide chat previews and blur messages until you reveal them.'],
     ['View once', 'Direct-chat messages can be opened once by the recipient. Screenshots and saved copies cannot be prevented.'],
     ['Media', 'Photos and voice messages are held temporarily in server memory and expire with the chat.'],
     ['Connections', 'New connections require approval. Blocked accounts cannot reconnect while using the same account.'],
@@ -2313,7 +2313,7 @@ async function showFingerprint(room) {
   try {
     const result = await api('chat/fingerprint', { id: room.id });
     if (selected !== room.id) return;
-    show('Device fingerprints', [el('p', '', 'Compare the entire code with your contact through a separate trusted channel.'), el('div', 'fingerprint-code', result.code.match(/.{1,4}/g).join(' ')), el('p', '', 'Based on server-registered device keys. This is not end-to-end encryption or independent proof against the server.'), button('Close', closeModal)]);
+    show('Device fingerprints', [el('p', '', 'Compare the entire code with your contact through a separate trusted channel.'), el('div', 'fingerprint-code', result.code.match(/.{1,4}/g).join(' ')), el('p', '', 'Based on server-registered device keys.'), button('Close', closeModal)]);
   } catch (error) { showError(error); }
 }
 $('chatOptions').addEventListener('click', () => {
@@ -2330,7 +2330,7 @@ $('chatOptions').addEventListener('click', () => {
   const controls = [];
   if (!room.group) {
     if(room.contact)controls.push(button('Manage contact',()=>showContactManagement(room.contact),'secondary-button'));
-    controls.push(button('Verify encryption', () => showEncryption(room), 'secondary-button'));
+    if (encryptionRequired(room) && directRoom(room)) controls.push(button('Verify encryption', () => showEncryption(room), 'secondary-button'));
     if (!room.extended) controls.push(button('Extend chat', () => showExtension(room), 'secondary-button'));
   }
   const confirm = member => {
@@ -2647,7 +2647,8 @@ $('securityCenter').addEventListener('click', () => {
     ['Privacy mode', privacyMode ? 'Enabled' : 'Disabled'],
     ['Invisible mode', state.invisible ? 'Enabled' : 'Disabled'],
     ['Emergency PIN', state.pinState === 'active' ? 'Ready' : state.pinState === 'used' ? 'Used' : 'Not configured'],
-    ['End-to-end encryption', 'Not implemented'],
+    ['Direct chat security', 'Device verification required'],
+    ['Support and group security', 'Transport encryption; server can access content'],
     ['Saved copies', 'Outside qzu. control']
   ];
   for (const [name, value] of items) {
