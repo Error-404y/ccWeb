@@ -99,6 +99,7 @@ if (target === 'ios') {
     if (!xml.includes('android.permission.' + permission)) xml = xml.replace('</manifest>', '<uses-permission android:name="android.permission.' + permission + '" />\n</manifest>');
   }
   xml = xml.replace('android:allowBackup="true"', 'android:allowBackup="false"');
+  if(!xml.includes('com.google.firebase.messaging.default_notification_channel_id'))xml=xml.replace('</application>','<meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="qzu_messages" />\n</application>');
   writeFileSync(manifest, xml);
 }
 cap('sync', target);

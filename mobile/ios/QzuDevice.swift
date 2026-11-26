@@ -13,7 +13,8 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "sign", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openUpdate", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "roomVault", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "setBadge", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "setBadge", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "testLocalNotification", returnType: CAPPluginReturnPromise)
     ]
     private let tag = Data("cc.qzu.app.device.v1".utf8)
     private let queue = DispatchQueue(label: "cc.qzu.device")
@@ -135,6 +136,16 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
                 if granted { DispatchQueue.main.async { UIApplication.shared.applicationIconBadgeNumber = count } }
                 call.resolve(["granted":granted])
             }
+        }
+    }
+
+    @objc func testLocalNotification(_ call: CAPPluginCall) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { call.reject("Notifications are disabled.");return }
+            let content = UNMutableNotificationContent();content.title = "qzu.";content.body = "Notification test";content.sound = .default
+            let request = UNNotificationRequest(identifier:"qzu-test",content:content,trigger:UNTimeIntervalNotificationTrigger(timeInterval:3,repeats:false))
+            center.add(request) { error in if let error = error { call.reject(error.localizedDescription) } else { call.resolve() } }
         }
     }
 

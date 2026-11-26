@@ -36,7 +36,7 @@ const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
 const official=officialStore(db),feedback=feedbackStore(db),liveWaiters=new Map();
-const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET,firebase:loadFirebaseDelivery(process.env.QZU_FIREBASE_CREDENTIALS)});
+const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET,firebase:loadFirebaseDelivery(process.env.QZU_FIREBASE_CREDENTIALS),unread:account=>chats.snapshot(account).reduce((n,room)=>n+room.messages.filter(m=>m.unread).length,0)});
 const compliance=complianceStore(db);compliance.sweep();setInterval(()=>compliance.sweep(),3600000).unref();
 let liveTotal=0;
 const contacts = contactStore(db);
@@ -367,7 +367,7 @@ function stateData(a) {
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
     capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, live: true },
     official:official.snapshot(a.id),
-    push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id)},
+    push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
     access: accessStatus(a),
     supportAgent: a.access_plan==='admin',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
@@ -420,6 +420,7 @@ app.post('/api/push/register',guard('push-register',10,60000),(req,res)=>{
   if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
   res.json(push.register(req.account.id,req.body?.platform,req.body?.token));
 });
+app.post('/api/push/test',guard('push-test',3,60000),async(req,res)=>res.json(await push.test(req.account.id)));
 app.post('/api/push/remove',guard('push-remove',10,60000),(req,res)=>{push.remove(req.account.id);res.json({ok:true});});
 app.post('/api/invite',guard('invite',15,60000),(req,res)=>res.json(chats.newCode(req.account.id,req.body?.minutes??10)));
 app.get('/api/qr', async(req, res) => {
