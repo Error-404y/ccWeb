@@ -26,6 +26,7 @@ test('mobile support conversations are two-way, isolated and persistent by defau
   const id=chats.openMobileSupport('user','agent');
   assert.equal(chats.openMobileSupport('user','agent'),id);
   chats.send('user',id,'Need help');
+  chats.respondSupport('agent',id,'accept',true);
   chats.send('agent',id,'How can I help?');
   assert.equal(chats.snapshot('user')[0].messages[1].sender,'qzu-Support');
   assert.equal(chats.snapshot('user')[0].supportAgent,false);
@@ -40,7 +41,7 @@ test('mobile support conversations are two-way, isolated and persistent by defau
 
 test('only authenticated support agent controls timers and deletion',()=>{
   let now=100;
-  const chats=new Chats(()=>now),id=chats.openMobileSupport('user','agent');
+  const chats=new Chats(()=>now),id=chats.openMobileSupport('user','agent',true);
   assert.throws(()=>chats.setSupportTimer('user',id,'48h',true));
   assert.throws(()=>chats.setSupportTimer('agent',id,'48h'));
   assert.throws(()=>chats.setSupportTimer('agent',id,'1y',true));
@@ -60,7 +61,7 @@ test('only authenticated support agent controls timers and deletion',()=>{
   assert.throws(()=>chats.remove('agent',id));
   chats.remove('agent',id,true);
   assert.equal(chats.snapshot('user').length,0);
-  const next=chats.openMobileSupport('user','agent');
+  const next=chats.openMobileSupport('user','agent',true);
   chats.setSupportTimer('agent',next,'10m',true);
   now+=600000;
   assert.equal(chats.snapshot('user').length,0);
@@ -70,7 +71,7 @@ test('support storage survives restart, preserves requests and expires on schedu
   const db=openAccounts(':memory:');
   let now=100;
   let chats=new Chats(()=>now);chats.attachSupportStore(db);
-  const id=chats.openMobileSupport('user','agent');
+  const id=chats.openMobileSupport('user','agent',true);
   const message=chats.send('user',id,'Persist me');
   chats.react('agent',id,message,'👍');
   chats.acknowledge('agent',[{id,read:[message]}]);
@@ -85,5 +86,54 @@ test('support storage survives restart, preserves requests and expires on schedu
   chats=new Chats(()=>now);chats.attachSupportStore(db);
   assert.equal(chats.snapshot('user').length,0);
   assert.equal(db.prepare('SELECT count(*) AS n FROM mobile_support_rooms').get().n,0);
+  db.close();
+});
+
+test('support requests stay out of admin chats until accepted; rejection reopens only on new message',()=>{
+  let now=100;
+  const chats=new Chats(()=>now);
+  const id=chats.openMobileSupport('user','agent');
+  assert.equal(chats.snapshot('user')[0].id,id);
+  assert.equal(chats.snapshot('agent').length,0);
+  assert.equal(chats.supportRequests('agent',true)[0].id,id);
+  assert.throws(()=>chats.supportRequests('agent'));
+  assert.throws(()=>chats.respondSupport('user',id,'accept',true));
+  assert.throws(()=>chats.respondSupport('agent',id,'accept'));
+  assert.throws(()=>chats.send('agent',id,'Not yet'));
+  chats.send('user',id,'First message');
+  assert.equal(chats.supportRequests('agent',true)[0].preview,'First message');
+  chats.respondSupport('agent',id,'reject',true);
+  assert.equal(chats.supportRequests('agent',true).length,0);
+  assert.equal(chats.snapshot('agent').length,0);
+  assert.equal(chats.snapshot('user')[0].supportStatus,'rejected');
+  assert.equal(chats.openMobileSupport('user','agent'),id);
+  assert.equal(chats.supportRequests('agent',true).length,0);
+  now+=100;
+  chats.send('user',id,'Please try again');
+  assert.equal(chats.supportRequests('agent',true)[0].at,now);
+  assert.equal(chats.supportRequests('agent',true)[0].preview,'Please try again');
+  chats.respondSupport('agent',id,'accept',true);
+  assert.equal(chats.supportRequests('agent',true).length,0);
+  assert.equal(chats.snapshot('agent')[0].messages.length,2);
+  chats.send('agent',id,'Hello');
+  assert.equal(chats.snapshot('user')[0].messages.at(-1).text,'Hello');
+  assert.throws(()=>chats.respondSupport('agent',id,'reject',true));
+});
+test('pending and rejected support requests survive restarts; admin initiated chats are accepted',()=>{
+  const db=openAccounts(':memory:');
+  let chats=new Chats(()=>100);chats.attachSupportStore(db);
+  const id=chats.openMobileSupport('user','agent');
+  chats.send('user',id,'Help');
+  chats=new Chats(()=>200);chats.attachSupportStore(db);
+  assert.equal(chats.supportRequests('agent',true)[0].id,id);
+  chats.respondSupport('agent',id,'reject',true);
+  chats=new Chats(()=>300);chats.attachSupportStore(db);
+  assert.equal(chats.supportRequests('agent',true).length,0);
+  assert.equal(chats.snapshot('agent').length,0);
+  chats.send('user',id,'Again');
+  assert.equal(chats.supportRequests('agent',true).length,1);
+  const initiated=chats.openMobileSupport('another','agent',true);
+  assert.equal(chats.snapshot('agent')[0].id,initiated);
+  assert.equal(chats.supportRequests('agent',true).length,1);
   db.close();
 });

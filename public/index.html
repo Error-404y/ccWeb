@@ -201,10 +201,15 @@
           <div class="panel settings-panel" data-settings-category="help" hidden>
             <h1>Help</h1>
             <button class="settings-row" id="writeSupport" type="button"><svg><use href="#chat"/></svg><span>Write Support</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <a class="settings-row settings-category-link" id="supportRequestsLink" href="/settings/support-requests" hidden><svg><use href="#chat"/></svg><span>Inbox (Requests)</span><strong id="supportRequestCount"></strong><svg class="chevron"><use href="#chevron"/></svg></a>
             <ul class="support-help-notes">
               <li>Contact Support for assistance.</li>
               <li>Support manages chat retention and deletion.</li>
             </ul>
+          </div>
+          <div class="panel settings-panel" data-settings-category="support-requests" hidden>
+            <h1>Inbox (Requests)</h1>
+            <div id="supportRequestsList" class="request-list support-request-list"></div>
           </div>
           <div class="panel settings-panel" data-settings-category="about" hidden>
             <h1>About</h1>

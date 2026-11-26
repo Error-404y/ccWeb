@@ -2278,3 +2278,7 @@ dialog.update-sheet[open] .modal-head h2 {
 
 .support-help-notes { margin: 16px 0 0; padding-inline-start: 20px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .support-help-notes li + li { margin-top: 4px; }
+
+#supportRequestsLink[hidden] { display: none; }
+.support-request-list { max-height: none; }
+.support-request-preview { overflow-wrap: anywhere; margin: 0; }

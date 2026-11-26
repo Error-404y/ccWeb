@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.9.5';
+const installedVersion = window.QZU_APP_VERSION || '0.9.6';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -146,7 +146,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('a[href]');
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const url = new URL(a.href);
-  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/about', '/'].includes(url.pathname)) return;
+  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/about', '/'].includes(url.pathname)) return;
   e.preventDefault();
   if (unlockToken) navigate(url.pathname);
 });
@@ -662,6 +662,7 @@ function lock(reopen = true) {
   renderedRoom = null;
   renderedMessages = [];
   $('contacts').replaceChildren();
+  $('supportRequestsList').replaceChildren();
   $('messages').replaceChildren();
   $('message').value = '';
   $('enterCode').value = '';
@@ -895,7 +896,7 @@ function renderChat() {
   $('attachmentMenu').hidden = Boolean(current?.support || ((current?.encryption || (native && directRoom(current))) && !encryptionReady(current)));
   const encryptionStatus = $('encryptionStatus');
   encryptionStatus.hidden = !current;
-  encryptionStatus.textContent = !current ? '' : directRoom(current) && (native || current.encryption) ? encryptionReady(current) ? '🔒 Verified encrypted chat' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Encryption key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption' : 'Not end-to-end encrypted';
+  encryptionStatus.textContent = !current ? '' : directRoom(current) && (native || current.encryption) ? encryptionReady(current) ? '🔒 Verified encrypted chat' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Encryption key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption' : current.mobileSupport ? 'Server-stored · Not end-to-end encrypted' : 'Not end-to-end encrypted';
   $('threadBadge').hidden = !isAdmin || Boolean(current?.supportAgent);
   $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
@@ -906,8 +907,9 @@ function renderChat() {
   $('memberCount').hidden = !current?.group;
   $('memberCount').textContent = current?.group ? current.memberCount + ' members' : '';
   $('expiryProgress').hidden = !current || current.persistent;
-  $('extensionNotice').hidden = !current?.extension && !current?.deletionRequested;
-  $('extensionNotice').textContent = current?.deletionRequested ? 'Deletion requested · Awaiting support action' : current?.extension?.incoming ? 'Chat extension requested · Review' : 'Waiting for extension approval';
+  const supportNotice = current?.supportStatus==='pending' ? 'Waiting for Support to accept' : current?.supportStatus==='rejected' ? 'Send a message to contact Support again' : '';
+  $('extensionNotice').hidden = !current?.extension && !current?.deletionRequested && !supportNotice;
+  $('extensionNotice').textContent = current?.deletionRequested ? 'Deletion requested · Awaiting support action' : supportNotice || (current?.extension?.incoming ? 'Chat extension requested · Review' : 'Waiting for extension approval');
   $('typingIndicator').hidden = !current?.typing?.length;
   $('typingLabel').textContent = current?.typing?.length ? (current.group ? current.typing.join(', ') : 'Contact') + (current.typing.length === 1 ? ' is typing' : ' are typing') : '';
   renderReply();
@@ -1199,11 +1201,11 @@ async function acknowledgeMessages() {
     const readSet = new Set(entry.read);
     for (let index = 0; index < ids.length; index += 60) {
       const part = ids.slice(index, index + 60);
-      if (size + part.length > 100) break;
+      if (size + part.length > 100 || batch.length >= 51) break;
       batch.push({ id: entry.id, delivered: part.filter(id => deliveredSet.has(id)), read: part.filter(id => readSet.has(id)) });
       size += part.length;
     }
-    if (size >= 100) break;
+    if (size >= 100 || batch.length >= 51) break;
   }
 
   receiptsInFlight = true;
@@ -1253,15 +1255,19 @@ function renderConnect() {
 
 function renderSettings() {
   if (page !== 'settings') return;
-  const category = location.pathname.split('/')[2] || 'main';
+  const requested = location.pathname.split('/')[2] || 'main';
+  const category = requested==='support-requests' && !state.supportAgent ? 'help' : requested;
   for (const panel of document.querySelectorAll('[data-settings-category]')) panel.hidden = panel.dataset.settingsCategory !== category;
-  $('settingsBack').href = category === 'main' ? '/chat' : '/settings';
+  $('settingsBack').href = category === 'main' ? '/chat' : category==='support-requests' ? '/settings/help' : '/settings';
   $('resetPin').disabled = !state.pinState || Boolean(state.resetDelivered) || ['new', 'approved'].includes(state.pinState);
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
   $('writeSupport').disabled = !unlockToken;
-  $('writeSupport').querySelector('span').textContent = state.supportAgent ? 'Support inbox' : 'Write Support';
+  $('supportRequestsLink').hidden = !state.supportAgent;
+  $('supportRequestCount').textContent = state.supportAgent ? String((state.supportRequests || []).length) : '';
+  if(category==='support-requests')renderSupportRequests();
+  else $('supportRequestsList').replaceChildren();
   if (!invisibleSaving) $('invisibleMode').checked = Boolean(state.invisible);
   $('invisibleMode').disabled = invisibleSaving || !unlockToken;
 }
@@ -1307,6 +1313,7 @@ function clearVolatile() {
   acknowledgedRead.clear();
   sequence++;
   state.rooms = [];
+  state.supportRequests = [];
   state.contacts = [];
   state.invite = null;
   selected = null;
@@ -1517,7 +1524,36 @@ $('changeLogin').addEventListener('click', () => {
     info('qzu.', 'PIN changed.');
   });
 });
-function confirmSupport() {
+function renderSupportRequests() {
+  const list=$('supportRequestsList');
+  const requests=state.supportAgent ? state.supportRequests || [] : [];
+  const key=JSON.stringify([requests,privacyMode]);
+  if(list.dataset.key===key && list.childElementCount)return;
+  list.dataset.key=key;
+  list.replaceChildren();
+  if(!requests.length){list.append(el('p','support-help-notes','No pending requests.'));return;}
+  for(const request of requests){
+    const item=el('div','request-item');
+    const label='Contact '+request.id.slice(0,4).toUpperCase();
+    item.append(el('strong','',label),el('span','',fmtTime(request.at)));
+    if(request.deletionRequested)item.append(el('p','','Deletion requested'));
+    item.append(el('p','support-request-preview',privacyMode?'Message hidden':request.preview||'New support request'));
+    const actions=el('div','request-actions');
+    const respond=async action=>{
+      for(const control of actions.querySelectorAll('button'))control.disabled=true;
+      try{
+        await api('support/respond',{id:request.id,action});
+        state.supportRequests=(state.supportRequests||[]).filter(entry=>entry.id!==request.id);
+        renderSettings();
+        await refresh();
+      }catch(error){showError(error);for(const control of actions.querySelectorAll('button'))control.disabled=false;}
+    };
+    actions.append(button('Accept',()=>respond('accept')),button('Reject',()=>respond('reject'),'secondary-button'));
+    item.append(actions);list.append(item);
+  }
+}
+
+async function confirmSupport() {
   if (!unlockToken || accessDue) return;
   if (state.supportAgent) {
     const rooms = state.rooms.filter(room => room.mobileSupport && room.supportAgent && room.expires > serverNow());
@@ -1532,12 +1568,17 @@ function confirmSupport() {
     return;
   }
   if (!state.supportAvailable) return info('Support','Support is currently unavailable. Please try again later.');
-  const yes=button('Yes',async()=>{
-    yes.disabled=true;
-    try {const result=await api('support/open',{});await refresh();closeModal();navigate('/chat');selectRoom(result.id);}
-    catch(error){yes.disabled=false;modalError(error);}
-  });
-  show('Contact Support',[el('p','','Do you want to contact Support through chat?'),el('p','','Stored on the server until deleted. Not end-to-end encrypted.'),yes,button('No',closeModal,'secondary-button')]);
+  const epoch=authEpoch;
+  $('writeSupport').disabled=true;
+  $('supportOpen').disabled=true;
+  try {
+    const result=await api('support/open',{});
+    if(epoch!==authEpoch||!unlockToken)return;
+    await refresh();
+    if(epoch!==authEpoch||!unlockToken)return;
+    closeModal();navigate('/chat');selectRoom(result.id);
+  }catch(error){if(epoch===authEpoch)showError(error);}
+  finally {if(epoch===authEpoch){$('writeSupport').disabled=false;$('supportOpen').disabled=false;}}
 }
 $('supportOpen').addEventListener('click',confirmSupport);
 $('writeSupport').addEventListener('click',confirmSupport);

@@ -266,6 +266,10 @@ app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
   if(!agent||agent.id===req.account.id)return res.status(404).json({error:'Support unavailable.'});
   res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
 });
+app.post('/api/support/respond', guard('support-respond', 40, 60000), (req,res) => {
+  if(req.account.access_plan!=='admin')return res.status(403).json({error:'Support admin required.'});
+  res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true));
+});
 app.post('/api/contacts/open', guard('contacts-open', 30, 60000), (req,res) => res.json({id:chats.openContact(req.account.id,req.body?.id)}));
 app.post('/api/contacts/update', guard('contacts-update', 30, 60000), (req,res) => res.json(chats.updateContact(req.account.id,req.body?.id,req.body||{})));
 app.post('/api/contacts/remove', guard('contacts-remove', 20, 60000), (req,res) => res.json(chats.removeContact(req.account.id,req.body?.id,req.body?.block===true)));
@@ -293,7 +297,7 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Simplified Help screen and functional support inbox.',
+  notes: 'Direct support chat and admin request inbox with accept/reject.',
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
@@ -332,6 +336,7 @@ app.get('/api/state', (req, res) => {
     access: accessStatus(a),
     supportAgent: a.access_plan==='admin',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
+    supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
     rooms: chats.snapshot(a.id),
     contacts: contacts.list(a.id),
     requests: chats.connectionRequests(a.id),
@@ -363,7 +368,7 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   const invite=chats.codes.get(code);
   if(agent&&invite&&!invite.group&&invite.user!==req.account.id){
     if(invite.user===agent.id)return res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
-    if(req.account.id===agent.id)return res.json({id:chats.openMobileSupport(invite.user,agent.id)});
+    if(req.account.id===agent.id)return res.json({id:chats.openMobileSupport(invite.user,agent.id,true)});
   }
   res.json(chats.requestConnection(req.account.id, code, req.body?.nickname));
 });
@@ -519,7 +524,7 @@ app.use(express.static(resolve(root, 'public'), {
   etag: false,
   lastModified: false
 }));
-app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
+app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
 app.use((req, res) => res.status(404).send('Not found'));
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
