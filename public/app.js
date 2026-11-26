@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.11.2';
+const installedVersion = window.QZU_APP_VERSION || '0.12.0';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -121,9 +121,23 @@ function routeName(path) {
   return path === '/settings' || path.startsWith('/settings/') ? 'settings': path === '/connect' ? 'connect': 'chat';
 }
 
+const drafts=new Map(), scrollMemory=new Map(), outbox=new Map();
+let flushingOutbox=false, nextOutboxAttempt=0, reconnectDelay=500;
+function updateConnection(){const node=$('connectionState');const queued=[...outbox.values()].filter(x=>x.room===selected&&!x.accepted),failed=queued.filter(x=>x.failed),syncing=[...outbox.values()].some(x=>x.room===selected&&x.accepted);node.hidden=online&&!queued.length&&!syncing;node.textContent=(!online?'Reconnecting securely…':'')+(queued.length?((!online?' · ':'')+queued.length+' encrypted '+(queued.length===1?'message':'messages')+' waiting'+(failed.length?' · '+failed.length+' failed':'')):syncing?(online?'Syncing messages…':' · Syncing messages…'):'');$('manageOutbox').hidden=!queued.length;}
+function discardRoomQueue(id){for(const [key,item] of outbox)if(item.room===id)outbox.delete(key);}
+function reconcileOutbox(){for(const [key,item] of outbox){const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()||room.messages.some(m=>m.requestId===key))outbox.delete(key);}updateConnection();}
+async function flushOutbox(){if(![...outbox.values()].some(item=>!item.accepted&&!item.failed&&!item.sending)||flushingOutbox||!online||!unlockToken||document.hidden||accessDue||termsPending||suspendedAccount||Date.now()<nextOutboxAttempt||!state.capabilities?.queuedSends)return;flushingOutbox=true;const epoch=authEpoch;
+try{for(const [key,item] of outbox){if(epoch!==authEpoch||!unlockToken||!online||document.hidden||accessDue||termsPending||suspendedAccount)break;if(item.failed||item.sending||item.accepted)continue;const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()){outbox.delete(key);continue;}if(!encryptionReady(room))continue;if(roomKeys.get(room.id)?.context?.code!==item.binding){item.failed=true;item.error='Conversation key changed. Discard this message.';continue;}item.sending=true;try{await api('encryption/message',item.payload);if(epoch!==authEpoch)break;item.accepted=true;}catch(error){if(epoch!==authEpoch)break;if(error.status>=400&&error.status<500&&![408,429].includes(error.status)){item.failed=true;item.error=errorMessage(error);}else{nextOutboxAttempt=Date.now()+3000;break;}}finally{item.sending=false;}}}finally{flushingOutbox=false;updateConnection();if(unlockToken&&page==='chat'&&!document.hidden)renderChat();}}
+function markDisconnected(){online=false;liveRevision='';updateConnection();}
+
+const motionAllowed=()=>!matchMedia('(prefers-reduced-motion: reduce)').matches;
+function motion(node,cls){if(!node||!motionAllowed()||document.hidden)return;node.classList.remove(cls);void node.offsetWidth;node.classList.add(cls);node.addEventListener('animationend',event=>{if(event.target===node)node.classList.remove(cls);},{once:true});}
+function haptic(){if(native&&!document.hidden)devicePlugin.haptic().catch(()=>{});}
+function rememberRoom(){if(typeof selected!=='string'||page!=='chat'||!unlockToken)return;const field=$('message'),view=$('messages');if(field.value)drafts.set(selected,field.value);else drafts.delete(selected);if(renderedRoom===selected&&(!mobile.matches||mobileOpen))scrollMemory.set(selected,{top:view.scrollTop,bottom:view.scrollHeight-view.scrollTop-view.clientHeight<100});}
+function restoreDraft(id){$('message').value=drafts.get(id)||'';}
 function updatePages() {
   updateNavigation();
-  for (const name of ['chat', 'settings', 'connect']) $(name + 'Page').hidden = !unlockToken || accessDue || termsPending || suspendedAccount || name !== page;
+  for (const name of ['chat', 'settings', 'connect']) {const node=$(name+'Page'),hidden=!unlockToken||accessDue||termsPending||suspendedAccount||name!==page;if(node.hidden&&!hidden)motion(node,'motion-page');node.hidden=hidden;}
   $('loading').hidden = Boolean(unlockToken);
   $('loading').classList.toggle('locked', !unlockToken);
 }
@@ -132,6 +146,7 @@ function navigate(path, push = true) {
   if (push) history.pushState(null, '', path);
   const nextPage = routeName(location.pathname);
   if (page !== nextPage) {
+    rememberRoom();
     resetOnce();
     closeModal();
     stopTyping();
@@ -154,7 +169,7 @@ document.addEventListener('click', e => {
   const url = new URL(a.href);
   if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/'].includes(url.pathname)) return;
   e.preventDefault();
-  if (unlockToken) {if(a.dataset.tab==='chat'){mobileOpen=false;selected=null;renderedRoom=null;}navigate(url.pathname);}
+  if (unlockToken) {if(a.dataset.tab==='chat'){rememberRoom();mobileOpen=false;selected=null;renderedRoom=null;$('message').value='';}navigate(url.pathname);}
 });
 window.addEventListener('popstate', () => navigate(location.pathname, false));
 const fmtTime = ms => new Intl.DateTimeFormat(undefined, {
@@ -299,7 +314,7 @@ async function api(path, data, quiet = false) {
     lock();
     throw new Error('Locked.');
   }
-  if (!res.ok) throw new Error(result.error || 'Try again.');
+  if (!res.ok) throw Object.assign(new Error(result.error || 'Try again.'),{status:res.status});
   return result;
 }
 
@@ -619,6 +634,7 @@ function lock(reopen = true) {
   }
   stopCheckout();
   accessDue = false;termsPending=false;suspendedAccount=false;
+  drafts.clear();scrollMemory.clear();outbox.clear();nextOutboxAttempt=0;updateConnection();
   authEpoch++;
   sequence++;
   const old = unlockToken;
@@ -755,18 +771,19 @@ if (native) {
 
 function selectRoom(id, open = true) {
   if (selected !== id) {
+    rememberRoom();
     if (mediaRoom) closeModal();
     resetOnce();
     stopTyping();
     clearReply();
     revealedMessages.clear();
-    $('message').value = '';
+    restoreDraft(id);
     $('send').disabled = true;
   }
   selected = id;
   mobileOpen = open;
   renderedRoom = null;
-  renderChat();updateNavigation();void acknowledgeMessages();
+  updateConnection();renderChat();if(open&&mobile.matches)motion($('thread'),'motion-thread');updateNavigation();void acknowledgeMessages();
 }
 
 function identityChanged(room) {
@@ -949,19 +966,36 @@ function renderChat() {
   const container = $('messages');
   const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.deleted, message.reactions, message.reply, message.burnSeconds, message.burnAt, message.encryptedMedia, current.encryptionStatus]));
   const sameRoom = renderedRoom === current.id;
-  const appendOnly = sameRoom && renderedMessages.length <= ids.length &&
-    renderedMessages.every((id, index) => ids[index] === id);
 
-  const follow = !sameRoom || container.scrollHeight - container.scrollTop - container.clientHeight < 100 ||
-    (ids.length > renderedMessages.length && current.messages.at(-1)?.mine);
+  const previousTop=container.scrollTop, remembered=scrollMemory.get(current.id);
+  const follow = (!sameRoom&&(!remembered||remembered.bottom)) || (sameRoom&&container.scrollHeight - container.scrollTop - container.clientHeight < 100 ||
+    (ids.length > renderedMessages.length && current.messages.at(-1)?.mine));
 
-  if (!appendOnly) container.replaceChildren();
-
-  const first = appendOnly ? renderedMessages.length : 0;
-
-  for (const message of current.messages.slice(first)) {
-    container.append(renderMessage(current, message));
+  if (!sameRoom) container.replaceChildren();
+  const oldRows=new Map([...container.children].map(node=>[node.id,node]));
+  const keep=new Set();
+  current.messages.forEach((message,index)=>{
+    const id='message-'+message.id, old=oldRows.get(id);let row=old;
+    if(!old||!sameRoom||renderedMessages[index]!==ids[index]){
+      row=renderMessage(current,message);
+      if(old){const before=old.querySelector('.message-reactions')?.textContent;if(before!==row.querySelector('.message-reactions')?.textContent)motion(row.querySelector('.message-reactions'),'motion-reaction');old.replaceWith(row);}
+      else if(sameRoom)motion(row,'motion-message');
+    }
+    keep.add(row);if(container.children[index]!==row)container.insertBefore(row,container.children[index]||null);
+  });
+  for(const [key,item] of outbox){if(item.room!==current.id)continue;
+    let row=oldRows.get('pending-'+key);const context=roomKeys.get(current.id)?.context;
+    const safe=Boolean(!privacyMode&&encryptionReady(current)&&context?.code===item.binding);
+    if(!row||row.dataset.previewAllowed!==String(safe)){
+      const epoch=authEpoch;row=el('div','message-row mine pending-row');row.id='pending-'+key;row.dataset.previewAllowed=String(safe);
+      const bubble=el('div','bubble'),content=el('div','message-text',safe?'Encrypted message…':'Message hidden'),footer=el('div','message-footer');
+      footer.append(el('span','bubble-time',fmtTime(item.at)),el('span','pending-status'));bubble.append(content,footer);row.append(bubble);
+      if(safe)QzuCrypto.decrypt(context,item.payload.cipher,true).then(text=>{if(row.isConnected&&epoch===authEpoch&&unlockToken&&selected===current.id&&!privacyMode&&outbox.get(key)===item&&roomKeys.get(current.id)?.context===context)content.textContent=text;}).catch(()=>{});
+      if(sameRoom&&!oldRows.has(row.id))motion(row,'motion-message');
+    }
+    row.querySelector('.pending-status').textContent=item.failed?'! Failed':item.accepted?'✓ Sent':'◷ Waiting';keep.add(row);if(row.parentNode!==container)container.append(row);
   }
+  for(const node of [...container.children])if(!keep.has(node))node.remove();
 
   for (const message of current.messages) {
     if (!message.mine) continue;
@@ -972,7 +1006,7 @@ function renderChat() {
 
   renderedRoom = current.id;
   renderedMessages = ids;
-  if (follow) container.scrollTop = container.scrollHeight;
+  if (follow) container.scrollTop = container.scrollHeight;else container.scrollTop=sameRoom?previousTop:remembered?.top||0;
 }
 
 function updateExpiry(room) {
@@ -986,10 +1020,11 @@ function updateExpiry(room) {
 }
 
 function updateStatus(node, status) {
+  const changed=Boolean(node.dataset.status&&node.dataset.status!==status);
   node.dataset.status = status;
   node.title = status === 'read' ? 'Read' : status === 'delivered' ? 'Delivered' : 'Sent';
   node.setAttribute('aria-label', node.title);
-  node.replaceChildren(svg(status === 'sent' ? 'check' : 'doubleCheck'));
+  node.replaceChildren(svg(status === 'sent' ? 'check' : 'doubleCheck'));if(changed)motion(node,'motion-tick');
 }
 
 function attachMessageGesture(bubble,reply,actions){
@@ -1125,7 +1160,7 @@ function stopTyping() {
 
 function reportTyping() {
   const room = state.rooms.find(room => room.id === selected);
-  if (!unlockToken || state.invisible || page !== 'chat' || !room || room.readOnly || !$('message').value.trim()) {
+  if (!online || !unlockToken || state.invisible || page !== 'chat' || !room || room.readOnly || !$('message').value.trim()) {
     stopTyping();
     return;
   }
@@ -1141,7 +1176,7 @@ function canReadCurrent() {
 }
 
 async function acknowledgeMessages() {
-  if (receiptsInFlight || !unlockToken || document.hidden) return;
+  if (receiptsInFlight || !online || !unlockToken || document.hidden) return;
   const epoch = authEpoch;
   const entries = [];
   for (const room of state.rooms) {
@@ -1193,11 +1228,13 @@ async function acknowledgeMessages() {
 
 }
 
+let inviteMotionKey='',inviteMotionDuration=1;
+function updateInviteMotion(inv,now=serverNow()){const key=inv?.code+':'+inv?.expires;if(key!==inviteMotionKey){inviteMotionKey=key;inviteMotionDuration=Math.max(1,(inv?.expires||now)-now);}const remaining=inv?Math.max(0,inv.expires-now):0;$('inviteProgress').max=inviteMotionDuration;$('inviteProgress').value=remaining;$('inviteTimer').textContent=inv?clock(remaining):'Generating code…';}
 function renderConnect() {
   if (page !== 'connect' || !unlockToken) return;
   const inv = state.invite && state.invite.expires > serverNow() ? state.invite: null;
   $('inviteCode').textContent = inv?.code || '– – – – – –';
-  $('inviteTimer').textContent = inv ? clock(inv.expires - serverNow()) : 'Generating code…';
+  updateInviteMotion(inv);
   $('copyCode').disabled = !inv;
   const key = inv ? inv.code + ':' + inv.expires: '';
   if (key !== qrKey && key !== qrPending) {
@@ -1217,7 +1254,7 @@ function renderConnect() {
       qrKey = key;
       $('qrImage').src = image;
       $('qrImage').hidden = false;
-      $('qrPlaceholder').setAttribute('hidden', '');
+      $('qrPlaceholder').setAttribute('hidden', '');motion($('qrBox'),'motion-qr');
     }).catch(() => {}).finally(() => {
       if (qrPending === key) qrPending = '';
     });
@@ -1235,7 +1272,7 @@ function renderSettings() {
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
   $('backgroundPin').checked=backgroundPin;$('backgroundPin').disabled=!native||!unlockToken||backgroundPinSaving;
-  $('pushStatus').textContent=state.push?.registered?'On':native&&window.Capacitor.getPlatform()==='ios'?'In-app':pushAvailable()?'Off':'Unavailable';
+  $('pushStatus').textContent=state.push?.registered&&!pushOptedOut()?'On':native&&window.Capacitor.getPlatform()==='ios'?'In-app':pushAvailable()?(pushOptedOut()?'Off':'Permission / setup'):'Unavailable';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('adminInterface').hidden=!state.supportAgent;
@@ -1252,7 +1289,7 @@ function renderSettings() {
 }
 
 function render() {
-  updateNavigation();renderChat();
+  updateConnection();updateNavigation();renderChat();
   renderConnect();
   renderSettings();
 }
@@ -1281,14 +1318,14 @@ function purgeExpired() {
     $('chatTimer').textContent = supportClock(room,now);
     updateExpiry(room);
   }
-  if (page === 'connect' && state.invite) $('inviteTimer').textContent = clock(state.invite.expires - now);
+  if (page === 'connect' && state.invite) updateInviteMotion(state.invite,now);
 }
 
 function scrubRemovedRooms(previous,next,clearKeys=true){
   const retained=new Map(next.map(room=>[room.id,room]));
   for(const room of previous){
     const current=retained.get(room.id);
-    if(!current&&clearKeys){roomKeys.delete(room.id);roomKeyJobs.delete(room.id);if(native)roomVault('remove',room.id).catch(()=>{});if(mediaRoom===room.id)closeModal();}
+    if(!current&&clearKeys){discardRoomQueue(room.id);drafts.delete(room.id);scrollMemory.delete(room.id);roomKeys.delete(room.id);roomKeyJobs.delete(room.id);if(native)roomVault('remove',room.id).catch(()=>{});if(mediaRoom===room.id)closeModal();}
     const messages=new Map((current?.messages||[]).map(message=>[message.id,message]));
     for(const message of room.messages){
       if(!messages.has(message.id)||messages.get(message.id).deleted){message.text='';message.cipher=null;message.reply=null;message.replyCipher=null;message.encryptedReactions=[];message.reactions=[];message.decrypted=false;revealedMessages.delete(message.id);acknowledgedDelivery.delete(message.id);acknowledgedRead.delete(message.id);}
@@ -1297,6 +1334,7 @@ function scrubRemovedRooms(previous,next,clearKeys=true){
   }
 }
 function clearVolatile() {
+  drafts.clear();scrollMemory.clear();outbox.clear();nextOutboxAttempt=0;updateConnection();
   scrubRemovedRooms(state.rooms,[]);
   liveRevision='';
   roomKeys.clear();roomKeyJobs.clear();if(native)clearPrivateKeys().catch(()=>{});
@@ -1482,14 +1520,14 @@ async function refresh(live=false) {
   const ticket = ++sequence;
   const data = await api(live&&liveRevision?'state/live?since='+liveRevision:'state');
   if (ticket !== sequence || document.hidden || !unlockToken) return;
-  online = true;
+  online = true;reconnectDelay=500;updateConnection();
   offset = data.now - Date.now();
   if(!data.unchanged&&data.termsAccepted!==true){termsPending=true;updatePages();showTermsGate(data.termsVersion||1);return;}
-  if(data.unchanged){liveRevision=data.revision;if(state.rooms.some(r=>directRoom(r)&&r.encryption&&r.encryptionStatus==='error')&&Date.now()>=nextCryptoRetry){liveRevision='';nextCryptoRetry=Date.now()+5000;}purgeExpired();maybePromptUpdate();void acknowledgeMessages();replenishPrekeys(state);return;}
+  if(data.unchanged){liveRevision=data.revision;void flushOutbox();if(state.rooms.some(r=>directRoom(r)&&r.encryption&&r.encryptionStatus==='error')&&Date.now()>=nextCryptoRetry){liveRevision='';nextCryptoRetry=Date.now()+5000;}purgeExpired();maybePromptUpdate();void acknowledgeMessages();restorePushRegistration();replenishPrekeys(state);return;}
   await prepareEncryptedRooms(data,ticket);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   scrubRemovedRooms(state.rooms,data.rooms);
-  const previouslyKnown=new Set(state.rooms.flatMap(r=>r.messages.map(m=>m.id)));const newActivity=Boolean(state.now)&&data.rooms.some(r=>!r.contact?.muted&&(r.id!==selected||!canReadCurrent())&&r.messages.some(m=>m.unread&&!previouslyKnown.has(m.id)));state = data;
+  const previouslyKnown=new Set(state.rooms.flatMap(r=>r.messages.map(m=>m.id)));const newActivity=Boolean(state.now)&&data.rooms.some(r=>!r.contact?.muted&&(r.id!==selected||!canReadCurrent())&&r.messages.some(m=>m.unread&&!previouslyKnown.has(m.id)));state = data;reconcileOutbox();
   if(newActivity&&!document.hidden)showActivityBanner();
   liveRevision=data.revision||'';
   const keep=state.rooms.filter(directRoom).map(r=>r.id).sort();const sig=JSON.stringify(keep);if(native&&sig!==keyPruneSignature){keyPruneSignature=sig;roomVault('prune','',{rooms:keep}).catch(()=>{if(keyPruneSignature===sig)keyPruneSignature='';});}
@@ -1510,7 +1548,7 @@ async function refresh(live=false) {
   purgeExpired();
   acknowledgeMessages();
   maybePromptUpdate();
-  restorePushRegistration();replenishPrekeys(state);
+  restorePushRegistration();replenishPrekeys(state);void flushOutbox();
   }finally{if(!live)manualRefreshes--;}
 }
 
@@ -1716,6 +1754,7 @@ $('qzuInfoOpen').addEventListener('click', () => {
 });
 $('qzuInfoBack').addEventListener('click', () => $('backToChats').click());
 $('backToChats').addEventListener('click', () => {
+  rememberRoom();
   resetOnce();
   stopTyping();
   clearReply();
@@ -1725,7 +1764,7 @@ $('backToChats').addEventListener('click', () => {
   renderedRoom = null;
   $('message').value = '';
   $('send').disabled = true;
-  renderChat();
+  updateConnection();renderChat();motion($('chatPage').querySelector('.sidebar'),'motion-page');
 });
 mobile.addEventListener('change', () => {
   if (!mobile.matches) mobileOpen = false;
@@ -1789,16 +1828,25 @@ async function sendMessage() {
       if (epoch !== authEpoch || document.hidden || !unlockToken || selected !== id || room.expires <= serverNow()) throw Error('Chat unavailable.');
       const replyCipher=state.capabilities?.encryptedExtras&&replyTarget?.roomId===id?await QzuCrypto.encryptReply(roomKeys.get(id).context,cipher.iv,replyTarget.id):null;
       if(epoch!==authEpoch||!unlockToken||document.hidden||selected!==id)throw Error('Chat unavailable.');
+      if(state.capabilities?.queuedSends){
+        if(outbox.size>=30)throw Error('Outgoing queue is full. Wait for messages to send.');
+        const requestId=crypto.randomUUID(),payload={id,cipher,requestId,...(replyCipher?{replyCipher}:{})};
+        outbox.set(requestId,{room:id,payload,binding:roomKeys.get(id).context.code,at:Date.now(),failed:false,sending:false});
+        if(selected===id&&$('message').value.trim()===text){$('message').value='';drafts.delete(id);resetOnce();clearReply();stopTyping();}
+        haptic();updateConnection();renderChat();$('messages').scrollTop=$('messages').scrollHeight;void flushOutbox();return;
+      }
+      if(!online)throw Error('Reconnect to send this message.');
       await api('encryption/message', { id, cipher,...(replyCipher?{replyCipher}:{}) });
     } else {
+      if(!online)throw Error('Reconnect to send this message. Your draft is kept.');
       await api('message', { id, text, once: viewOnce, burnSeconds, replyTo: burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
     }
 
     if (epoch !== authEpoch) return;
 
     if (selected === id && $('message').value.trim() === text) {
-      $('message').value = '';
-      resetOnce();
+      $('message').value = '';drafts.delete(id);
+      resetOnce();haptic();
       clearReply();
       stopTyping();
     }
@@ -1814,8 +1862,9 @@ async function sendMessage() {
   }
 }
 
+$('manageOutbox').addEventListener('click',()=>{const entries=[...outbox.entries()].filter(([,item])=>item.room===selected&&!item.accepted);const controls=[el('p','','Encrypted outgoing messages are kept in memory until sent, locked or expired. Cancelling an already accepted message does not delete it from the chat.')];for(const [key,item] of entries){const row=el('div','request-item');row.append(el('span','',item.failed?item.error:'Waiting to send'));if(item.failed)row.append(button('Retry',()=>{item.failed=false;nextOutboxAttempt=0;closeModal();void flushOutbox();},'secondary-button'));const cancel=button('Discard',()=>{if(item.sending||item.accepted)return;outbox.delete(key);closeModal();updateConnection();renderChat();},'secondary-button');cancel.disabled=item.sending||item.accepted;row.append(cancel);controls.push(row);}controls.push(button('Close',closeModal,'secondary-button'));show('Outgoing messages',controls);});
 $('message').addEventListener('input', () => {
-  updateSendButton();
+  rememberRoom();updateSendButton();
   reportTyping();
 });
 $('cancelReply').addEventListener('click', clearReply);
@@ -1913,7 +1962,7 @@ $('newCode').addEventListener('click', async() => {
   $('newCode').disabled = true;
   try {
     await api('invite', {minutes:Number($('inviteLifetime').value)});
-    await refresh();
+    haptic();await refresh();
   } catch (e) {
     showError(e);
   } finally {
@@ -2049,7 +2098,7 @@ $('scanCode').addEventListener('click', async() => {
             if (code) {
               closeModal();
               $('enterCode').value = code;
-              $('enterCode').focus();
+              haptic();motion($('enterCode'),'motion-tick');$('enterCode').focus();
               return;
             }
           }
@@ -2181,7 +2230,7 @@ if (native) {
   });
 }
 window.addEventListener('offline', () => {
-  online=false;if(unlockToken&&(!native||backgroundPin))lock();
+  markDisconnected();
 });
 window.addEventListener('online', () => {
   resumeApp();
@@ -2206,11 +2255,12 @@ async function loop() {
     const epoch=authEpoch;
     try {
       await refresh(Boolean(state.capabilities?.live));
-    } catch {
-      if(epoch===authEpoch&&unlockToken&&!accessDue){online=false;if(!native||backgroundPin)lock();}
+    } catch(error) {
+      if([401,403].includes(error.status)&&epoch===authEpoch&&unlockToken){lock();}
+      else if(epoch===authEpoch&&unlockToken&&!accessDue){markDisconnected();reconnectDelay=Math.min(10000,reconnectDelay*2);}
     }
   }
-  setTimeout(loop, unlockToken&&state.capabilities?.live?500:1500);
+  setTimeout(loop,!online?reconnectDelay:unlockToken&&state.capabilities?.live?500:1500);
 }
 updatePages();
 const boot=$('bootSplash');
@@ -2271,7 +2321,7 @@ $('connectionRequests').addEventListener('click', () => {
 async function reactTo(room, message, emoji) {
   try {
     if(room.encryption){if(!state.capabilities?.encryptedExtras||!encryptionReady(room))throw Error('Encryption unavailable.');const epoch=authEpoch;const value=message.reactions?.some(r=>r.mine&&r.emoji===emoji)?'-':emoji;const cipher=await QzuCrypto.encryptReaction(roomKeys.get(room.id).context,message.id,value);if(epoch!==authEpoch||!unlockToken||document.hidden)throw Error('Locked.');await api('encryption/reaction',{id:room.id,messageId:message.id,cipher});}else await api('message/react', { id: room.id, messageId: message.id, emoji });
-    closeModal();
+    haptic();closeModal();
     await refresh();
   } catch (error) { showError(error); }
 }
@@ -2805,51 +2855,61 @@ $('updateCenter').addEventListener('click', async () => {
     show('Update center', [el('strong', '', 'You are up to date'), el('p', '', 'Installed: ' + installedVersion + ' · Server release: ' + release.latest),changes, button('Close', closeModal)]);
   } catch (error) { showError(error); }
 });
-let pushPlugin=null,pushListenersReady=false;
+let pushPlugin=null,pushListenersReady=false,pushRetryAt=0,pushRegisterJob=null,pushRemovalJob=null;
+function pushOptedOut(){try{return localStorage.getItem('qzu-push-opt-out')==='1';}catch{return false;}}
+function shouldPromptPush(){try{return localStorage.getItem('qzu-push-permission-requested')!=='1';}catch{return false;}}
+function notePushPrompt(){try{localStorage.setItem('qzu-push-permission-requested','1');}catch{}}
 function pushAvailable(){return Boolean(state.push?.available&&(!state.push.platforms||state.push.platforms.includes(window.Capacitor?.getPlatform?.())));}
 function getPushPlugin(){
   if(!native||!window.Capacitor.isPluginAvailable('PushNotifications'))return null;
   if(!pushPlugin)pushPlugin=window.Capacitor.registerPlugin('PushNotifications');
   return pushPlugin;
 }
-async function registerPrivatePush(interactive=false){
+async function registerPrivatePush(interactive=false,requestPermission=interactive){
+  if(pushRegisterJob)return pushRegisterJob;
+  const job=registerPrivatePushOnce(interactive,requestPermission);pushRegisterJob=job;
+  try{return await job;}finally{if(pushRegisterJob===job)pushRegisterJob=null;}
+}
+async function registerPrivatePushOnce(interactive,requestPermission){
   const plugin=getPushPlugin(),epoch=authEpoch;
   if(!plugin||!pushAvailable())throw Error('Push delivery is not available on this device yet.');
   if(!pushListenersReady){
     await plugin.addListener('registration',async({value})=>{
       const job=pushRegistration;
-      if(!job||job.epoch!==authEpoch||!unlockToken)return;
+      if(!job||job.epoch!==authEpoch||!unlockToken||pushOptedOut())return;
       pushRegistration=null;
       try{await api('push/register',{platform:window.Capacitor.getPlatform(),token:value});await refresh();if(job.interactive)info('Private notifications','Enabled. Message content is never included.');}
-      catch(error){if(job.interactive)showError(error);}
+      catch(error){pushEpoch=-1;pushRetryAt=Date.now()+15000;if(job.interactive)showError(error);}
     });
-    await plugin.addListener('registrationError',()=>{const job=pushRegistration;pushRegistration=null;if(job?.interactive&&job.epoch===authEpoch)info('Private notifications','Registration failed. Check device configuration.');});
+    await plugin.addListener('registrationError',()=>{const job=pushRegistration;pushRegistration=null;pushEpoch=-1;pushRetryAt=Date.now()+15000;if(job?.interactive&&job.epoch===authEpoch)info('Private notifications','Registration failed. Check device configuration.');});
     await plugin.addListener('pushNotificationReceived',()=>{if(unlockToken&&!document.hidden)refresh().catch(()=>{});});
     pushListenersReady=true;
   }
   if(window.Capacitor.getPlatform()==='android')await plugin.createChannel({id:'qzu_messages',name:'Messages',description:'New private messages',importance:5,visibility:0,vibration:true,sound:'default'}).catch(()=>{});
   let permission=await plugin.checkPermissions();
-  if(interactive&&permission.receive!=='granted')permission=await plugin.requestPermissions();
+  if(requestPermission&&permission.receive!=='granted'){notePushPrompt();permission=await plugin.requestPermissions();}
   if(permission.receive!=='granted'){if(interactive)throw Error('Notification permission is disabled.');return;}
-  if(epoch!==authEpoch||!unlockToken||document.hidden)return;
-  pushRegistration={epoch:authEpoch,interactive};pushEpoch=authEpoch;
-  try{await plugin.register();}catch(error){pushRegistration=null;throw error;}
+  if(epoch!==authEpoch||!unlockToken||document.hidden||pushOptedOut())return;
+  const pending={epoch:authEpoch,interactive};pushRegistration=pending;pushEpoch=authEpoch;
+  setTimeout(()=>{if(pushRegistration===pending){pushRegistration=null;pushEpoch=-1;pushRetryAt=Date.now()+15000;if(interactive&&epoch===authEpoch&&unlockToken)info('Private notifications','Registration timed out. Try again.');}},15000);
+  try{await plugin.register();}catch(error){pushRegistration=null;pushEpoch=-1;pushRetryAt=Date.now()+15000;throw error;}
 }
+async function disablePrivatePush(){if(pushRemovalJob)return pushRemovalJob;const job=(async()=>{pushRegistration=null;pushEpoch=authEpoch;await api('push/remove',{});try{await getPushPlugin()?.unregister?.();}catch{}})();pushRemovalJob=job;try{await job;}finally{if(pushRemovalJob===job)pushRemovalJob=null;}}
 function restorePushRegistration(){
-  let optedOut=false;try{optedOut=localStorage.getItem('qzu-push-opt-out')==='1';}catch{}
-  if(!optedOut&&native&&window.Capacitor.getPlatform()==='android'&&pushAvailable()&&pushEpoch!==authEpoch&&getPushPlugin()){
-    pushEpoch=authEpoch;registerPrivatePush(false).catch(()=>{});
+  if(pushOptedOut()){if(state.push?.registered&&!pushRemovalJob&&Date.now()>=pushRetryAt){pushRetryAt=Date.now()+15000;disablePrivatePush().catch(()=>{});}return;}
+  if(!pushOptedOut()&&native&&window.Capacitor.getPlatform()==='android'&&pushAvailable()&&pushEpoch!==authEpoch&&!pushRegisterJob&&Date.now()>=pushRetryAt&&getPushPlugin()&&unlockToken&&!document.hidden){
+    pushEpoch=authEpoch;registerPrivatePush(false,shouldPromptPush()).catch(()=>{pushEpoch=-1;pushRetryAt=Date.now()+15000;});
   }
 }
 $('privateNotifications').addEventListener('click',()=>{
   if(!unlockToken)return;
   const registered=state.push?.registered;
-  const controls=[el('p','','Only generic activity alerts. No sender, chat or message details.')];
+  const controls=[el('p','','Only generic activity alerts. No sender, chat or message details.')];if(native&&window.Capacitor.getPlatform()==='android'&&!pushOptedOut())controls.push(el('p','','Message notifications are enabled by default. Allow notifications in Android settings if prompted.'));
   if(native&&window.Capacitor.getPlatform()==='ios'){
     controls.push(el('p','','Internal notifications work in the app. Remote notifications require Apple Push Notification service.'),button('Enable iOS notification permissions',async()=>{try{const count=state.rooms.reduce((n,r)=>n+unreadCount(r),0);const result=await devicePlugin.setBadge({count,requestPermission:true});info('Notifications',result.granted?'Enabled.':'Permission not granted.');}catch(error){modalError(error);}}),button('Test local notification',async event=>{const control=event.currentTarget,epoch=authEpoch;control.disabled=true;control.textContent='Scheduling test…';let timer;try{const result=await Promise.race([devicePlugin.testLocalNotification(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Native notification test timed out. Rebuild the iOS app.')),12000);})]);if(!result?.scheduled)throw Error('Native test was not confirmed. Install the latest iOS build.');if(epoch===authEpoch&&unlockToken)info('Notifications','Local test scheduled for 5 seconds. Stay here or return to the Home Screen. Alerts: '+(result.alerts?'enabled':'disabled')+' · Sounds: '+(result.sounds?'enabled':'disabled')+' · Badges: '+(result.badges?'enabled':'disabled')+'.');}catch(error){if(epoch===authEpoch)modalError(error);}finally{clearTimeout(timer);control.disabled=false;control.textContent='Test local notification';}},'secondary-button'));
   }
-  if(registered)controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'),button('Turn off',async()=>{try{try{localStorage.setItem('qzu-push-opt-out','1');}catch{}pushRegistration=null;pushEpoch=authEpoch;await api('push/remove',{});try{await getPushPlugin()?.unregister?.();}catch{}closeModal();await refresh();}catch(error){modalError(error);}}));
-  else if(pushAvailable()&&getPushPlugin())controls.push(button('Enable',async()=>{try{try{localStorage.removeItem('qzu-push-opt-out');}catch{}await registerPrivatePush(true);}catch(error){modalError(error);}}));
+  if(registered&&!pushOptedOut())controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'),button('Turn off',async()=>{try{try{localStorage.setItem('qzu-push-opt-out','1');}catch{}await disablePrivatePush();closeModal();await refresh();}catch(error){modalError(error);}}));
+  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{if(pushRemovalJob)await pushRemovalJob;try{localStorage.removeItem('qzu-push-opt-out');}catch{}pushRetryAt=0;await registerPrivatePush(true);}catch(error){modalError(error);}}));if(!pushOptedOut())controls.push(button('Turn off',async()=>{try{localStorage.setItem('qzu-push-opt-out','1');await disablePrivatePush();closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button'));}
   else if(!native||window.Capacitor.getPlatform()!=='ios')controls.push(el('p','','Push delivery is not configured yet.'));
   if(state.push?.diagnostic)controls.push(el('p','','Last push result: '+state.push.diagnostic.result));
   controls.push(button('Close',closeModal,'secondary-button'));show('Private notifications',controls);
