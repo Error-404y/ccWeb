@@ -620,7 +620,7 @@ function lock(reopen = true) {
   authEpoch++;
   sequence++;
   const old = unlockToken;
-  unlockToken = null;roomKeys.clear();roomKeyJobs.clear();lastBadge=-1;clearTimeout(activityTimer);$('activityBanner').hidden=true;
+  unlockToken = null;roomKeys.clear();roomKeyJobs.clear();keyPruneSignature='';nextCryptoRetry=0;lastBadge=-1;clearTimeout(activityTimer);$('activityBanner').hidden=true;
   pendingUpdate = null;
   nextUpdateCheck = 0;
   sendingMessage = false;
@@ -810,7 +810,7 @@ let lastBadge=-1,activityTimer=null;
 function syncBadge(count){if(!native||window.Capacitor.getPlatform()!=='ios'||lastBadge===count)return;lastBadge=count;devicePlugin.setBadge({count}).catch(()=>{lastBadge=-1;});}
 function showActivityBanner(){const banner=$('activityBanner');banner.textContent='New message';banner.hidden=false;clearTimeout(activityTimer);activityTimer=setTimeout(()=>{banner.hidden=true;},2400);}
 function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m.unread===true).length;}
-function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+(state.official?.unread?1:0);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
+function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+(state.official?.unread?1:0);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
   $('supportOpen').hidden=!state.supportAvailable || state.rooms.some(room=>room.mobileSupport&&!room.supportAgent&&room.expires>serverNow());
@@ -1166,13 +1166,13 @@ async function acknowledgeMessages() {
     const ids = [...new Set([...entry.delivered, ...entry.read, ...entry.seen])];
     const deliveredSet = new Set(entry.delivered);
     const readSet = new Set(entry.read),seenSet=new Set(entry.seen);
-    for (let index = 0; index < ids.length; index += 60) {
-      const part = ids.slice(index, index + 60);
-      if (size + part.length > 100 || batch.length >= 51) break;
+    for (let index = 0; index < ids.length; index += 40) {
+      const part = ids.slice(index, index + Math.min(40,75-size));
+      if (!part.length || batch.length >= 51) break;
       batch.push({ id: entry.id, delivered: part.filter(id => deliveredSet.has(id)), read: part.filter(id => readSet.has(id)),seen:part.filter(id=>seenSet.has(id)) });
       size += part.length;
     }
-    if (size >= 100 || batch.length >= 51) break;
+    if (size >= 75 || batch.length >= 51) break;
   }
 
   receiptsInFlight = true;
@@ -1184,6 +1184,7 @@ async function acknowledgeMessages() {
       entry.read.forEach(id => acknowledgedRead.add(id));
       const room=state.rooms.find(r=>r.id===entry.id);for(const message of room?.messages||[])if(entry.seen.includes(message.id))message.unread=false;
     }
+    updateNavigation();if(page==='chat')renderChat();
   } catch {} finally {
     if (epoch === authEpoch) receiptsInFlight = false;
   }
@@ -1332,7 +1333,7 @@ async function localRoomKey(room,until){
   let value,local;
   if(saved?.value){value=JSON.parse(saved.value);local=await QzuCrypto.restore(value);if(Math.abs(value.until-until)>5000)await roomVault('save',room.id,{value:JSON.stringify({...value,until})});}
   else if(room.encryption.own)return null;
-  else local=await QzuCrypto.generate(room.id,message=>devicePlugin.sign({message}),data=>roomVault('save',room.id,{value:JSON.stringify({...data,until})}));
+  else local=await QzuCrypto.generate(room.id,message=>devicePlugin.sign({message}),data=>{if(epoch!==authEpoch||!unlockToken)throw Error('Locked.');return roomVault('save',room.id,{value:JSON.stringify({...data,until})});});
   if(epoch!==authEpoch||!unlockToken)throw Error('Locked.');
   local.until=until;roomKeys.set(room.id,local);return local;
 }
@@ -1341,24 +1342,26 @@ function dropExpiredKeys(rooms = null) {
   for (const [id, local] of roomKeys) if (local.until <= now || (rooms && !rooms.some(room => room.id === id))) {roomKeys.delete(id);roomKeyJobs.delete(id);if(native)roomVault('remove',id).catch(()=>{});}
 }
 setInterval(dropExpiredKeys, 1000);
-async function prepareEncryptedRooms(data) {
-  const epoch=authEpoch;dropExpiredKeys(data.rooms);
-  if(native&&epoch===authEpoch&&unlockToken)await roomVault('prune','',{rooms:data.rooms.filter(directRoom).map(r=>r.id)}).catch(()=>{});
+let keyPruneSignature='',nextCryptoRetry=0;
+async function prepareEncryptedRooms(data,ticket) {
+  const epoch=authEpoch;dropExpiredKeys();
+  const current=()=>ticket===sequence&&epoch===authEpoch&&Boolean(unlockToken)&&!document.hidden;
   for (const room of data.rooms) {
+    if(!current())return;
     if (!directRoom(room) || (!native && !room.encryption)) continue;
     room.encryptionStatus = 'waiting';
     let local=roomKeys.get(room.id);const encryption=room.encryption,until=Date.now()+Math.max(0,room.expires-data.now);
     if(native&&encryption&&data.capabilities?.encryptedDirect&&until>Date.now()&&!identityChanged(room)){
       try{
         if(!local||Math.abs(local.until-until)>5000){if(!roomKeyJobs.has(room.id))roomKeyJobs.set(room.id,localRoomKey(room,until));const job=roomKeyJobs.get(room.id);try{local=await job;}finally{if(roomKeyJobs.get(room.id)===job)roomKeyJobs.delete(room.id);}}
-        if(epoch!==authEpoch||!unlockToken)return;
+        if(!current())return;
         if(local&&!encryption.own){await api('encryption/key',{id:room.id,record:local.record},true);encryption.own=local.record;}
       }catch(error){room.encryptionStatus='error';}
     }
-    if(epoch!==authEpoch||!unlockToken)return;
+    if(!current())return;
     if(local)local.until=until;
     if (!data.capabilities?.encryptedDirect || data.capabilities.encryptedProtocol !== 2 || !encryption || !globalThis.crypto?.subtle) room.encryptionStatus = 'unavailable';
-    else if (encryption.own && !local) room.encryptionStatus = 'lost';
+    else if (encryption.own && !local && room.encryptionStatus!=='error') room.encryptionStatus = 'lost';
     else if (local && encryption.own && encryption.peer) {
       try {
         const binding = JSON.stringify([encryption.own, encryption.peer]);
@@ -1367,6 +1370,7 @@ async function prepareEncryptedRooms(data) {
           local.context = await QzuCrypto.establish(room.id, local, encryption.own, encryption.peer);
           local.binding = binding;
         }
+        if(!current())return;
         if(identityChanged(room))throw Error('Contact identity changed.');
         if(!encryption.confirmed){await api('encryption/confirm',{id:room.id,code:local.context.code,automatic:true},true);encryption.confirmed=true;}
         local.verified=local.context.code;room.encryptionStatus=encryption.confirmed&&encryption.peerConfirmed?'ready':'waiting';
@@ -1443,13 +1447,14 @@ async function refresh(live=false) {
   online = true;
   offset = data.now - Date.now();
   if(!data.unchanged&&data.termsAccepted!==true){termsPending=true;updatePages();showTermsGate(data.termsVersion||1);return;}
-  if(data.unchanged){liveRevision=state.rooms.some(r=>directRoom(r)&&r.encryption&&['waiting','error'].includes(r.encryptionStatus))?'':data.revision;purgeExpired();maybePromptUpdate();void acknowledgeMessages();return;}
-  await prepareEncryptedRooms(data);
+  if(data.unchanged){liveRevision=data.revision;if(state.rooms.some(r=>directRoom(r)&&r.encryption&&r.encryptionStatus==='error')&&Date.now()>=nextCryptoRetry){liveRevision='';nextCryptoRetry=Date.now()+5000;}purgeExpired();maybePromptUpdate();void acknowledgeMessages();return;}
+  await prepareEncryptedRooms(data,ticket);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   scrubRemovedRooms(state.rooms,data.rooms);
   const previouslyKnown=new Set(state.rooms.flatMap(r=>r.messages.map(m=>m.id)));const newActivity=Boolean(state.now)&&data.rooms.some(r=>!r.contact?.muted&&(r.id!==selected||!canReadCurrent())&&r.messages.some(m=>m.unread&&!previouslyKnown.has(m.id)));state = data;
   if(newActivity&&!document.hidden)showActivityBanner();
-  liveRevision=data.rooms.some(r=>directRoom(r)&&r.encryption&&['waiting','error'].includes(r.encryptionStatus))?'':data.revision||'';
+  liveRevision=data.revision||'';
+  const keep=state.rooms.filter(directRoom).map(r=>r.id).sort();const sig=JSON.stringify(keep);if(native&&sig!==keyPruneSignature){keyPruneSignature=sig;roomVault('prune','',{rooms:keep}).catch(()=>{if(keyPruneSignature===sig)keyPruneSignature='';});}
   if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && (!mediaMessage || room.messages.some(message => message.id === mediaMessage && !message.deleted)))) closeModal();
   if (replyTarget && !state.rooms.some(room => room.id === replyTarget.roomId && room.messages.some(message => message.id === replyTarget.id && !message.deleted))) clearReply();
   if (page === 'chat' && !selected) {
