@@ -1,5 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { iconPng } from './app-icon.mjs';
 
 const target = process.argv[2];
 if (!['ios', 'android'].includes(target)) throw new Error('Choose ios or android.');
@@ -7,16 +8,6 @@ const api = new URL(process.env.QZU_APP_ORIGIN || 'https://qzu.duckdns.org');
 if (api.protocol !== 'https:' || api.username || api.password || api.pathname !== '/' || api.search || api.hash) throw new Error('Use a valid HTTPS server origin.');
 const run = (program, args) => execFileSync(program, args, { stdio: 'inherit' });
 const cap = (...args) => run('npx', ['cap', ...args]);
-const iconSource = 'mobile/assets/qzu-icon.jpg';
-
-function iconPng(output, size) {
-  if (process.platform === 'darwin') {
-    run('sips', ['-s', 'format', 'png', '-z', String(size), String(size), iconSource, '--out', output]);
-  } else {
-    run('magick', [iconSource, '-resize', size + 'x' + size + '!', '-alpha', 'off', 'PNG24:' + output]);
-  }
-}
-
 function installIcons() {
   if (target === 'ios') {
     const folder = 'ios/App/App/Assets.xcassets/AppIcon.appiconset';
@@ -36,7 +27,7 @@ function installIcons() {
       rmSync(folder + '/' + name + '.webp', { force: true });
       iconPng(folder + '/' + name + '.png', legacy);
     }
-    iconPng(folder + '/qzu_icon_foreground.png', adaptive);
+    iconPng(folder + '/qzu_icon_foreground.png', adaptive, true);
   }
   const adaptive = res + '/mipmap-anydpi-v26';
   mkdirSync(adaptive, { recursive: true });
@@ -52,6 +43,7 @@ cpSync('node_modules/jsqr/dist/jsQR.js', 'mobile-dist/vendor/jsqr.js');
 cpSync('node_modules/@capacitor/core/dist/capacitor.js', 'mobile-dist/vendor/capacitor.js');
 writeFileSync('mobile-dist/mobile-config.js', 'window.QZU_API_ORIGIN = ' + JSON.stringify(api.origin) + ';\n');
 let html = readFileSync('mobile-dist/index.html', 'utf8');
+html = html.replace('width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content', 'width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover,interactive-widget=resizes-content');
 html = html.replace('<script src="/app.js" defer></script>', '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; script-src \'self\'; style-src \'self\'; img-src \'self\' data: blob:; connect-src \'self\' ' + api.origin + '; media-src \'self\' blob: data:; object-src \'none\'; base-uri \'none\'"><script src="/vendor/capacitor.js" defer></script><script src="/mobile-config.js" defer></script><script src="/app.js" defer></script>');
 writeFileSync('mobile-dist/index.html', html);
 if (!existsSync(target)) cap('add', target);

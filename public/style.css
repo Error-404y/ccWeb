@@ -2118,3 +2118,66 @@ dialog:not(.pin-screen) .modal-body { gap: 14px; }
 @media (prefers-reduced-motion: reduce) {
   .swipe-reply, .swipe-reply-indicator { transition: none; }
 }
+
+
+html.native-app,
+.native-app body {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: pan-y;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+.native-app #app,
+.native-app .chat-page,
+.native-app .sidebar,
+.native-app .thread,
+.native-app .sub-page,
+.native-app .official-channel {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.native-app .contacts,
+.native-app .messages,
+.native-app .page-content,
+.native-app .official-channel-content,
+.native-app .pin-fields {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  touch-action: pan-y;
+}
+.native-app dialog {
+  box-sizing: border-box;
+  max-width: calc(100% - 24px);
+  touch-action: pan-y;
+}
+.native-app dialog.pin-screen {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+.native-app .pin-screen-form,
+.native-app .modal-body,
+.native-app .pin-keypad {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.native-app .pin-key,
+.native-app .pin-dots {
+  min-width: 0;
+  max-width: 100%;
+  touch-action: pan-y;
+}
+.native-app input:not([type=checkbox]):not([type=radio]):not([hidden]),
+.native-app textarea,
+.native-app select {
+  font-size: max(16px, 1em);
+}
+.native-app .official-channel-intro h1,
+.native-app .official-post p { overflow-wrap: anywhere; }

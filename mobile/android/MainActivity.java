@@ -11,6 +11,10 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(QzuDevice.class);
         super.onCreate(state);
         getBridge().getWebView().setOverScrollMode(View.OVER_SCROLL_NEVER);
+        getBridge().getWebView().setHorizontalScrollBarEnabled(false);
+        getBridge().getWebView().getSettings().setSupportZoom(false);
+        getBridge().getWebView().getSettings().setBuiltInZoomControls(false);
+        getBridge().getWebView().getSettings().setDisplayZoomControls(false);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
     }
 }

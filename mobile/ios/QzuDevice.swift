@@ -1,6 +1,7 @@
 import CryptoKit
 import Security
 import UIKit
+import WebKit
 import Capacitor
 
 @objc(QzuDevice)
@@ -75,6 +76,10 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
             scrollView.bounces = false
             scrollView.alwaysBounceVertical = false
             scrollView.alwaysBounceHorizontal = false
+            scrollView.minimumZoomScale = 1
+            scrollView.maximumZoomScale = 1
+            scrollView.pinchGestureRecognizer?.isEnabled = false
+            scrollView.showsHorizontalScrollIndicator = false
         }
         print("[qzu] QzuDevice loaded")
         NotificationCenter.default.addObserver(self, selector: #selector(cover), name: UIApplication.willResignActiveNotification, object: nil)
@@ -100,4 +105,10 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
     }
 }
 
-class QzuViewController: CAPBridgeViewController {}
+class QzuViewController: CAPBridgeViewController {
+    override func webViewConfiguration(for instanceConfiguration: InstanceConfiguration) -> WKWebViewConfiguration {
+        let configuration = super.webViewConfiguration(for: instanceConfiguration)
+        configuration.ignoresViewportScaleLimits = false
+        return configuration
+    }
+}

@@ -683,15 +683,31 @@ $('theme').addEventListener('change', () => applyTheme($('theme').value));
 
 function setViewport() {
   const viewport = window.visualViewport;
-  const h = viewport?.height || window.innerHeight;
   const root = document.documentElement;
+  const normalScale = !native || !viewport || Math.abs(viewport.scale - 1) < .02;
+  const h = (normalScale && viewport?.height) || window.innerHeight;
   root.style.setProperty('--app-height', Math.round(h) + 'px');
-  root.style.setProperty('--viewport-top', Math.max(0, Math.round(viewport?.offsetTop || 0)) + 'px');
+  root.style.setProperty('--viewport-top', Math.max(0, Math.round(normalScale ? viewport?.offsetTop || 0 : 0)) + 'px');
+  if (native && (window.scrollX || window.scrollY)) window.scrollTo(0, 0);
 }
 setViewport();
 window.addEventListener('resize', setViewport);
 window.visualViewport?.addEventListener('resize', setViewport);
 window.visualViewport?.addEventListener('scroll', setViewport);
+if (native) {
+  for (const event of ['gesturestart', 'gesturechange', 'gestureend']) {
+    document.addEventListener(event, e => e.preventDefault(), { passive: false });
+  }
+  document.addEventListener('touchstart', e => {
+    if (e.touches.length > 1) e.preventDefault();
+  }, { passive: false });
+  document.addEventListener('touchmove', e => {
+    if (e.touches.length > 1) e.preventDefault();
+  }, { passive: false });
+  window.addEventListener('scroll', () => {
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+  }, { passive: true });
+}
 
 function selectRoom(id, open = true) {
   if (selected !== id) {

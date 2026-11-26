@@ -7,9 +7,12 @@
     "iosScheme": "capacitor"
   },
   "ios": {
-    "contentInset": "automatic"
+    "contentInset": "automatic",
+    "zoomEnabled": false
   },
   "android": {
-    "allowMixedContent": false
-  }
+    "allowMixedContent": false,
+    "zoomEnabled": false
+  },
+  "zoomEnabled": false
 }
