@@ -4,58 +4,58 @@
 
 :root {
   color-scheme: light;
-  --bg: #f2f4f3;
+  --bg: #ffffff;
   --surface: #fff;
-  --sub: #f7f8f7;
-  --hover: #edf1ee;
-  --ink: #1b2420;
-  --muted: #67736c;
-  --line: #e4e8e5;
-  --accent: #2d7850;
+  --sub: #f5f5f5;
+  --hover: #f0f0f0;
+  --ink: #151515;
+  --muted: #666666;
+  --line: #e5e5e5;
+  --accent: #bd202b;
   --accent-ink: #fff;
-  --active: #e1eee5;
-  --sent: #dcefe1;
-  --received: #f0f2f1;
-  --danger: #b94545;
-  --shadow: 0 18px 65px #16251b20;
+  --active: #fae7e9;
+  --sent: #fbe6e8;
+  --received: #f0f0f0;
+  --danger: #bc2532;
+  --shadow: 0 18px 65px #00000018;
   --radius: 14px;
   --app-height: 100dvh;
 }
 
 :root[data-theme=dark] {
   color-scheme: dark;
-  --bg: #101413;
-  --surface: #161b18;
-  --sub: #1b211e;
-  --hover: #242e28;
-  --ink: #eef2ef;
-  --muted: #a1aca5;
-  --line: #2a342e;
-  --accent: #80bd91;
-  --accent-ink: #122219;
-  --active: #263c2e;
-  --sent: #284a35;
-  --received: #242b27;
-  --danger: #f09494;
+  --bg: #000000;
+  --surface: #000000;
+  --sub: #161616;
+  --hover: #202020;
+  --ink: #f7f7f7;
+  --muted: #a0a0a0;
+  --line: #292929;
+  --accent: #ff646d;
+  --accent-ink: #20070a;
+  --active: #30171b;
+  --sent: #77232c;
+  --received: #1c1c1c;
+  --danger: #ff777e;
   --shadow: 0 18px 65px #0006;
 }
 
 @media(prefers-color-scheme:dark) {
   :root:not([data-theme]),:root[data-theme=system] {
     color-scheme: dark;
-    --bg: #101413;
-    --surface: #161b18;
-    --sub: #1b211e;
-    --hover: #242e28;
-    --ink: #eef2ef;
-    --muted: #a1aca5;
-    --line: #2a342e;
-    --accent: #80bd91;
-    --accent-ink: #122219;
-    --active: #263c2e;
-    --sent: #284a35;
-    --received: #242b27;
-    --danger: #f09494;
+    --bg: #000000;
+    --surface: #000000;
+    --sub: #161616;
+    --hover: #202020;
+    --ink: #f7f7f7;
+    --muted: #a0a0a0;
+    --line: #292929;
+    --accent: #ff646d;
+    --accent-ink: #20070a;
+    --active: #30171b;
+    --sent: #77232c;
+    --received: #1c1c1c;
+    --danger: #ff777e;
     --shadow: 0 18px 65px #0006;
   }
 }
@@ -785,8 +785,8 @@ dialog[open] {
 }
 
 dialog::backdrop {
-  background: #10171375;
-  backdrop-filter: blur(3px);
+  background: #000000a6;
+  backdrop-filter: none;
 }
 
 .modal-head {
@@ -1958,4 +1958,119 @@ dialog, .request-list, .security-list, .access-invoice, .composer textarea {
   .pin-screen .pin-key { height: clamp(40px, 9dvh, 54px); font-size: 27px; }
   .pin-screen .pin-keypad { padding: 0; }
   .pin-screen .pin-dots { min-height: 42px; padding: 6px 0; }
+}
+
+
+:root[data-accent=green] { --accent: #2d7850; --accent-ink: #fff; --sent: #dcefe1; --active: #e1eee5; }
+:root[data-theme=dark][data-accent=green] { --accent: #80bd91; --accent-ink: #122219; --sent: #244334; --active: #1c3026; }
+:root[data-accent=red] { --accent: #bd202b; --accent-ink: #fff; --sent: #fbe6e8; --active: #fae7e9; }
+:root[data-theme=dark][data-accent=red] { --accent: #ff646d; --accent-ink: #20070a; --sent: #77232c; --active: #30171b; }
+@media (prefers-color-scheme: dark) {
+  :root[data-theme=system][data-accent=green] { --accent: #80bd91; --accent-ink: #122219; --sent: #244334; --active: #1c3026; }
+  :root[data-theme=system][data-accent=red] { --accent: #ff646d; --accent-ink: #20070a; --sent: #77232c; --active: #30171b; }
+}
+
+html, body { font-size: 16px; }
+h1 { font-size: 30px; font-weight: 720; letter-spacing: -1px; }
+.sidebar-top, .page-header { background: var(--surface); }
+.sidebar-top { padding-inline: 22px; }
+.list-head { padding: 4px 22px 15px; }
+.list-head h1, .settings-panel h1, .connect-panel h1 {
+  font-size: clamp(26px, 7vw, 32px);
+  letter-spacing: -.8px;
+  font-weight: 720;
+}
+.icon-button, .icon-button.accent { background: transparent; color: var(--ink); border-radius: 10px; }
+.icon-button.accent { color: var(--accent); }
+.icon-button:hover, .icon-button.accent:hover { background: var(--hover); }
+.contacts { padding: 0 14px 10px; }
+.contact {
+  min-height: 72px;
+  gap: 12px;
+  padding: 12px 8px;
+  margin: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--line);
+}
+.contact:last-child { border-bottom-color: transparent; }
+.contact.active, .contact:hover { border-radius: 12px; }
+.contact-name { font-size: 15px; font-weight: 650; }
+.contact-preview { font-size: 13px; }
+.contact-time { font-size: 11px; }
+.side-footer { padding: 8px 15px max(12px,env(safe-area-inset-bottom)); }
+.settings-link { min-height: 48px; font-size: 15px; color: var(--ink); }
+.settings-link svg { color: var(--muted); }
+.thread, .messages { background-color: var(--surface); }
+.thread-header { background: var(--surface); }
+.thread-title h2 { font-size: 16px; font-weight: 650; }
+.expiry { border: 0; padding: 5px 2px; }
+.expiry-progress { height: 2px; }
+.messages { gap: 10px; }
+.bubble { border-radius: 18px 18px 18px 5px; padding: 10px 13px 7px; font-size: 15px; animation: none; }
+.mine .bubble { border-radius: 18px 18px 5px 18px; }
+.composer textarea { background: var(--sub); border: 1px solid transparent; border-radius: 24px; }
+.composer textarea:focus { border-color: var(--line); }
+.send-button { border-radius: 50%; width: 44px; height: 44px; }
+.reply-action { opacity: .8; }
+.read-only-bar { border: 0; border-radius: 12px; }
+.page-content { padding-inline: 22px; }
+.settings-panel { gap: 0; }
+#settingsPage .settings-panel { margin-block: 0 auto; }
+.settings-panel h1 { margin-bottom: 16px; }
+.settings-row { min-height: 60px; gap: 13px; font-size: 15px; padding: 13px 3px; }
+.settings-row > svg { color: var(--ink); }
+.settings-row .chevron { color: var(--muted); }
+.emergency-row, .emergency-row > svg { color: var(--danger); }
+.settings-row select { background: transparent; border: 0; padding: 8px 3px; max-width: 40%; }
+.connect-panel { max-width: 390px; gap: 14px; }
+.qr-box { border-radius: 14px; }
+.code-line { border: 1px solid var(--line); border-radius: 12px; min-height: 50px; }
+.code-line span { font-size: 20px; letter-spacing: 4px; }
+.primary-button, .secondary-button { min-height: 48px; border-radius: 12px; }
+.secondary-button { background: transparent; }
+.connect-form input, .access-key-input, .edit-input { border-radius: 12px; }
+dialog:not(.pin-screen) { border: 1px solid var(--line); border-radius: 20px; box-shadow: none; }
+dialog:not(.pin-screen) .modal-head h2 { font-size: 20px; font-weight: 700; letter-spacing: -.35px; }
+dialog:not(.pin-screen) .modal-body { gap: 14px; }
+.panel, dialog[open]:not(.pin-screen) { animation: none; }
+.pin-fields { display: flex; flex-direction: column; gap: 12px; }
+.access-plan { background: var(--sub); border-color: var(--line); border-radius: 14px; }
+.access-key-box { border-style: solid; }
+.empty-icon { background: transparent; color: var(--muted); }
+.empty-thread h2 { font-size: 19px; }
+.request-link { border-radius: 10px; }
+:root[data-accent=red] .primary-button:not(.danger-button),
+:root[data-accent=red] .send-button,
+:root[data-accent=red] .privacy-switch input:checked {
+  background: #bd202b;
+  color: #fff;
+}
+.danger-button { background: #bd202b; color: #fff; }
+
+:root[data-theme=dark] .mine .bubble .bubble-time,
+:root[data-theme=dark] .mine .bubble .edited-label,
+:root[data-theme=dark] .mine .bubble .message-status:not([data-status=read]) { color: #e1e1e1; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .mine .bubble .bubble-time,
+  :root[data-theme=system] .mine .bubble .bubble-time,
+  :root:not([data-theme]) .mine .bubble .edited-label,
+  :root[data-theme=system] .mine .bubble .edited-label,
+  :root:not([data-theme]) .mine .bubble .message-status:not([data-status=read]),
+  :root[data-theme=system] .mine .bubble .message-status:not([data-status=read]) { color: #e1e1e1; }
+}
+@media (max-width: 700px) {
+  .sidebar-top { height: 58px; padding-inline: 20px; }
+  .list-head { padding: 5px 20px 13px; }
+  .contacts { padding-inline: 12px; }
+  .contact { min-height: 70px; }
+  .thread-header { padding-inline: 8px; }
+  .thread-header .icon-button { min-height: 44px; }
+  .messages { padding: 12px 10px; }
+  .composer { padding-inline: 10px; }
+  .composer textarea { font-size: 16px; }
+  .page-content { padding-inline: 20px; }
+}
+@media (max-height: 650px) {
+  .connect-panel { gap: 8px; }
+  .settings-row { min-height: 54px; }
 }

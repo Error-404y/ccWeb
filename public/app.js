@@ -1723,12 +1723,12 @@ $('blockedContacts').addEventListener('click', async () => {
 
 const accentChoices = ['green', 'red', 'blue', 'purple', 'gold', 'grey'];
 function applyAccent(value) {
-  if (!accentChoices.includes(value)) value = 'green';
+  if (!accentChoices.includes(value)) value = 'red';
   document.documentElement.dataset.accent = value;
   try { localStorage.setItem('qzu-accent', value); } catch {}
 }
 
-try { applyAccent(localStorage.getItem('qzu-accent')); } catch { applyAccent('green'); }
+try { applyAccent(localStorage.getItem('qzu-accent')); } catch { applyAccent('red'); }
 $('accentSettings').addEventListener('click', () => {
   const picker = el('div', 'accent-picker');
   for (const color of accentChoices) {
