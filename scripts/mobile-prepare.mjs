@@ -7,6 +7,43 @@ const api = new URL(process.env.QZU_APP_ORIGIN || 'https://qzu.duckdns.org');
 if (api.protocol !== 'https:' || api.username || api.password || api.pathname !== '/' || api.search || api.hash) throw new Error('Use a valid HTTPS server origin.');
 const run = (program, args) => execFileSync(program, args, { stdio: 'inherit' });
 const cap = (...args) => run('npx', ['cap', ...args]);
+const iconSource = 'mobile/assets/qzu-icon.jpg';
+
+function iconPng(output, size) {
+  if (process.platform === 'darwin') {
+    run('sips', ['-s', 'format', 'png', '-z', String(size), String(size), iconSource, '--out', output]);
+  } else {
+    run('magick', [iconSource, '-resize', size + 'x' + size + '!', '-alpha', 'off', 'PNG24:' + output]);
+  }
+}
+
+function installIcons() {
+  if (target === 'ios') {
+    const folder = 'ios/App/App/Assets.xcassets/AppIcon.appiconset';
+    mkdirSync(folder, { recursive: true });
+    iconPng(folder + '/qzu-icon.png', 1024);
+    writeFileSync(folder + '/Contents.json', JSON.stringify({
+      images: [{ filename: 'qzu-icon.png', idiom: 'universal', platform: 'ios', size: '1024x1024' }],
+      info: { author: 'xcode', version: 1 }
+    }, null, 2) + '\n');
+    return;
+  }
+  const res = 'android/app/src/main/res';
+  for (const [density, legacy, adaptive] of [['mdpi',48,108],['hdpi',72,162],['xhdpi',96,216],['xxhdpi',144,324],['xxxhdpi',192,432]]) {
+    const folder = res + '/mipmap-' + density;
+    mkdirSync(folder, { recursive: true });
+    for (const name of ['ic_launcher','ic_launcher_round']) {
+      rmSync(folder + '/' + name + '.webp', { force: true });
+      iconPng(folder + '/' + name + '.png', legacy);
+    }
+    iconPng(folder + '/qzu_icon_foreground.png', adaptive);
+  }
+  const adaptive = res + '/mipmap-anydpi-v26';
+  mkdirSync(adaptive, { recursive: true });
+  for (const name of ['ic_launcher','ic_launcher_round']) {
+    writeFileSync(adaptive + '/' + name + '.xml', '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@android:color/black"/><foreground android:drawable="@mipmap/qzu_icon_foreground"/></adaptive-icon>\n');
+  }
+}
 
 rmSync('mobile-dist', { recursive: true, force: true });
 cpSync('public', 'mobile-dist', { recursive: true });
@@ -51,6 +88,7 @@ if (target === 'ios') {
   writeFileSync(manifest, xml);
 }
 cap('sync', target);
+installIcons();
 if (target === 'ios') {
   const configPath = 'ios/App/App/capacitor.config.json';
   const config = JSON.parse(readFileSync(configPath, 'utf8'));

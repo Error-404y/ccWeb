@@ -847,6 +847,56 @@ function updateStatus(node, status) {
   node.replaceChildren(svg(status === 'sent' ? 'check' : 'doubleCheck'));
 }
 
+function attachSwipeReply(bubble, reply) {
+  let gesture = null;
+  let suppressClick = false;
+  const reset = () => {
+    gesture = null;
+    bubble.classList.remove('swipe-tracking', 'swipe-ready');
+    bubble.style.removeProperty('--reply-shift');
+  };
+  bubble.classList.add('swipe-reply');
+  const indicator = svg('reply', 'swipe-reply-indicator');
+  bubble.append(indicator);
+  bubble.addEventListener('pointerdown', event => {
+    if (event.pointerType !== 'touch' || !event.isPrimary || event.target.closest('button, a, input, textarea, audio, video') || bubble.classList.contains('masked-message')) return;
+    suppressClick = false;
+    gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, dragging: false };
+  });
+  bubble.addEventListener('pointermove', event => {
+    if (!gesture || gesture.id !== event.pointerId) return;
+    const dx = event.clientX - gesture.x;
+    const dy = event.clientY - gesture.y;
+    if (!gesture.dragging) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { reset(); return; }
+      if (dx < -10) { reset(); return; }
+      if (dx < 12 || dx < Math.abs(dy) * 1.5) return;
+      gesture.dragging = true;
+      bubble.classList.add('swipe-tracking');
+      try { bubble.setPointerCapture(event.pointerId); } catch {}
+    }
+    const distance = Math.max(0, Math.min(76, dx));
+    bubble.style.setProperty('--reply-shift', distance + 'px');
+    bubble.classList.toggle('swipe-ready', distance >= 52);
+  });
+  bubble.addEventListener('pointerup', event => {
+    if (!gesture || gesture.id !== event.pointerId) return;
+    const dragging = gesture.dragging;
+    const accepted = dragging && event.clientX - gesture.x >= 52;
+    reset();
+    if (dragging) suppressClick = true;
+    if (accepted) reply();
+  });
+  bubble.addEventListener('pointercancel', reset);
+  bubble.addEventListener('lostpointercapture', reset);
+  bubble.addEventListener('click', event => {
+    if (!suppressClick) return;
+    suppressClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+}
+
 function renderMessage(room, message) {
   const row = el('div', 'message-row' + (message.mine ? ' mine' : ''));
   row.id = 'message-' + message.id;
@@ -903,11 +953,17 @@ function renderMessage(room, message) {
   }
 
   if (!room.readOnly && !message.once && !message.deleted) {
-    const reply = button('', () => {
-      replyTarget = { roomId: room.id, id: message.id, sender: message.sender, text: previewText(message) };
+    const startReply = () => {
+      if (!unlockToken || page !== 'chat' || selected !== room.id || document.hidden) return;
+      const current = state.rooms.find(item => item.id === room.id && !item.readOnly && item.expires > serverNow());
+      const target = current?.messages.find(item => item.id === message.id && !item.deleted && !item.once);
+      if (!target) return;
+      replyTarget = { roomId: room.id, id: target.id, sender: target.sender, text: previewText(target) };
       renderReply();
-      $('message').focus();
-    }, 'reply-action');
+      $('message').focus({ preventScroll: true });
+    };
+    const reply = button('', startReply, 'reply-action');
+    attachSwipeReply(bubble, startReply);
     reply.title = 'Reply';
     reply.setAttribute('aria-label', 'Reply to message');
     reply.append(svg('reply'));

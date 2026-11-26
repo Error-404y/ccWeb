@@ -2093,3 +2093,28 @@ dialog:not(.pin-screen) .modal-body { gap: 14px; }
 @media (max-width: 700px) {
   .official-channel-entry { padding-inline: 12px; }
 }
+
+
+.swipe-reply {
+  touch-action: pan-y;
+  transform: translateX(var(--reply-shift, 0px));
+  transition: transform .16s ease-out;
+}
+.swipe-reply.swipe-tracking { transition: none; user-select: none; -webkit-user-select: none; }
+.swipe-reply-indicator {
+  position: absolute;
+  top: 50%;
+  left: -34px;
+  width: 23px;
+  height: 23px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s, color .12s;
+}
+.swipe-tracking .swipe-reply-indicator { opacity: .8; }
+.swipe-ready .swipe-reply-indicator { color: var(--accent); opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .swipe-reply, .swipe-reply-indicator { transition: none; }
+}
