@@ -2,7 +2,8 @@
 set -euo pipefail
 umask 077
 cd "$(dirname "$0")/.."
-export JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
+source scripts/java21.sh
+qzu_java21
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 export PATH="$JAVA_HOME/bin:$PATH"
 KEYSTORE="${QZU_ANDROID_KEYSTORE:-$HOME/.qzu-signing/release.jks}"
@@ -17,7 +18,7 @@ SDK_TOOLS="$(dirname "$SDK_TOOLS")"
 VERSION="$(node -p "require('./package.json').version")"
 npm test
 npm run mobile:prepare -- android
-(cd android && ./gradlew :app:assembleRelease)
+(cd android && ./gradlew --no-daemon "-Dorg.gradle.java.home=$JAVA_HOME" :app:assembleRelease)
 UNSIGNED="android/app/build/outputs/apk/release/app-release-unsigned.apk"
 [[ -f "$UNSIGNED" ]] || { echo "Unsigned APK missing; inspect Android Studio release configuration."; exit 1; }
 mkdir -p release-output

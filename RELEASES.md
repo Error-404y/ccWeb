@@ -32,3 +32,7 @@ A personal/free signing team cannot provide general automatic distribution. Enro
 ## Encryption scope
 
 The experimental protocol uses signed ephemeral P-256 ECDH, manually verified safety codes and HKDF-derived per-message AES-GCM keys for direct text, images and audio. It is not an audited Signal/MLS protocol, does not offer a true ratchet or group encryption, and does not hide metadata. Group and support chats use transport encryption only. Chat keys currently live in memory and may be lost when the app process exits. Both devices must update and compare the full safety code through a trusted separate channel. Do not use it for high-risk communications before an independent review.
+
+## Terminal-only development updates
+
+Use Java 21 for Android Gradle builds. If necessary install it with `brew install openjdk@21`. Run `git pull --ff-only origin main && npm run mobile:update` on the Mac. The script builds both apps, copies the debug APK to Desktop and installs on connected devices. Set `QZU_DEPLOY_HOST` and optionally `QZU_SSH_KEY` to include Oracle deployment. Set `QZU_INSTALL_JAVA=1` to allow installing OpenJDK 21 using Homebrew if missing. The iPhone identifier must be its Xcode device UDID; leave blank for a generic build. No IDE windows are opened. Restarting Oracle clears active conversations.
