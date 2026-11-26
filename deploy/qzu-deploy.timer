@@ -1,0 +1,11 @@
+[Unit]
+Description=Check qzu for tested Git updates
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+RandomizedDelaySec=30s
+Unit=qzu-deploy.service
+
+[Install]
+WantedBy=timers.target

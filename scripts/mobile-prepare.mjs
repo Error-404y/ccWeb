@@ -4,6 +4,10 @@ import { iconPng } from './app-icon.mjs';
 
 const target = process.argv[2];
 if (!['ios', 'android'].includes(target)) throw new Error('Choose ios or android.');
+const release = JSON.parse(readFileSync('package.json', 'utf8')).version;
+const versionParts = release.split('.').map(Number);
+if (!/^\d+\.\d+\.\d+$/.test(release) || versionParts.some(n => n > 999)) throw Error('Use a numeric release version with components below 1000.');
+const buildNumber = 1 + versionParts[0] * 1000000 + versionParts[1] * 1000 + versionParts[2];
 const api = new URL(process.env.QZU_APP_ORIGIN || 'https://qzu.duckdns.org');
 if (api.protocol !== 'https:' || api.username || api.password || api.pathname !== '/' || api.search || api.hash) throw new Error('Use a valid HTTPS server origin.');
 const run = (program, args) => execFileSync(program, args, { stdio: 'inherit' });
@@ -62,12 +66,22 @@ if (target === 'ios') {
     storyboard = storyboard.replace(/customClass="CAPBridgeViewController"(?: customModule="[^"]+")?(?: customModuleProvider="[^"]+")?/, 'customClass="QzuViewController" customModule="App" customModuleProvider="target"');
     writeFileSync(scene, storyboard);
   }
+  const project = 'ios/App/App.xcodeproj/project.pbxproj';
+  let settings = readFileSync(project, 'utf8');
+  if (!/MARKETING_VERSION\s*=/.test(settings) || !/CURRENT_PROJECT_VERSION\s*=/.test(settings)) throw Error('Unexpected Xcode version settings.');
+  settings = settings.replace(/MARKETING_VERSION\s*=\s*[^;]+;/g, 'MARKETING_VERSION = ' + release + ';').replace(/CURRENT_PROJECT_VERSION\s*=\s*[^;]+;/g, 'CURRENT_PROJECT_VERSION = ' + buildNumber + ';');
+  writeFileSync(project, settings);
   const plist = app + '/Info.plist';
   for (const [key, value] of [['NSCameraUsageDescription', 'Scan qzu. connection codes.'], ['NSMicrophoneUsageDescription', 'Record voice messages.']]) {
     try { execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Set :' + key + ' ' + value, plist], { stdio: 'ignore' }); }
     catch { run('/usr/libexec/PlistBuddy', ['-c', 'Add :' + key + ' string ' + value, plist]); }
   }
 } else {
+  const gradle = 'android/app/build.gradle';
+  let settings = readFileSync(gradle, 'utf8');
+  if (!/\bversionCode\s+\d+/.test(settings) || !/\bversionName\s+["'][^"']+["']/.test(settings)) throw Error('Unexpected Android version settings.');
+  settings = settings.replace(/\bversionCode\s+\d+/, 'versionCode ' + buildNumber).replace(/\bversionName\s+["'][^"']+["']/, 'versionName "' + release + '"');
+  writeFileSync(gradle, settings);
   const java = 'android/app/src/main/java/cc/qzu/app';
   cpSync('mobile/android/QzuDevice.java', java + '/QzuDevice.java');
   cpSync('mobile/android/MainActivity.java', java + '/MainActivity.java');

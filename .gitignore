@@ -13,3 +13,4 @@ android/local.properties
 *.mobileprovision
 *.ipa
 *.apk
+release-output/

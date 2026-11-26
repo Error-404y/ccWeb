@@ -23,7 +23,9 @@
     "mobile:android": "npm run mobile:prepare -- android && npx cap open android",
     "admin-support-start": "node --env-file-if-exists=.env scripts/admin-support.mjs start",
     "admin-support-list": "node --env-file-if-exists=.env scripts/admin-support.mjs list",
-    "admin-support-send": "node --env-file-if-exists=.env scripts/admin-support.mjs send"
+    "admin-support-send": "node --env-file-if-exists=.env scripts/admin-support.mjs send",
+    "release:android": "bash scripts/release-android.sh",
+    "deploy:oracle": "bash scripts/deploy-oracle.sh"
   },
   "dependencies": {
     "express": "^5.1.0",

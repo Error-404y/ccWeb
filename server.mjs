@@ -1,6 +1,6 @@
 import express from 'express';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { initActivity, recordActivity, listActivity, pruneActivity } from './lib/activity.mjs';
 import QRCode from 'qrcode';
 import { fileURLToPath } from 'node:url';
@@ -263,10 +263,16 @@ function updateLink(value) {
     return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
   } catch { return null; }
 }
+const releaseDirectory = resolve(process.env.QZU_RELEASE_DIR || resolve(root, 'data/releases'));
+const apkName = 'qzu-' + version + '.apk';
+const apkPath = resolve(releaseDirectory, apkName);
+function androidUpdateLink() {
+  return updateLink(process.env.QZU_ANDROID_UPDATE_URL) || (publicOrigin && existsSync(apkPath) ? updateLink(publicOrigin + '/downloads/' + apkName) : null);
+}
 app.get('/api/version', (req, res) => res.json({
   latest: version,
   notes: 'Experimental encrypted direct chats with photos and voice messages. Both devices must update and compare safety codes.',
-  downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: updateLink(process.env.QZU_ANDROID_UPDATE_URL) }
+  downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
 app.post('/api/message/burn-open', guard('burn-open', 80, 60000), (req, res) => res.json(chats.openBurn(req.account.id, req.body?.id, req.body?.messageId, Boolean(req.account.invisible))));
@@ -463,6 +469,11 @@ app.post('/api/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) => {
 app.use('/api', (req, res) => res.status(404).json({
   error: 'Not found.'
 }));
+app.get('/healthz', (req, res) => res.json({ ok: true, version }));
+app.get('/downloads/' + apkName, (req, res) => {
+  if (!existsSync(apkPath)) return res.sendStatus(404);
+  res.download(apkPath, apkName);
+});
 app.use((req, res, next) => {
   if (!mobileOnly) return next();
   if (req.path === '/') return res.type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu.</title><h1>qzu.</h1><p>Mobile app only.</p></html>');

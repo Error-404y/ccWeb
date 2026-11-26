@@ -1,0 +1,11 @@
+[Unit]
+Description=qzu tested Git deployment
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/ccWeb
+ExecStart=/bin/bash /home/ubuntu/ccWeb/scripts/deploy-oracle.sh
+TimeoutStartSec=180
