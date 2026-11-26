@@ -25,11 +25,20 @@
     if (offset !== der.length) throw Error('Invalid signature.');
     return raw;
   }
-  async function generate(room, sign) {
-    const pair = await globalThis.crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+  async function generate(room, sign, persist=null) {
+    const pair = await globalThis.crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, Boolean(persist), ['deriveBits']);
     const key = b64(await globalThis.crypto.subtle.exportKey('raw', pair.publicKey));
     const signed = await sign(JSON.stringify(['qzu-room-key-v1', room, key]));
-    return { privateKey: pair.privateKey, record: { key, identity: signed.publicKey, signature: signed.signature } };
+    const record={key,identity:signed.publicKey,signature:signed.signature};
+    if(!persist)return {privateKey:pair.privateKey,record};
+    const saved={jwk:await crypto.subtle.exportKey('jwk',pair.privateKey),record};
+    await persist(saved);return restore(saved);
+  }
+  async function restore({jwk,record}){
+    if(jwk?.kty!=='EC'||jwk.crv!=='P-256'||typeof jwk.d!=='string')throw Error('Invalid saved key.');
+    const pub=await crypto.subtle.importKey('jwk',{kty:'EC',crv:'P-256',x:jwk.x,y:jwk.y,ext:true},{name:'ECDH',namedCurve:'P-256'},true,[]);
+    if(b64(await crypto.subtle.exportKey('raw',pub))!==record.key)throw Error('Saved key mismatch.');
+    return {privateKey:await crypto.subtle.importKey('jwk',jwk,{name:'ECDH',namedCurve:'P-256'},false,['deriveBits']),record};
   }
   async function verifyRecord(room, record) {
     const subtle = globalThis.crypto.subtle;
@@ -103,5 +112,5 @@
     return new Blob([clear.subarray(split + 1)], { type: mime });
     }finally{clear.fill(0);}
   }
-  globalThis.QzuCrypto = Object.freeze({ generate, establish, encrypt, decrypt, encryptMedia, decryptMedia });
+  globalThis.QzuCrypto = Object.freeze({ generate, restore, establish, encrypt, decrypt, encryptMedia, decryptMedia });
 })();

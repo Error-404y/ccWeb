@@ -1,6 +1,7 @@
 import CryptoKit
 import Security
 import UIKit
+import UserNotifications
 import WebKit
 import Capacitor
 
@@ -10,7 +11,9 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "QzuDevice"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "sign", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "openUpdate", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "openUpdate", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "roomVault", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setBadge", returnType: CAPPluginReturnPromise)
     ]
     private let tag = Data("cc.qzu.app.device.v1".utf8)
     private let queue = DispatchQueue(label: "cc.qzu.device")
@@ -78,6 +81,59 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async {
             UIApplication.shared.open(url, options: [:]) { success in
                 if success { call.resolve() } else { call.reject("Unable to open update link.") }
+            }
+        }
+    }
+
+    @objc func roomVault(_ call: CAPPluginCall) {
+        let action = call.getString("action") ?? "", room = call.getString("room") ?? ""
+        guard action == "clear" || action == "prune" || UUID(uuidString: room) != nil else { call.reject("Invalid room."); return }
+        queue.async {
+            var query: [String: Any] = [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"cc.qzu.app.rooms.v1"]
+            if action != "clear" && action != "prune" { query[kSecAttrAccount as String] = room }
+            switch action {
+            case "save":
+                guard let value = call.getString("value"), let data = value.data(using:.utf8), data.count <= 8192,
+                      let object = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
+                      let until = object["until"] as? Double, until > Date().timeIntervalSince1970*1000, until < Date().timeIntervalSince1970*1000+7200000 else { call.reject("Invalid key."); return }
+                var attrs = query; attrs[kSecValueData as String] = data; attrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+                let status = SecItemAdd(attrs as CFDictionary,nil)
+                let result = status == errSecDuplicateItem ? SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary) : status
+                if result == errSecSuccess { call.resolve() } else { call.reject("Secure storage unavailable.") }
+            case "load":
+                var find = query;find[kSecReturnData as String] = true;find[kSecMatchLimit as String] = kSecMatchLimitOne
+                var result: CFTypeRef?;let status = SecItemCopyMatching(find as CFDictionary,&result)
+                if status == errSecItemNotFound { call.resolve();return }
+                guard status == errSecSuccess, let data = result as? Data, let object = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any],let until = object["until"] as? Double else { call.reject("Secure storage unavailable.");return }
+                if until <= Date().timeIntervalSince1970*1000 { SecItemDelete(query as CFDictionary);call.resolve();return }
+                call.resolve(["value":String(decoding:data,as:UTF8.self)])
+            case "remove","clear":
+                let status = SecItemDelete(query as CFDictionary)
+                if status == errSecSuccess || status == errSecItemNotFound { call.resolve() } else { call.reject("Secure storage unavailable.") }
+            case "prune":
+                let keep = Set(call.getArray("rooms",String.self) ?? [])
+                var find = query;find[kSecReturnAttributes as String] = true;find[kSecMatchLimit as String] = kSecMatchLimitAll
+                var result: CFTypeRef?;let status = SecItemCopyMatching(find as CFDictionary,&result)
+                if status == errSecSuccess, let items = result as? [[String:Any]] { for item in items { if let id = item[kSecAttrAccount as String] as? String, !keep.contains(id) { var remove = query;remove[kSecAttrAccount as String] = id;SecItemDelete(remove as CFDictionary) } } }
+                call.resolve()
+            default: call.reject("Invalid vault action.")
+            }
+        }
+    }
+    @objc func setBadge(_ call: CAPPluginCall) {
+        let count = max(0,min(999,call.getInt("count") ?? 0))
+        let center = UNUserNotificationCenter.current()
+        if call.getBool("requestPermission") == true {
+            center.requestAuthorization(options:[.badge,.alert,.sound]) { granted,error in
+                if let error = error { call.reject(error.localizedDescription);return }
+                if granted { DispatchQueue.main.async { UIApplication.shared.applicationIconBadgeNumber = count } }
+                call.resolve(["granted":granted])
+            }
+        } else {
+            center.getNotificationSettings { settings in
+                let granted = settings.badgeSetting == .enabled
+                if granted { DispatchQueue.main.async { UIApplication.shared.applicationIconBadgeNumber = count } }
+                call.resolve(["granted":granted])
             }
         }
     }

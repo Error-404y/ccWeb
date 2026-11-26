@@ -620,7 +620,7 @@ function lock(reopen = true) {
   authEpoch++;
   sequence++;
   const old = unlockToken;
-  unlockToken = null;
+  unlockToken = null;roomKeys.clear();roomKeyJobs.clear();
   pendingUpdate = null;
   nextUpdateCheck = 0;
   sendingMessage = false;
@@ -911,7 +911,7 @@ function renderChat() {
   const encryptionStatus = $('encryptionStatus');
   const showDirectSecurity = encryptionRequired(current) && directRoom(current);
   encryptionStatus.hidden = !showDirectSecurity;
-  encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? '🔒 Verified' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption';
+  encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? '🔒 Encrypted' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : 'Connecting securely';
   $('threadBadge').hidden = !isAdmin || Boolean(current?.supportAgent);
   $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
@@ -1282,7 +1282,7 @@ function scrubRemovedRooms(previous,next,clearKeys=true){
   const retained=new Map(next.map(room=>[room.id,room]));
   for(const room of previous){
     const current=retained.get(room.id);
-    if(!current&&clearKeys){roomKeys.delete(room.id);roomKeyJobs.delete(room.id);if(mediaRoom===room.id)closeModal();}
+    if(!current&&clearKeys){roomKeys.delete(room.id);roomKeyJobs.delete(room.id);if(native)roomVault('remove',room.id).catch(()=>{});if(mediaRoom===room.id)closeModal();}
     const messages=new Map((current?.messages||[]).map(message=>[message.id,message]));
     for(const message of room.messages){
       if(!messages.has(message.id)||messages.get(message.id).deleted){message.text='';message.cipher=null;message.reply=null;message.reactions=[];message.decrypted=false;revealedMessages.delete(message.id);acknowledgedDelivery.delete(message.id);acknowledgedRead.delete(message.id);}
@@ -1293,8 +1293,7 @@ function scrubRemovedRooms(previous,next,clearKeys=true){
 function clearVolatile() {
   scrubRemovedRooms(state.rooms,[]);
   liveRevision='';
-  roomKeys.clear();
-  roomKeyJobs.clear();
+  roomKeys.clear();roomKeyJobs.clear();if(native)roomVault('clear','').catch(()=>{});
   stopTyping();
   clearReply();
   revealedMessages.clear();
@@ -1323,18 +1322,38 @@ function encryptionReady(room) {
   if(identityChanged(room))return false;
   return Boolean(local?.until > Date.now() && room.encryption && room.encryption.confirmed && room.encryption.peerConfirmed && local?.context && local.verified === local.context.code && room.encryptionStatus === 'ready');
 }
+async function roomVault(action,room,extra={}){return devicePlugin.roomVault({action,room,...extra});}
+async function localRoomKey(room,until){
+  const epoch=authEpoch;
+  const saved=await roomVault('load',room.id);
+  if(epoch!==authEpoch||!unlockToken)throw Error('Locked.');
+  let value,local;
+  if(saved?.value){value=JSON.parse(saved.value);local=await QzuCrypto.restore(value);if(Math.abs(value.until-until)>5000)await roomVault('save',room.id,{value:JSON.stringify({...value,until})});}
+  else if(room.encryption.own)return null;
+  else local=await QzuCrypto.generate(room.id,message=>devicePlugin.sign({message}),data=>roomVault('save',room.id,{value:JSON.stringify({...data,until})}));
+  if(epoch!==authEpoch||!unlockToken)throw Error('Locked.');
+  local.until=until;roomKeys.set(room.id,local);return local;
+}
 function dropExpiredKeys(rooms = null) {
   const now = Date.now();
-  for (const [id, local] of roomKeys) if (local.until <= now || (rooms && !rooms.some(room => room.id === id))) {roomKeys.delete(id);roomKeyJobs.delete(id);}
+  for (const [id, local] of roomKeys) if (local.until <= now || (rooms && !rooms.some(room => room.id === id))) {roomKeys.delete(id);roomKeyJobs.delete(id);if(native)roomVault('remove',id).catch(()=>{});}
 }
 setInterval(dropExpiredKeys, 1000);
 async function prepareEncryptedRooms(data) {
-  dropExpiredKeys(data.rooms);
+  const epoch=authEpoch;dropExpiredKeys(data.rooms);
+  if(native)await roomVault('prune','',{rooms:data.rooms.filter(directRoom).map(r=>r.id)}).catch(()=>{});
   for (const room of data.rooms) {
     if (!directRoom(room) || (!native && !room.encryption)) continue;
     room.encryptionStatus = 'waiting';
-    const local = roomKeys.get(room.id), encryption = room.encryption;
-    if (local) local.until = Date.now() + Math.max(0, room.expires - data.now);
+    let local=roomKeys.get(room.id);const encryption=room.encryption,until=Date.now()+Math.max(0,room.expires-data.now);
+    if(native&&encryption&&data.capabilities?.encryptedDirect&&until>Date.now()&&!identityChanged(room)){
+      try{
+        if(!local||Math.abs(local.until-until)>5000){if(!roomKeyJobs.has(room.id))roomKeyJobs.set(room.id,localRoomKey(room,until));const job=roomKeyJobs.get(room.id);try{local=await job;}finally{if(roomKeyJobs.get(room.id)===job)roomKeyJobs.delete(room.id);}}
+        if(epoch!==authEpoch||!unlockToken)return;
+        if(local&&!encryption.own){await api('encryption/key',{id:room.id,record:local.record},true);encryption.own=local.record;}
+      }catch(error){room.encryptionStatus='error';}
+    }
+    if(local)local.until=until;
     if (!data.capabilities?.encryptedDirect || data.capabilities.encryptedProtocol !== 2 || !encryption || !globalThis.crypto?.subtle) room.encryptionStatus = 'unavailable';
     else if (encryption.own && !local) room.encryptionStatus = 'lost';
     else if (local && encryption.own && encryption.peer) {
@@ -1345,7 +1364,9 @@ async function prepareEncryptedRooms(data) {
           local.context = await QzuCrypto.establish(room.id, local, encryption.own, encryption.peer);
           local.binding = binding;
         }
-        room.encryptionStatus = local.verified === local.context.code && encryption.confirmed && encryption.peerConfirmed ? 'ready' : 'verify';
+        if(identityChanged(room))throw Error('Contact identity changed.');
+        if(!encryption.confirmed){await api('encryption/confirm',{id:room.id,code:local.context.code,automatic:true},true);encryption.confirmed=true;}
+        local.verified=local.context.code;room.encryptionStatus=encryption.confirmed&&encryption.peerConfirmed?'ready':'waiting';
       } catch {
         local.context = null;
         local.verified = null;
@@ -1374,57 +1395,22 @@ async function showEncryption(room) {
     return;
   }
   if (room.encryptionStatus === 'lost' || room.encryptionStatus === 'error') {
-    info('Encryption unavailable', 'The temporary encryption key is missing or changed. Delete this chat and start a new one. No plaintext will be sent.');
+    if(room.contact&&!identityChanged(room)){show('Encryption unavailable',[el('p','','The old key cannot be recovered. Starting a new encrypted conversation deletes the current chat for both participants.'),button('Start new encrypted chat',async()=>{try{await api('chat/delete',{id:room.id});const next=await api('contacts/open',{id:room.contact.id});closeModal();await refresh();selectRoom(next.id);}catch(error){modalError(error);}},'primary-button'),button('Cancel',closeModal,'secondary-button')]);return;}
+    info('Encryption unavailable','The temporary key is missing or changed. No plaintext will be sent.');
     return;
   }
   const local = roomKeys.get(room.id);
-  if (!room.encryption.own) {
-    show('Set up encryption', [el('p', '', 'Generate a temporary key on this device. Both participants must compare the safety code before sending. Closing the app completely can remove the temporary key.'), button('Generate key', async () => {
-      const epoch = authEpoch;
-      try {
-        let key = roomKeys.get(room.id);
-        if (!key) {
-          if (!roomKeyJobs.has(room.id)) roomKeyJobs.set(room.id, QzuCrypto.generate(room.id, message => devicePlugin.sign({ message })));
-          const job = roomKeyJobs.get(room.id);
-          try { key = await job; } finally { if (roomKeyJobs.get(room.id) === job) roomKeyJobs.delete(room.id); }
-          if (epoch !== authEpoch || !unlockToken || room.expires <= serverNow()) return;
-          key = roomKeys.get(room.id) || key;
-          key.until = Date.now() + Math.max(0, room.expires - serverNow());
-          roomKeys.set(room.id, key);
-        }
-        await api('encryption/key', { id: room.id, record: key.record });
-        closeModal();
-        await refresh();
-        const current = state.rooms.find(item => item.id === room.id);
-        if (current && selected === room.id && unlockToken && current.encryption?.own) showEncryption(current);
-      } catch (error) { if (epoch === authEpoch) modalError(error); }
-    }), button('Cancel', closeModal, 'secondary-button')]);
-    return;
-  }
-  if (!local?.context || !room.encryption.peer) {
-    show('Waiting for contact', [
-      el('p', '', 'Your key is ready. Ask your contact to open this conversation and tap Set up encryption. Both devices must compare the same safety code.'),
-      button('Check again', async () => {
-        try {
-          await refresh();
-          const current = state.rooms.find(item => item.id === room.id);
-          if (current && selected === room.id && unlockToken) showEncryption(current);
-        } catch (error) { modalError(error); }
-      }),
-      button('Close', closeModal, 'secondary-button')
-    ]);
-    return;
-  }
+  if(!local?.context||!room.encryption.peer){info('Connecting securely','Encryption is set up automatically when both devices connect.');return;}
   const code = local.context.code;
   const content = [
     el('p', '', 'Compare the entire safety code in person or through a separate trusted channel. Do not confirm unless every character matches.'),
     el('div', 'fingerprint-code', code.match(/.{1,4}/g).join(' ')),
-    el('p', '', 'Experimental encrypted text, photos and audio. Replies, edits and timed messages are disabled here.'),
+    el('p','','Comparing the safety code is optional. Automatic encryption authenticates registered device keys, not the person.'),
   ];
-  if (local.verified !== code || !room.encryption.confirmed) content.push(button('Codes match — verify', async () => {
+  if (!room.contact?.identityVerified) content.push(button('Codes match — verify', async () => {
     try {
       if (roomKeys.get(room.id) !== local || local.context?.code !== code || !unlockToken) throw Error('Encryption key changed.');
-      await api('encryption/confirm', { id: room.id, code });
+      await api('encryption/confirm', { id: room.id, code, automatic:false });
       local.verified = code;
       closeModal();
       await refresh();
@@ -1506,7 +1492,7 @@ function showDeleteAccount(){
     confirm.disabled=true;
     try{
       await api('account/delete',{confirmed:true});
-      roomKeys.clear();roomKeyJobs.clear();sessionReady=false;needsSetup=false;forgetInvoice(false);forgetInvoice(true);
+      roomKeys.clear();roomKeyJobs.clear();if(native)await roomVault('clear','').catch(()=>{});sessionReady=false;needsSetup=false;forgetInvoice(false);forgetInvoice(true);
       checkoutReturn=null;lock(false);history.replaceState(null,'','/chat');navigate('/chat',false);await getSession();
     }catch(error){dialogError(error);confirm.disabled=false;}
   },'primary-button danger-button');
@@ -1701,10 +1687,7 @@ function renderEncryptionNotice(room) {
   const local = roomKeys.get(room.id);
   $('encryptionNoticeText').textContent = ['lost', 'error'].includes(room.encryptionStatus) ? 'Encryption key unavailable. Tap for help.'
     : room.encryptionStatus === 'unavailable' ? 'Encryption unavailable. Tap for details.'
-    : !room.encryption?.own ? 'Set up encryption to send messages'
-    : !room.encryption?.peer ? 'Waiting for your contact to set up encryption'
-    : local?.context && local.verified === local.context.code && room.encryption.confirmed ? 'Waiting for your contact to verify the safety code'
-    : 'Compare safety codes before sending';
+    : 'Connecting securely…';
 }
 $('encryptionNotice').addEventListener('click', () => {
   const room = state.rooms.find(item => item.id === selected);
