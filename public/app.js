@@ -61,6 +61,7 @@ let state = {
 let offset = 0;
 const officialChannel = Symbol('qzu-info');
 let selected = null;
+let burnSeconds = 0;
 let mobileOpen = false;
 let sequence = 0;
 let started = false;
@@ -622,6 +623,7 @@ function lock(reopen = true) {
   $('memberCount').hidden = true;
   $('memberCount').textContent = '';
   $('expiryProgress').hidden = true;
+  $('extensionNotice').hidden = true;
   $('qzuInfoChannel').hidden = true;
   $('qzuInfoOpen').classList.remove('active');
   $('qzuInfoOpen').setAttribute('aria-pressed', 'false');
@@ -804,6 +806,8 @@ function renderChat() {
   $('memberCount').hidden = !current?.group;
   $('memberCount').textContent = current?.group ? current.memberCount + ' members' : '';
   $('expiryProgress').hidden = !current;
+  $('extensionNotice').hidden = !current?.extension;
+  $('extensionNotice').textContent = current?.extension?.incoming ? 'Chat extension requested · Review' : 'Waiting for extension approval';
   $('typingIndicator').hidden = !current?.typing?.length;
   $('typingLabel').textContent = current?.typing?.length ? (current.group ? current.typing.join(', ') : 'Contact') + (current.typing.length === 1 ? ' is typing' : ' are typing') : '';
   renderReply();
@@ -819,7 +823,7 @@ function renderChat() {
   $('chatTimer').textContent = clock(current.expires - now);
   updateExpiry(current);
   const container = $('messages');
-  const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.deleted, message.reactions, message.reply]));
+  const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.deleted, message.reactions, message.reply, message.burnSeconds, message.burnAt]));
   const sameRoom = renderedRoom === current.id;
   const appendOnly = sameRoom && renderedMessages.length <= ids.length &&
     renderedMessages.every((id, index) => ids[index] === id);
@@ -929,7 +933,11 @@ function renderMessage(room, message) {
   }
 
   if (message.deleted) {
-    content.append(el('div', 'deleted-message', 'This message was deleted.'));
+    content.append(el('div', 'deleted-message', message.burnSeconds ? 'Timed message expired or removed.' : 'This message was deleted.'));
+  } else if (message.burnSeconds && !message.burnAt && !message.mine) {
+    content.append(button('Open · ' + message.burnSeconds + 's', async () => {
+      try { await api('message/burn-open', { id: room.id, messageId: message.id }); await refresh(); } catch (error) { showError(error); }
+    }, 'media-message'));
   } else if (message.once) {
     const label = message.opened ? 'Opened' : message.mine ? 'View-once message' : 'Open once';
     const open = button(label, () => openOnceMessage(room, message), 'media-message');
@@ -955,7 +963,13 @@ function renderMessage(room, message) {
 
   bubble.append(footer);
 
-  if (masked) {
+  if (message.burnSeconds && !message.deleted) {
+    const label = el('span', 'burn-label', message.burnAt ? 'Expires shortly' : message.burnSeconds + 's after opening');
+    if (message.burnAt) label.dataset.burnAt = String(message.burnAt);
+    bubble.append(label);
+  }
+
+  if (masked && !(message.burnSeconds && !message.burnAt && !message.mine)) {
     bubble.classList.add('masked-message');
     content.setAttribute('aria-hidden', 'true');
     const reveal = button('Tap to reveal', () => {
@@ -968,7 +982,7 @@ function renderMessage(room, message) {
     bubble.append(reveal);
   }
 
-  if (!room.readOnly && !message.once && !message.deleted) {
+  if (!room.readOnly && !message.once && !message.burnSeconds && !message.deleted) {
     const startReply = () => {
       if (!unlockToken || page !== 'chat' || selected !== room.id || document.hidden) return;
       const current = state.rooms.find(item => item.id === room.id && !item.readOnly && item.expires > serverNow());
@@ -997,7 +1011,7 @@ function renderMessage(room, message) {
     }
   }
 
-  if (!room.readOnly && message.once && message.mine && !message.deleted) {
+  if (!room.readOnly && (message.once || message.burnSeconds) && message.mine && !message.deleted) {
     const more = button('⋯', () => messageActions(room, message), 'reply-action message-more');
     more.setAttribute('aria-label', 'Message actions');
     row.append(more);
@@ -1154,6 +1168,11 @@ function purgeExpired() {
     if (state.invite?.expires <= now) state.invite = null;
     render();
   }
+  for (const label of $('messages').querySelectorAll('[data-burn-at]')) {
+    const remaining = Number(label.dataset.burnAt) - now;
+    label.textContent = remaining > 0 ? Math.ceil(remaining / 1000) + 's remaining' : 'Expired';
+    if (remaining <= 0) label.closest('.message-row')?.replaceChildren(el('span', 'deleted-message', 'Timed message expired.'));
+  }
   const room = state.rooms.find(r => r.id === selected);
   if (room) {
     $('chatTimer').textContent = clock(room.expires - now);
@@ -1270,7 +1289,7 @@ async function sendMessage() {
   updateSendButton();
 
   try {
-    await api('message', { id, text, once: viewOnce, replyTo: replyTarget?.roomId === id ? replyTarget.id : null });
+    await api('message', { id, text, once: viewOnce, burnSeconds, replyTo: burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
 
     if (epoch !== authEpoch) return;
 
@@ -1681,6 +1700,7 @@ loop();
 
 function previewText(message) {
   if (message.deleted) return 'This message was deleted.';
+  if (message.burnSeconds) return 'Timed message';
   if (message.once) return message.opened ? 'Opened' : 'View-once message';
   if (message.kind === 'image') return 'Photo';
   if (message.kind === 'audio') return 'Voice message';
@@ -1689,6 +1709,7 @@ function previewText(message) {
 
 function resetOnce() {
   viewOnce = false;
+  burnSeconds = 0;
   $('attachmentMenu').classList.remove('once-active');
   $('message').placeholder = 'Message';
 }
@@ -1735,9 +1756,9 @@ async function reactTo(room, message, emoji) {
 function messageActions(room, message) {
   const picker = el('div', 'reaction-picker');
   for (const emoji of reactions) picker.append(button(emoji, () => reactTo(room, message, emoji), 'reaction-choice'));
-  const controls = message.once ? [] : [picker];
+  const controls = message.once || message.burnSeconds ? [] : [picker];
 
-  if (!message.once && message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
+  if (!message.once && !message.burnSeconds && message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
     controls.push(button('Edit message', () => {
       const input = el('textarea', 'edit-input');
       input.value = message.text;
@@ -1762,10 +1783,37 @@ function messageActions(room, message) {
   mediaMessage = message.id;
 }
 
+function showExtension(room) {
+  const request = room.extension;
+  const action = (label, value) => button(label, async () => {
+    try { await api('chat/extend', { id: room.id, action: value, requestId: request?.id }); closeModal(); await refresh(); } catch (error) { modalError(error); }
+  }, 'secondary-button');
+  const content = [el('p', '', 'Add 30 minutes once, only if both participants agree.')];
+  if (request?.incoming) content.push(action('Accept +30 minutes', 'accept'), action('Decline', 'decline'));
+  else if (request) content.push(el('p', '', 'Waiting for the other participant.'));
+  else if (!room.extended) content.push(action('Request extension', 'request'));
+  content.push(button('Close', closeModal));
+  show('Extend chat', content);
+}
+$('extensionNotice').addEventListener('click', () => {
+  const room = state.rooms.find(item => item.id === selected);
+  if (room?.extension) showExtension(room);
+});
+async function showFingerprint(room) {
+  try {
+    const result = await api('chat/fingerprint', { id: room.id });
+    if (selected !== room.id) return;
+    show('Device fingerprints', [el('p', '', 'Compare the entire code with your contact through a separate trusted channel.'), el('div', 'fingerprint-code', result.code.match(/.{1,4}/g).join(' ')), el('p', '', 'Based on server-registered device keys. This is not end-to-end encryption or independent proof against the server.'), button('Close', closeModal)]);
+  } catch (error) { showError(error); }
+}
 $('chatOptions').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
   if (!room || room.admin) return;
   const controls = [];
+  if (!room.group) {
+    controls.push(button('Compare device fingerprints', () => showFingerprint(room), 'secondary-button'));
+    if (!room.extended) controls.push(button('Extend chat', () => showExtension(room), 'secondary-button'));
+  }
   const confirm = member => {
     show('Block contact?', [
       el('p', '', 'This prevents new connections with this account and separates you from shared chats.'),
@@ -1888,9 +1936,20 @@ $('attachmentMenu').addEventListener('click', () => {
   const items = [button('Photo', () => choosePhoto(room), 'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
   if (!room.group) items.unshift(button(viewOnce ? 'Disable view once' : 'Enable view once', () => {
     viewOnce = !viewOnce;
+    burnSeconds = 0;
     $('attachmentMenu').classList.toggle('once-active', viewOnce);
     $('message').placeholder = viewOnce ? 'View-once message' : 'Message';
     closeModal();
+  }, 'secondary-button'));
+  if (!room.group) items.unshift(button(burnSeconds ? 'Timed text · ' + burnSeconds + 's' : 'Burn after reading', () => {
+    show('Burn after reading', [el('p', '', 'Text is revealed only when opened. The timer then runs for both sides. Copies cannot be prevented.'), ...[5,10,30,0].map(seconds => button(seconds ? seconds + ' seconds' : 'Off', () => {
+      resetOnce();
+      burnSeconds = seconds;
+      if (seconds) clearReply();
+      $('attachmentMenu').classList.toggle('once-active', Boolean(seconds));
+      $('message').placeholder = seconds ? 'Timed text · ' + seconds + 's' : 'Message';
+      closeModal();
+    }, 'secondary-button'))]);
   }, 'secondary-button'));
   show('Message options', [...items, button('Close', closeModal)]);
 });
@@ -2050,9 +2109,33 @@ $('securityCenter').addEventListener('click', () => {
     item.append(el('span', '', name), el('strong', '', value));
     list.append(item);
   }
-  show('Security center', [list, button('Lock now', () => lock(), 'secondary-button'), button('Close', closeModal)]);
+  show('Security center', [list, button('Security activity', showSecurityActivity, 'secondary-button'), button('Lock now', () => lock(), 'secondary-button'), button('Close', closeModal)]);
 });
 
+async function showSecurityActivity() {
+  try {
+    const { events } = await api('security/activity');
+    const list = el('div', 'security-list');
+    if (!events.length) list.append(el('p', '', 'No recent activity.'));
+    for (const event of events) {
+      const item = el('div', 'security-item');
+      item.append(el('span', '', event.event), el('strong', '', new Date(event.at).toLocaleString()));
+      list.append(item);
+    }
+    show('Security activity', [el('p', '', 'Up to 50 events from the last 30 days. No PINs, messages or IP addresses recorded here.'), list, button('Close', closeModal)]);
+  } catch (error) { showError(error); }
+}
+$('updateCenter').addEventListener('click', async () => {
+  try {
+    const current = window.QZU_APP_VERSION || '0.7.0';
+    const result = await api('version');
+    const parts = v => String(v).split('.').map(Number);
+    const local = parts(current), latest = parts(result.latest);
+    let comparison = 0;
+    for (let i = 0; i < 3 && !comparison; i++) comparison = (latest[i] || 0) - (local[i] || 0);
+    show('Update center', [el('strong', '', comparison > 0 ? 'Update available' : 'You are up to date'), el('p', '', 'Installed: ' + current + ' · Server release: ' + result.latest), el('p', '', result.notes), el('p', '', 'Install updates from your trusted qzu. distribution source.'), button('Close', closeModal)]);
+  } catch (error) { showError(error); }
+});
 const backgroundChoices = ['plain', 'grid', 'dots'];
 function applyChatBackground(value) {
   if (!backgroundChoices.includes(value)) value = 'plain';

@@ -2181,3 +2181,7 @@ html.native-app,
 }
 .native-app .official-channel-intro h1,
 .native-app .official-post p { overflow-wrap: anywhere; }
+
+.burn-label { display: block; font-size: 11px; color: var(--muted); margin-top: 5px; }
+.fingerprint-code { font: 600 17px/1.8 ui-monospace,monospace; overflow-wrap: anywhere; text-align: center; padding: 12px; background: var(--sub); border-radius: 10px; }
+#extensionNotice { flex-shrink: 0; }

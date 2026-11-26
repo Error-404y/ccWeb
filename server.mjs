@@ -1,4 +1,7 @@
 import express from 'express';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { initActivity, recordActivity, listActivity, pruneActivity } from './lib/activity.mjs';
 import QRCode from 'qrcode';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
@@ -17,6 +20,10 @@ const root = dirname(fileURLToPath(import.meta.url));
 const app = express(), db = openAccounts();
 initAccess(db);
 initDevices(db);
+initActivity(db);
+pruneActivity(db);
+setInterval(() => pruneActivity(db), 3600000).unref();
+const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).version;
 const devices = deviceVerifier();
 const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
@@ -191,6 +198,7 @@ app.post('/api/login/setup', guard('login-setup', 5, 60_000), (req, res) => {
   if (!validPin(req.body?.pin) || !setLogin(db, req.account.id, req.body.pin)) return res.status(400).json({
     error: 'Choose a different PIN or unlock.'
   });
+  recordActivity(db, req.account.id, 'PIN created');
   if (!chats.inviteFor(req.account.id)) chats.newCode(req.account.id);
   res.json({
     token: unlocks.issue(req.account.id),
@@ -199,6 +207,7 @@ app.post('/api/login/setup', guard('login-setup', 5, 60_000), (req, res) => {
 });
 app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
   const result = verifyLogin(db, req.account.id, req.body?.pin);
+  recordActivity(db, req.account.id, result === 'ok' ? 'Unlock successful' : result === 'locked' ? 'Unlock temporarily blocked' : 'Unlock rejected');
   if (result !== 'ok') return loginError(res, result);
   res.json({
     token: unlocks.issue(req.account.id),
@@ -225,6 +234,7 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
   }
 
   chats.erase(req.account.id);
+  recordActivity(db, req.account.id, 'Emergency PIN used');
   unlocks.revokeAll(req.account.id);
   res.json({ ok: true });
 });
@@ -239,10 +249,22 @@ app.use('/api', (req, res, next) => {
 app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
   const result = changeLogin(db, req.account.id, req.body?.current, req.body?.next);
   if (result !== 'ok') return loginError(res, result);
+  recordActivity(db, req.account.id, 'Login PIN changed');
   unlocks.revokeAll(req.account.id);
   res.json({
     token: unlocks.issue(req.account.id)
   });
+});
+app.get('/api/security/activity', (req, res) => res.json({ events: listActivity(db, req.account.id) }));
+app.get('/api/version', (req, res) => res.json({ latest: version, notes: 'Security activity, timed text messages, mutual chat extensions and device fingerprint comparison.' }));
+app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
+app.post('/api/message/burn-open', guard('burn-open', 80, 60000), (req, res) => res.json(chats.openBurn(req.account.id, req.body?.id, req.body?.messageId, Boolean(req.account.invisible))));
+app.post('/api/chat/fingerprint', guard('fingerprint', 15, 60000), (req, res) => {
+  const room = chats.requireRoom(req.account.id, req.body?.id);
+  if (room.group || room.admin || room.support || room.users.length !== 2) return res.status(400).json({ error: 'Direct device-bound chats only.' });
+  const ids = room.users.map(id => db.prepare('SELECT device_id FROM accounts WHERE id=?').get(id)?.device_id);
+  if (ids.some(id => !id || !/^[a-f0-9]{64}$/.test(id))) return res.status(400).json({ error: 'Both participants need registered mobile devices.' });
+  res.json({ code: createHash('sha256').update('qzu-device-pair-v1:' + ids.sort().join(':')).digest('hex').toUpperCase() });
 });
 app.get('/api/state', (req, res) => {
   const a = req.account;
