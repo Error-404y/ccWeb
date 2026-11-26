@@ -2275,3 +2275,6 @@ dialog.update-sheet[open] .modal-head h2 {
 .support-entry { margin-inline: 14px; width: calc(100% - 28px); }
 .support-entry[hidden] { display: none; }
 .support-entry .contact-name { display: flex; align-items: center; gap: 5px; }
+
+.support-help-notes { margin: 16px 0 0; padding-inline-start: 20px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.support-help-notes li + li { margin-top: 4px; }

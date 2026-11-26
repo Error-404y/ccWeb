@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.9.4';
+const installedVersion = window.QZU_APP_VERSION || '0.9.5';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -1260,7 +1260,8 @@ function renderSettings() {
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
-  $('writeSupport').disabled = !state.supportAvailable;
+  $('writeSupport').disabled = !unlockToken;
+  $('writeSupport').querySelector('span').textContent = state.supportAgent ? 'Support inbox' : 'Write Support';
   if (!invisibleSaving) $('invisibleMode').checked = Boolean(state.invisible);
   $('invisibleMode').disabled = invisibleSaving || !unlockToken;
 }
@@ -1517,13 +1518,26 @@ $('changeLogin').addEventListener('click', () => {
   });
 });
 function confirmSupport() {
-  if (!unlockToken || !state.supportAvailable) return;
+  if (!unlockToken || accessDue) return;
+  if (state.supportAgent) {
+    const rooms = state.rooms.filter(room => room.mobileSupport && room.supportAgent && room.expires > serverNow());
+    const controls = rooms.map(room => button(nameFor(room) + (room.deletionRequested ? ' · Deletion requested' : ''), () => {
+      closeModal();
+      navigate('/chat');
+      selectRoom(room.id);
+    }, 'secondary-button'));
+    if (!controls.length) controls.push(el('p','','No support conversations yet.'));
+    controls.push(button('Close',closeModal,'secondary-button'));
+    show('Support inbox', controls);
+    return;
+  }
+  if (!state.supportAvailable) return info('Support','Support is currently unavailable. Please try again later.');
   const yes=button('Yes',async()=>{
     yes.disabled=true;
     try {const result=await api('support/open',{});await refresh();closeModal();navigate('/chat');selectRoom(result.id);}
     catch(error){yes.disabled=false;modalError(error);}
   });
-  show('Contact Support',[el('p','','Do you want to contact Support through chat?'),el('p','','Support messages are stored on the server until deleted or until an admin sets an expiry. They are not end-to-end encrypted.'),yes,button('No',closeModal,'secondary-button')]);
+  show('Contact Support',[el('p','','Do you want to contact Support through chat?'),el('p','','Stored on the server until deleted. Not end-to-end encrypted.'),yes,button('No',closeModal,'secondary-button')]);
 }
 $('supportOpen').addEventListener('click',confirmSupport);
 $('writeSupport').addEventListener('click',confirmSupport);

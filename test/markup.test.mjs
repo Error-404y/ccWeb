@@ -23,3 +23,11 @@ test('key redemption uses neutral wording without exposing admin key types', () 
   assert.ok(app.includes("showCheckout('Use Access-Key'"));
   assert.ok(!app.includes('Access or admin key'));
 });
+
+test('Help provides concise notes and an actionable support inbox', () => {
+  assert.match(html, /<ul class="support-help-notes">\s*<li>Contact Support for assistance\.<\/li>\s*<li>Support manages chat retention and deletion\.<\/li>\s*<\/ul>/);
+  assert.ok(app.includes("state.supportAgent ? 'Support inbox' : 'Write Support'"));
+  assert.ok(app.includes("show('Support inbox', controls)"));
+  assert.ok(app.includes("Support is currently unavailable."));
+  assert.ok(!app.includes("if (!unlockToken || !state.supportAvailable) return;"));
+});
