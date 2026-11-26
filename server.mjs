@@ -183,6 +183,7 @@ app.post('/api/session', (req, res) => {
     if ((accessRequired || req.deviceId) && !req.body?.accessKey) return res.json({ accessRequired: true });
     const review = validReviewKey(req.body?.accessKey);
     const { token, id } = review ? redeemReviewAccess(db,req.body.accessKey,req.deviceId,{key:process.env.QZU_REVIEW_KEY,pin:process.env.QZU_REVIEW_PIN}) : accessRequired || req.deviceId ? redeemAccess(db, req.body.accessKey, Date.now(), req.deviceId || null) : createAccount(db);
+    compliance.requireTerms(id);
     if (!req.deviceId) res.cookie(cookieName, token, {
       httpOnly: true,
       secure: production,
@@ -275,7 +276,7 @@ app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(complia
 app.use('/api',(req,res,next)=>{
   if(req.account.suspended)return res.status(403).json({error:'Account suspended.'});
   if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
-  if(req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
+  if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
 });
 app.post('/api/report',guard('report',5,60000),(req,res)=>{
