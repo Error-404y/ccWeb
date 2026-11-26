@@ -2271,3 +2271,7 @@ dialog.update-sheet[open] .modal-head h2 {
 .contact-muted { font-size: 10px; color: var(--muted); }
 .contact-setting { display: flex; align-items: center; justify-content: space-between; min-height: 40px; }
 .contact-setting input { accent-color: var(--accent); }
+
+.support-entry { margin-inline: 14px; width: calc(100% - 28px); }
+.support-entry[hidden] { display: none; }
+.support-entry .contact-name { display: flex; align-items: center; gap: 5px; }

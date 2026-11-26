@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.9.1';
+const installedVersion = window.QZU_APP_VERSION || '0.9.2';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -160,7 +160,7 @@ const clock = ms => {
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 };
 const serverNow = () => Date.now() + offset;
-const nameFor = room => room.admin ? (room.support ? 'Admin' : 'Announcements') : room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
+const nameFor = room => room.support ? (room.supportAgent ? 'Contact ' + room.id.slice(0,4).toUpperCase() : 'qzu-Support') : room.admin ? 'Announcements' : room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
   cancelAnimationFrame(scanFrame);
@@ -638,6 +638,7 @@ function lock(reopen = true) {
   $('memberCount').textContent = '';
   $('expiryProgress').hidden = true;
   $('extensionNotice').hidden = true;
+  $('supportOpen').hidden = true;
   $('qzuInfoChannel').hidden = true;
   $('qzuInfoOpen').classList.remove('active');
   $('qzuInfoOpen').setAttribute('aria-pressed', 'false');
@@ -795,6 +796,7 @@ $('manageContacts').addEventListener('click',()=>{
 });
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
+  $('supportOpen').hidden=!state.supportAvailable || state.rooms.some(room=>room.mobileSupport&&!room.supportAgent&&room.expires>serverNow());
   const now = serverNow(), rooms = state.rooms.filter(r => r.expires > now);
   if (selected !== officialChannel && !rooms.some(r => r.id === selected)) {
     if (selected !== null) {
@@ -841,7 +843,7 @@ function renderChat() {
 
       addContactMarks(name,r.contact,r);
       b.dataset.contactPriority=String(r.admin?2:r.contact?.favorite?1:0);
-      if (r.admin) {
+      if (r.admin && !r.supportAgent) {
         const badge = svg('adminBadge', 'admin-badge');
         badge.setAttribute('aria-label', 'Verified Admin');
         badge.removeAttribute('aria-hidden');
@@ -851,7 +853,7 @@ function renderChat() {
       const preview = identityChanged(r) ? 'Contact identity changed' : r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode || r.contact?.muted ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
       content.append(name, el('span', 'contact-preview' + (r.contact?.warning || identityChanged(r) ? ' contact-warning' : ''), preview));
-      b.append(svg(r.admin ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
+      b.append(svg(r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       b.addEventListener('click', () => selectRoom(r.id));
       list.append(b);
     }
@@ -891,8 +893,8 @@ function renderChat() {
   const encryptionStatus = $('encryptionStatus');
   encryptionStatus.hidden = !current;
   encryptionStatus.textContent = !current ? '' : directRoom(current) && (native || current.encryption) ? encryptionReady(current) ? '🔒 Verified encrypted chat' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Encryption key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption' : 'Not end-to-end encrypted';
-  $('threadBadge').hidden = !isAdmin;
-  $('threadAvatar').setAttribute('href', isAdmin ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
+  $('threadBadge').hidden = !isAdmin || Boolean(current?.supportAgent);
+  $('threadAvatar').setAttribute('href', readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
   $('chatOptions').hidden = !current || isAdmin;
   $('presenceLabel').hidden = !current || isAdmin;
@@ -1508,6 +1510,11 @@ $('changeLogin').addEventListener('click', () => {
     await refresh();
     info('qzu.', 'PIN changed.');
   });
+});
+$('supportOpen').addEventListener('click',async()=>{
+  const open=$('supportOpen');open.disabled=true;
+  try{const result=await api('support/open',{});await refresh();navigate('/chat');selectRoom(result.id);}
+  catch(error){showError(error);}finally{open.disabled=false;}
 });
 $('qzuInfoOpen').addEventListener('click', () => {
   if (unlockToken && !accessDue) selectRoom(officialChannel);
@@ -2643,12 +2650,21 @@ function showAccess() {
 
 function showKeyEntry(renewal) {
   const input = el('input', 'access-key-input');
-  input.placeholder = 'QZU-… or QZO-…';
+  input.placeholder = renewal ? 'QZU-… or QZO-…' : 'Access or admin key';
   input.autocomplete = 'off';
   input.spellcheck = false;
-  input.maxLength = 52;
-  const submit = button('Continue', () => {
+  input.maxLength = renewal ? 52 : 58;
+  const submit = button('Continue', async () => {
     const value = input.value.trim().toUpperCase();
+    if(!renewal&&/^QZU-ADMIN-[A-F0-9]{48}$/.test(value)){
+      submit.disabled=true;
+      try{
+        const result=await api('session',{accessKey:value});
+        if(result.accessRequired||!result.needsSetup)throw Error('Admin activation unavailable.');
+        input.value='';forgetInvoice(false);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();
+      }catch(error){dialogError(error);submit.disabled=false;}
+      return;
+    }
     if (!/^QZ[UO]-[A-F0-9]{48}$/.test(value)) return dialogError(new Error('Enter a valid access key or order reference.'));
     rememberInvoice(value, renewal);
     showInvoice(value, null, renewal);
