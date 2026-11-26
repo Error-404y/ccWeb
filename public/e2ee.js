@@ -25,11 +25,20 @@
     if (offset !== der.length) throw Error('Invalid signature.');
     return raw;
   }
-  async function generate(room, sign) {
-    const pair = await globalThis.crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+  async function generate(room, sign, persist=null) {
+    const pair = await globalThis.crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, Boolean(persist), ['deriveBits']);
     const key = b64(await globalThis.crypto.subtle.exportKey('raw', pair.publicKey));
     const signed = await sign(JSON.stringify(['qzu-room-key-v1', room, key]));
-    return { privateKey: pair.privateKey, record: { key, identity: signed.publicKey, signature: signed.signature } };
+    const record={key,identity:signed.publicKey,signature:signed.signature};
+    if(!persist)return {privateKey:pair.privateKey,record};
+    const saved={jwk:await crypto.subtle.exportKey('jwk',pair.privateKey),record};
+    await persist(saved);return restore(saved);
+  }
+  async function restore({jwk,record}){
+    if(jwk?.kty!=='EC'||jwk.crv!=='P-256'||typeof jwk.d!=='string')throw Error('Invalid saved key.');
+    const pub=await crypto.subtle.importKey('jwk',{kty:'EC',crv:'P-256',x:jwk.x,y:jwk.y,ext:true},{name:'ECDH',namedCurve:'P-256'},true,[]);
+    if(b64(await crypto.subtle.exportKey('raw',pub))!==record.key)throw Error('Saved key mismatch.');
+    return {privateKey:await crypto.subtle.importKey('jwk',jwk,{name:'ECDH',namedCurve:'P-256'},false,['deriveBits']),record};
   }
   async function verifyRecord(room, record) {
     const subtle = globalThis.crypto.subtle;
@@ -80,6 +89,12 @@
       return text;
     }finally{clear.fill(0);}
   }
+  const validReference=id=>typeof id==='string'&&/^[0-9a-f-]{36}$/.test(id);
+  async function encryptReply(context,iv,id){if(!validReference(id))throw Error('Invalid reply.');return seal(context,bytes(id),'reply:'+iv);}
+  async function decryptReply(context,iv,cipher,mine){const clear=new Uint8Array(await unseal(context,cipher,mine,'reply:'+iv,64));try{const id=new TextDecoder('utf-8',{fatal:true}).decode(clear);if(!validReference(id))throw Error('Invalid reply.');return id;}finally{clear.fill(0);}}
+  const reactionValues=['👍','❤️','😂','🔥','😮','👎','-'];
+  async function encryptReaction(context,id,value){if(!validReference(id)||!reactionValues.includes(value))throw Error('Invalid reaction.');return seal(context,bytes(value),'reaction:'+id);}
+  async function decryptReaction(context,id,cipher,mine){if(!validReference(id))throw Error('Invalid reaction.');const clear=new Uint8Array(await unseal(context,cipher,mine,'reaction:'+id,64));try{const value=new TextDecoder('utf-8',{fatal:true}).decode(clear);if(!reactionValues.includes(value))throw Error('Invalid reaction.');return value;}finally{clear.fill(0);}}
   const mediaTypes = { image: ['image/jpeg', 'image/png', 'image/webp'], audio: ['audio/webm', 'audio/mp4', 'audio/ogg'] };
   const mediaLimit = 2 * 1024 * 1024;
   async function encryptMedia(context, kind, blob) {
@@ -103,5 +118,5 @@
     return new Blob([clear.subarray(split + 1)], { type: mime });
     }finally{clear.fill(0);}
   }
-  globalThis.QzuCrypto = Object.freeze({ generate, establish, encrypt, decrypt, encryptMedia, decryptMedia });
+  globalThis.QzuCrypto = Object.freeze({ generate, restore, establish, encrypt, decrypt, encryptMedia, decryptMedia, encryptReply, decryptReply, encryptReaction, decryptReaction });
 })();

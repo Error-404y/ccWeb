@@ -36,7 +36,7 @@ const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
 const official=officialStore(db),feedback=feedbackStore(db),liveWaiters=new Map();
-const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET,firebase:loadFirebaseDelivery(process.env.QZU_FIREBASE_CREDENTIALS)});
+const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET,firebase:loadFirebaseDelivery(process.env.QZU_FIREBASE_CREDENTIALS),unread:account=>chats.snapshot(account).reduce((n,room)=>n+room.messages.filter(m=>m.unread).length,0)});
 const compliance=complianceStore(db);compliance.sweep();setInterval(()=>compliance.sweep(),3600000).unref();
 let liveTotal=0;
 const contacts = contactStore(db);
@@ -75,7 +75,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use((req, res, next) => express.json({
-  limit: ['/api/message', '/api/encryption/message'].includes(req.path) ? '3mb' : '12kb',
+  limit: ['/api/message', '/api/encryption/message','/api/report'].includes(req.path) ? '3mb' : '12kb',
   verify: (req, res, buffer) => { req.rawBody = buffer.toString('utf8'); }
 })(req, res, next));
 const cookieName = production ? '__Host-qzu': 'qzu';
@@ -220,7 +220,7 @@ app.post('/api/login/setup', guard('login-setup', 5, 60_000), (req, res) => {
   if (!chats.inviteFor(req.account.id)) chats.newCode(req.account.id);
   res.json({
     token: unlocks.issue(req.account.id),
-    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended)
+    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))
   });
 });
 app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
@@ -229,7 +229,7 @@ app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
   if (result !== 'ok') return loginError(res, result);
   res.json({
     token: unlocks.issue(req.account.id),
-    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended)
+    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))
   });
 });
 app.post('/api/login/lock', (req, res) => {
@@ -274,7 +274,8 @@ app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(
 });
 app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(compliance.accept(req.account.id,req.body?.version)));
 app.use('/api',(req,res,next)=>{
-  if(req.account.suspended)return res.status(403).json({error:'Account suspended.'});
+  if(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
+  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&['/message','/encryption/message','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/invite','/contacts/open','/invite'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
   if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
   if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
@@ -286,10 +287,27 @@ app.post('/api/report',guard('report',5,60000),(req,res)=>{
   if(messageId){const message=room.messages.find(m=>m.id===messageId&&!m.deleted);if(!message||message.sender===req.account.id)return res.status(400).json({error:'Message unavailable.'});target=message.sender;}
   else target=room.group?room.users.find(m=>m!==req.account.id&&room.labels.get(m)===req.body?.member):room.users.find(m=>m!==req.account.id);
   if(!target)return res.status(400).json({error:'Choose a contact.'});
-  res.json(compliance.report(req.account.id,target,room.id,req.body?.reason,req.body?.evidence??'',messageId||null));
+  const items=req.body?.context??[];
+  if(!Array.isArray(items)||items.length>6)return res.status(400).json({error:'Choose up to six messages.'});
+  const selected=new Set();const context=[];for(const entry of items){const m=room.messages.find(x=>x.id===entry?.id&&!x.deleted&&!x.once&&!x.burnSeconds);if(!m||selected.has(m.id)||m.kind!=='text'||typeof entry.text!=='string'||entry.text.length>1000)return res.status(400).json({error:'Selected evidence is unavailable.'});selected.add(m.id);context.push({id:m.id,sender:m.sender===req.account.id?'Reporter':m.sender===target?'Reported account':'Other participant',at:m.at,reported:m.id===messageId,text:room.encryption?entry.text:m.text.slice(0,1000),source:room.encryption?'reporter-submitted':'server-confirmed'});}
+  context.sort((a,b)=>a.at-b.at);
+  let attachment=null;
+  if(req.body?.attachment){
+    const item=req.body.attachment,m=room.messages.find(x=>x.id===messageId&&!x.deleted&&!x.once&&!x.burnSeconds);
+    if(!m||!['image','audio'].includes(m.kind))return res.status(400).json({error:'Reported attachment unavailable.'});
+    const types=m.kind==='image'?['image/jpeg','image/png','image/webp']:['audio/mp4','audio/webm','audio/ogg'];
+    if(!types.includes(item.mime)||typeof item.data!=='string'||item.data.length>Math.ceil(2*1024*1024/3)*4||!/^[A-Za-z0-9+/]+={0,2}$/.test(item.data))return res.status(400).json({error:'Invalid evidence attachment.'});
+    const bytes=Buffer.from(item.data,'base64');if(!bytes.length||bytes.length>2*1024*1024||bytes.toString('base64')!==item.data)return res.status(400).json({error:'Invalid evidence attachment.'});
+    if(!room.encryption&&(!m.media||m.media.mime!==item.mime||!m.media.bytes.equals(bytes)))return res.status(400).json({error:'Evidence does not match the message.'});
+    attachment={messageId:m.id,kind:m.kind,mime:item.mime,body:bytes,source:room.encryption?'reporter-submitted':'server-confirmed',at:m.at};
+  }
+  const result=compliance.report(req.account.id,target,room.id,req.body?.reason,req.body?.evidence??'',messageId||null,context,room.encryption?'encrypted direct':room.group?'group':room.support?'support':'direct',attachment);
+  const admin=db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired'").all().map(a=>a.id);push.notify(admin);res.json(result);
 });
-app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json({items:compliance.list()});});
-app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action);if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
+app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json({items:compliance.list(true)});});
+app.get('/api/admin/reports/media/:id',guard('report-media',40,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const media=compliance.media(req.params.id);if(!media)return res.sendStatus(404);res.set('Cache-Control','no-store').type(media.mime).send(Buffer.from(media.body));});
+app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action,req.account.id,req.body?.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
+app.post('/api/admin/reports/reinstate',guard('reinstate',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json(compliance.reinstate(req.body?.target,req.account.id,req.body?.notes??''));});
 const supportAccount = () => db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL").get();
 app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
   const agent=supportAccount();
@@ -349,14 +367,15 @@ app.post('/api/encryption/key', guard('encryption-key', 20, 60000), (req, res) =
 });
 app.post('/api/encryption/confirm', guard('encryption-confirm', 20, 60000), (req, res) => {
   if(typeof req.body?.code!=='string')return res.status(400).json({error:'Update qzu. to verify the safety code.'});
-  res.json(chats.confirmRoomKey(req.account.id, req.body?.id,req.body.code));
+  res.json(chats.confirmRoomKey(req.account.id, req.body?.id,req.body.code,req.body?.automatic===true));
 });
 app.post('/api/encryption/message', guard('encrypted-send', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
-  const id=chats.sendEncrypted(req.account.id, req.body?.id, req.body?.cipher, req.body?.kind);
+  const id=chats.sendEncrypted(req.account.id, req.body?.id, req.body?.cipher, req.body?.kind,req.body?.replyCipher??null);
   notifyRoom(req.account.id,req.body.id);
   res.json({id});
 });
+app.post('/api/encryption/reaction',guard('encrypted-reaction',80,60000),(req,res)=>{if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});res.json(chats.reactEncrypted(req.account.id,req.body?.id,req.body?.messageId,req.body?.cipher));});
 app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
   res.json(chats.getEncryptedMedia(req.account.id, req.params.room, req.params.message));
@@ -365,9 +384,9 @@ function stateData(a) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, live: true },
     official:official.snapshot(a.id),
-    push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id)},
+    push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
     access: accessStatus(a),
     supportAgent: a.access_plan==='admin',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
@@ -420,6 +439,7 @@ app.post('/api/push/register',guard('push-register',10,60000),(req,res)=>{
   if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
   res.json(push.register(req.account.id,req.body?.platform,req.body?.token));
 });
+app.post('/api/push/test',guard('push-test',3,60000),async(req,res)=>res.json(await push.test(req.account.id)));
 app.post('/api/push/remove',guard('push-remove',10,60000),(req,res)=>{push.remove(req.account.id);res.json({ok:true});});
 app.post('/api/invite',guard('invite',15,60000),(req,res)=>res.json(chats.newCode(req.account.id,req.body?.minutes??10)));
 app.get('/api/qr', async(req, res) => {

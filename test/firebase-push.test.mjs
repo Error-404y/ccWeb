@@ -33,3 +33,5 @@ test('Android-only push rejects iOS and removes invalid tokens',async()=>{
  await new Promise(resolve=>setImmediate(resolve));
  assert.equal(service.registered('a'),false);db.close();
 });
+
+test('push self test exposes only safe diagnostic result',async()=>{const db=new DatabaseSync(':memory:');db.exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,pin_state TEXT,access_plan TEXT,paid_until INTEGER);INSERT INTO accounts VALUES('a','ready','lifetime',NULL)");let count;const service=privatePush(db,{firebase:async(token,n)=>{count=n;return {ok:true};},unread:()=>5});assert.deepEqual(await service.test('a'),{result:'not-registered'});service.register('a','android','a'.repeat(64));assert.deepEqual(await service.test('a'),{result:'accepted'});assert.equal(count,5);assert.equal(service.diagnostic('a').result,'accepted');db.close();});

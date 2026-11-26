@@ -11,6 +11,13 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import java.math.BigInteger;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
+import android.content.SharedPreferences;
+import org.json.JSONObject;
+import org.json.JSONArray;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
@@ -36,6 +43,42 @@ public class QzuDevice extends Plugin {
         return store.getEntry(ALIAS, null);
     }
 
+    private static final String ROOM_ALIAS = "cc.qzu.app.rooms.v1";
+    private synchronized SecretKey vaultKey() throws Exception {
+        KeyStore store = KeyStore.getInstance("AndroidKeyStore");store.load(null);
+        if(!store.containsAlias(ROOM_ALIAS)){
+            KeyGenerator generator=KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore");
+            generator.init(new KeyGenParameterSpec.Builder(ROOM_ALIAS,KeyProperties.PURPOSE_ENCRYPT|KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).setKeySize(256).build());generator.generateKey();
+        }
+        return (SecretKey)store.getKey(ROOM_ALIAS,null);
+    }
+    @PluginMethod public synchronized void roomVault(PluginCall call){
+        try{
+            String action=call.getString("action",""),id=call.getString("room","");
+            SharedPreferences prefs=getContext().getSharedPreferences("qzu_room_vault",0);
+            if(action.equals("clear")){if(!prefs.edit().clear().commit())throw new Exception();call.resolve();return;}
+            if(action.equals("prune")){JSONArray rooms=call.getArray("rooms");java.util.HashSet<String> keep=new java.util.HashSet<>();if(rooms!=null)for(int x=0;x<rooms.length();x++)keep.add(rooms.getString(x));SharedPreferences.Editor edit=prefs.edit();for(String k:prefs.getAll().keySet())if(!keep.contains(k))edit.remove(k);if(!edit.commit())throw new Exception();call.resolve();return;}
+            if(!id.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))throw new Exception();
+            if(action.equals("remove")){if(!prefs.edit().remove(id).commit())throw new Exception();call.resolve();return;}
+            Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");
+            if(action.equals("save")){
+                String value=call.getString("value");if(value==null||value.length()>8192)throw new Exception();long until=new JSONObject(value).getLong("until"),now=System.currentTimeMillis();if(until<=now||until>now+7200000L)throw new Exception();
+                cipher.init(Cipher.ENCRYPT_MODE,vaultKey());cipher.updateAAD(id.getBytes(StandardCharsets.UTF_8));String packed=Base64.encodeToString(cipher.getIV(),Base64.NO_WRAP)+":"+Base64.encodeToString(cipher.doFinal(value.getBytes(StandardCharsets.UTF_8)),Base64.NO_WRAP);
+                if(!prefs.edit().putString(id,packed).commit())throw new Exception();call.resolve();return;
+            }
+            if(action.equals("load")){
+                String packed=prefs.getString(id,null);if(packed==null){call.resolve();return;}
+                String[] parts=packed.split(":",2);cipher.init(Cipher.DECRYPT_MODE,vaultKey(),new GCMParameterSpec(128,Base64.decode(parts[0],Base64.NO_WRAP)));cipher.updateAAD(id.getBytes(StandardCharsets.UTF_8));
+                String value=new String(cipher.doFinal(Base64.decode(parts[1],Base64.NO_WRAP)),StandardCharsets.UTF_8);
+                if(new JSONObject(value).getLong("until")<=System.currentTimeMillis()){prefs.edit().remove(id).commit();call.resolve();return;}JSObject result=new JSObject();result.put("value",value);call.resolve(result);return;
+            }
+            throw new Exception();
+        }catch(Exception e){call.reject("Secure room storage unavailable.");}
+    }
+
+    @PluginMethod public void haptic(PluginCall call) {
+        getActivity().runOnUiThread(()->{getActivity().getWindow().getDecorView().performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK);call.resolve();});
+    }
     private static void coordinate(BigInteger value, byte[] target, int offset) {
         byte[] source = value.toByteArray();
         int length = Math.min(32, source.length);

@@ -61,3 +61,5 @@ test('trust reset closes the existing encrypted chat and requires new verificati
   assert.equal(chats.requireRoom('a',fresh).encryption.confirmed.size,0);
   db.close();
 });
+
+test('automatic identity pinning is separate from trusted status',()=>{const db=openAccounts(':memory:');const store=contactStore(db);const id=store.add('a','b','B','A');assert.equal(store.verify('a','b','a-key','b-key',false),true);assert.equal(store.list('a')[0].trusted,false);assert.equal(store.list('a')[0].identityVerified,false);store.update('a',id,{trusted:true});assert.equal(store.list('a')[0].personallyTrusted,true);assert.equal(store.verify('a','b','a-key','changed',false),false);db.close();});

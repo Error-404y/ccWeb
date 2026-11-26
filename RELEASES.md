@@ -65,3 +65,6 @@ The release:play script sets QZU_DISTRIBUTION=google-play. This edition only red
 
 ## 0.10.3
 Version-only rebuild of the 0.10.2 Google Play edition with Android version code 10004 because 10003 was already registered in Play Console. No functional changes.
+
+## 0.11.0 development — not production-ready
+Development branch: develop/v0.11.0. New bottom navigation, independent unread state, text-free startup, contextual gestures, native key vaults, automatic signed room handshake, encrypted replies/reactions, media controls, push diagnostics and moderation evidence. Both new clients must be tested with the new server before release. Offline prekeys and an audited ratchet are not implemented; first-time sessions require both devices to connect. Existing lost keys cannot be recovered. Native key vaults need real iOS/Android verification; old clients retain manual handshake support. iOS local notifications and badge support are staged, remote APNs is not configured. Android FCM acceptance does not prove device delivery. Do not deploy this branch to Oracle or upload a new Play bundle until tests and device checks pass. Review privacy and data safety declarations for report evidence and key retention. Do not use production accounts for destructive tests.
