@@ -57,7 +57,11 @@ if (target === 'ios') {
   const delegate = app + '/AppDelegate.swift';
   const nativeCode = readFileSync('mobile/ios/QzuDevice.swift', 'utf8');
   const marker = '\n// QZU_NATIVE_DEVICE\n';
-  const original = readFileSync(delegate, 'utf8').split(marker)[0];
+  let original = readFileSync(delegate, 'utf8').split(marker)[0];
+  const pushCallbacks=[];
+  if(!original.includes('didRegisterForRemoteNotificationsWithDeviceToken'))pushCallbacks.push('    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) { NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken) }');
+  if(!original.includes('didFailToRegisterForRemoteNotificationsWithError'))pushCallbacks.push('    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) { NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error) }');
+  if(pushCallbacks.length){const end=original.lastIndexOf('}');if(end<0)throw Error('Unexpected AppDelegate. Configure push callbacks manually.');original=original.slice(0,end)+pushCallbacks.join('\n')+'\n'+original.slice(end);}
   writeFileSync(delegate, original + marker + nativeCode);
   const scene = app + '/Base.lproj/Main.storyboard';
   let storyboard = readFileSync(scene, 'utf8');
@@ -87,7 +91,7 @@ if (target === 'ios') {
   cpSync('mobile/android/MainActivity.java', java + '/MainActivity.java');
   const manifest = 'android/app/src/main/AndroidManifest.xml';
   let xml = readFileSync(manifest, 'utf8');
-  for (const permission of ['CAMERA', 'RECORD_AUDIO']) {
+  for (const permission of ['CAMERA', 'RECORD_AUDIO', 'POST_NOTIFICATIONS']) {
     if (!xml.includes('android.permission.' + permission)) xml = xml.replace('</manifest>', '<uses-permission android:name="android.permission.' + permission + '" />\n</manifest>');
   }
   xml = xml.replace('android:allowBackup="true"', 'android:allowBackup="false"');

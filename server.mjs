@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { Chats } from './lib/chats.mjs';
 import { officialStore } from './lib/official.mjs';
+import { privatePush } from './lib/push.mjs';
 import { versionedState } from './lib/live.mjs';
 import { contactStore, retireAccount } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
@@ -32,6 +33,7 @@ const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
 const official=officialStore(db),liveWaiters=new Map();
+const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET});
 let liveTotal=0;
 const contacts = contactStore(db);
 chats.contacts = contacts;
@@ -243,6 +245,7 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
   }
 
   chats.erase(req.account.id);
+  push.remove(req.account.id);
   recordActivity(db, req.account.id, 'Emergency PIN used');
   unlocks.revokeAll(req.account.id);
   res.json({ ok: true });
@@ -259,7 +262,7 @@ app.post('/api/logout', guard('logout', 3, 60000), (req,res) => {
   if (req.body?.confirmed !== true) return res.status(400).json({error:'Confirmation required.'});
   retireAccount(db,contacts,req.account.id);
   chats.erase(req.account.id);
-  official.erase(req.account.id);
+  official.erase(req.account.id);push.remove(req.account.id);
   unlocks.revokeAll(req.account.id);
   chats.hidePresence(req.account.id);
   res.clearCookie(cookieName,{httpOnly:true,secure:production,sameSite:'strict',path:'/'});
@@ -328,7 +331,9 @@ app.post('/api/encryption/confirm', guard('encryption-confirm', 20, 60000), (req
 });
 app.post('/api/encryption/message', guard('encrypted-send', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
-  res.json({ id: chats.sendEncrypted(req.account.id, req.body?.id, req.body?.cipher, req.body?.kind) });
+  const id=chats.sendEncrypted(req.account.id, req.body?.id, req.body?.cipher, req.body?.kind);
+  notifyRoom(req.account.id,req.body.id);
+  res.json({id});
 });
 app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
@@ -339,6 +344,7 @@ function stateData(a) {
     now: Date.now(),
     capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, live: true },
     official:official.snapshot(a.id),
+    push:{available:push.enabled,registered:push.registered(a.id)},
     access: accessStatus(a),
     supportAgent: a.access_plan==='admin',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
@@ -379,8 +385,17 @@ app.get('/api/state/live',guard('live',180,60000),(req,res,next)=>{
     }catch(error){cleanup();next(error);}
   },500);
 });
-app.post('/api/official/publish',guard('official-publish',10,60000),(req,res)=>res.json(official.publish(req.body?.text,req.account.access_plan==='admin')));
+app.post('/api/official/publish',guard('official-publish',10,60000),(req,res)=>{
+  const result=official.publish(req.body?.text,req.account.access_plan==='admin');
+  push.broadcast(req.account.id);
+  res.json(result);
+});
 app.post('/api/official/read',guard('official-read',60,60000),(req,res)=>res.json(official.mark(req.account.id,req.body?.id)));
+app.post('/api/push/register',guard('push-register',10,60000),(req,res)=>{
+  if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
+  res.json(push.register(req.account.id,req.body?.platform,req.body?.token));
+});
+app.post('/api/push/remove',guard('push-remove',10,60000),(req,res)=>{push.remove(req.account.id);res.json({ok:true});});
 app.post('/api/invite',guard('invite',15,60000),(req,res)=>res.json(chats.newCode(req.account.id,req.body?.minutes??10)));
 app.get('/api/qr', async(req, res) => {
   const inv = chats.ensureInvite(req.account.id);
@@ -406,8 +421,13 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   }
   res.json(chats.requestConnection(req.account.id, code, req.body?.nickname));
 });
+function notifyRoom(sender,id){
+  const room=chats.rooms.get(id);if(!room)return;
+  push.notify(room.users.filter(account=>account!==sender&&!contacts.between(account,sender)?.muted));
+}
 app.post('/api/message', guard('send', 80, 60_000), (req, res) => {
   chats.send(req.account.id, req.body?.id, req.body?.text, req.body?.replyTo ?? null, req.body || {});
+  notifyRoom(req.account.id,req.body.id);
   res.json({
     ok: true
   });
@@ -534,7 +554,7 @@ app.post('/api/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) => {
   if (result !== 'ok') return res.status(result === 'locked' ? 429: 400).json({
     error: result === 'locked' ? 'Try again in 15 minutes.': result === 'unavailable' ? 'PIN unavailable.': 'Incorrect PIN.'
   });
-  chats.erase(req.account.id);
+  chats.erase(req.account.id);push.remove(req.account.id);
   res.json({
     ok: true
   });

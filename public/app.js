@@ -9,7 +9,7 @@ const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
 const updateReminders = new Map();
-let officialReadJob=null,officialRenderKey='',liveRevision='',manualRefreshes=0;
+let officialReadJob=null,officialRenderKey='',liveRevision='',manualRefreshes=0,pushRegistration=null,pushEpoch=-1;
 
 async function transport(path, options = {}) {
   if (!native) return fetch(path, options);
@@ -642,7 +642,7 @@ function lock(reopen = true) {
   $('extensionNotice').hidden = true;
   $('supportOpen').hidden = true;
   $('qzuInfoChannel').hidden = true;
-  $('officialUnread').hidden=true;$('officialPosts').replaceChildren();$('officialMessage').value='';$('officialSend').disabled=true;$('officialComposer').hidden=true;officialRenderKey='';liveRevision='';
+  $('officialUnread').hidden=true;$('officialPosts').replaceChildren();$('officialMessage').value='';$('officialSend').disabled=true;$('officialComposer').hidden=true;officialRenderKey='';liveRevision='';pushRegistration=null;pushEpoch=-1;
   $('qzuInfoOpen').classList.remove('active');
   $('qzuInfoOpen').setAttribute('aria-pressed', 'false');
   $('groupInvite').hidden = true;
@@ -1267,6 +1267,7 @@ function renderSettings() {
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
+  $('pushStatus').textContent=state.push?.registered?'On':state.push?.available?'Off':'Unavailable';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('supportRequestCount').textContent = state.supportAgent ? String((state.supportRequests || []).length) : '';
@@ -1503,6 +1504,7 @@ async function refresh(live=false) {
   purgeExpired();
   acknowledgeMessages();
   maybePromptUpdate();
+  restorePushRegistration();
   }finally{if(!live)manualRefreshes--;}
 }
 
@@ -2001,7 +2003,7 @@ $('appInfo').addEventListener('click', () => {
   if (!unlockToken) return;
 
   const topics = [
-    ['Notifications', 'Stay in qzu. to receive messages. No push or sound notifications.'],
+    ['Notifications', 'Private notifications show only generic activity. Enable them in Privacy when the server is configured.'],
     ['Temporary chats', 'Conversations and messages are automatically removed from the server 30 minutes after the chat begins. No message backups are created.'],
     ['Anonymous access', 'No phone number, email address or public username is required.'],
     ['Connection codes', 'New codes can last 5, 10 or 15 minutes. Generating a new code invalidates the previous one.'],
@@ -2691,6 +2693,48 @@ $('updateCenter').addEventListener('click', async () => {
     const changes=el('ul','update-changes');for(const change of release.changes||[release.notes])if(change)changes.append(el('li','',change));
     show('Update center', [el('strong', '', 'You are up to date'), el('p', '', 'Installed: ' + installedVersion + ' · Server release: ' + release.latest),changes, button('Close', closeModal)]);
   } catch (error) { showError(error); }
+});
+let pushPlugin=null,pushListenersReady=false;
+function getPushPlugin(){
+  if(!native||!window.Capacitor.isPluginAvailable('PushNotifications'))return null;
+  if(!pushPlugin)pushPlugin=window.Capacitor.registerPlugin('PushNotifications');
+  return pushPlugin;
+}
+async function registerPrivatePush(interactive=false){
+  const plugin=getPushPlugin(),epoch=authEpoch;
+  if(!plugin||!state.push?.available)throw Error('Push delivery is not available on this device yet.');
+  if(!pushListenersReady){
+    await plugin.addListener('registration',async({value})=>{
+      const job=pushRegistration;
+      if(!job||job.epoch!==authEpoch||!unlockToken)return;
+      pushRegistration=null;
+      try{await api('push/register',{platform:window.Capacitor.getPlatform(),token:value});await refresh();if(job.interactive)info('Private notifications','Enabled. Message content is never included.');}
+      catch(error){if(job.interactive)showError(error);}
+    });
+    await plugin.addListener('registrationError',()=>{const job=pushRegistration;pushRegistration=null;if(job?.interactive&&job.epoch===authEpoch)info('Private notifications','Registration failed. Check device configuration.');});
+    await plugin.addListener('pushNotificationReceived',()=>{if(unlockToken&&!document.hidden)refresh().catch(()=>{});});
+    pushListenersReady=true;
+  }
+  let permission=await plugin.checkPermissions();
+  if(interactive&&permission.receive!=='granted')permission=await plugin.requestPermissions();
+  if(permission.receive!=='granted'){if(interactive)throw Error('Notification permission is disabled.');return;}
+  if(epoch!==authEpoch||!unlockToken||document.hidden)return;
+  pushRegistration={epoch:authEpoch,interactive};pushEpoch=authEpoch;
+  try{await plugin.register();}catch(error){pushRegistration=null;throw error;}
+}
+function restorePushRegistration(){
+  if(state.push?.registered&&state.push.available&&pushEpoch!==authEpoch&&getPushPlugin()){
+    pushEpoch=authEpoch;registerPrivatePush(false).catch(()=>{});
+  }
+}
+$('privateNotifications').addEventListener('click',()=>{
+  if(!unlockToken)return;
+  const registered=state.push?.registered;
+  const controls=[el('p','','Only generic activity alerts. No sender, chat or message details.')];
+  if(registered)controls.push(button('Turn off',async()=>{try{pushRegistration=null;pushEpoch=authEpoch;await api('push/remove',{});try{await getPushPlugin()?.unregister?.();}catch{}closeModal();await refresh();}catch(error){modalError(error);}}));
+  else if(state.push?.available&&getPushPlugin())controls.push(button('Enable',async()=>{try{await registerPrivatePush(true);}catch(error){modalError(error);}}));
+  else controls.push(el('p','','Push delivery is not configured yet.'));
+  controls.push(button('Close',closeModal,'secondary-button'));show('Private notifications',controls);
 });
 const backgroundChoices = ['plain', 'grid', 'dots'];
 function applyChatBackground(value) {
