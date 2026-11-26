@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.9.0';
+const installedVersion = window.QZU_APP_VERSION || '0.9.1';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -53,7 +53,7 @@ const svg = (name, cls) => {
   node.append(use);
   return node;
 };
-let page = location.pathname === '/settings' ? 'settings': location.pathname === '/connect' ? 'connect': 'chat';
+let page = routeName(location.pathname);
 const mobile = native ? { matches: true, addEventListener() {} } : matchMedia('(max-width:700px)');
 let state = {
   rooms: [],
@@ -754,6 +754,45 @@ function selectRoom(id, open = true) {
   renderChat();
 }
 
+function identityChanged(room) {
+  return Boolean(room?.contact?.peerIdentity && room.encryption?.peer?.identity && room.contact.peerIdentity!==room.encryption.peer.identity);
+}
+function addContactMarks(node,contact,room=null) {
+  if(!contact)return;
+  if(contact.favorite){const mark=el('span','contact-mark','★');mark.title='Favorite';node.append(mark);}
+  if(identityChanged(room)){const mark=el('span','contact-warning','!');mark.title='Identity changed';node.append(mark);}
+  else if(contact.trusted){const mark=svg('lock','contact-trusted');mark.setAttribute('aria-label','Trusted contact');mark.setAttribute('role','img');mark.removeAttribute('aria-hidden');node.append(mark);}
+  if(contact.muted)node.append(el('span','contact-muted','Muted'));
+}
+function showContactManagement(contact) {
+  const field=el('input','nickname-input');
+  field.type='text';field.value=contact.nickname;field.maxLength=40;field.setAttribute('aria-label','Nickname');
+  const favorite=el('input');favorite.type='checkbox';favorite.checked=contact.favorite;
+  const muted=el('input');muted.type='checkbox';muted.checked=contact.muted;
+  const favoriteLabel=el('label','contact-setting');favoriteLabel.append(el('span','','Favorite'),favorite);
+  const mutedLabel=el('label','contact-setting');mutedLabel.append(el('span','','Mute message previews'),muted);
+  const save=button('Save',async()=>{
+    save.disabled=true;
+    try{await api('contacts/update',{id:contact.id,nickname:field.value.trim(),favorite:favorite.checked,muted:muted.checked});closeModal();await refresh();}
+    catch(error){modalError(error);save.disabled=false;}
+  });
+  const confirmRemove=block=>show(block?'Block contact?':'Remove contact?',[el('p','',block?'This removes the contact and prevents new connections.':'This removes the contact and shared chat for both users.'),button(block?'Block':'Remove',async()=>{try{await api('contacts/remove',{id:contact.id,block});closeModal();await refresh();}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]);
+  const controls=[el('p','',contact.trusted?'Trusted contact · 30 days inactivity':'Contact · 14 days inactivity'),field,favoriteLabel,mutedLabel,save];
+  if(contact.trusted)controls.push(button('Reset trust',()=>show('Reset trust?',[el('p','','Both users must verify a new chat. The regular inactivity limit applies.'),button('Reset trust',async()=>{try{await api('contacts/update',{id:contact.id,resetTrust:true});closeModal();await refresh();}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]),'secondary-button'));
+  controls.push(button('Remove contact',()=>confirmRemove(false),'secondary-button'),button('Block contact',()=>confirmRemove(true),'secondary-button'),button('Close',closeModal,'secondary-button'));
+  show('Manage contact',controls);
+}
+$('manageContacts').addEventListener('click',()=>{
+  const list=el('div','request-list');
+  for(const contact of state.contacts||[]){
+    const row=el('div','request-item'),name=el('strong','contact-name',contact.nickname);
+    addContactMarks(name,contact);
+    row.append(name,button('Manage',()=>showContactManagement(contact),'secondary-button'));
+    list.append(row);
+  }
+  if(!list.children.length)list.append(el('p','','No contacts.'));
+  show('Contacts',[list,button('Close',closeModal)]);
+});
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
   const now = serverNow(), rooms = state.rooms.filter(r => r.expires > now);
@@ -779,7 +818,7 @@ function renderChat() {
   const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
   $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.id === selected])]);
+  const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -800,6 +839,8 @@ function renderChat() {
       const content = el('div', 'contact-body');
       const name = el('span', 'contact-name', nameFor(r));
 
+      addContactMarks(name,r.contact,r);
+      b.dataset.contactPriority=String(r.admin?2:r.contact?.favorite?1:0);
       if (r.admin) {
         const badge = svg('adminBadge', 'admin-badge');
         badge.setAttribute('aria-label', 'Verified Admin');
@@ -807,9 +848,9 @@ function renderChat() {
         name.append(badge);
       }
 
-      const preview = r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
+      const preview = identityChanged(r) ? 'Contact identity changed' : r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode || r.contact?.muted ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
-      content.append(name, el('span', 'contact-preview' + (r.contact?.warning ? ' contact-warning' : ''), preview));
+      content.append(name, el('span', 'contact-preview' + (r.contact?.warning || identityChanged(r) ? ' contact-warning' : ''), preview));
       b.append(svg(r.admin ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       b.addEventListener('click', () => selectRoom(r.id));
       list.append(b);
@@ -818,7 +859,10 @@ function renderChat() {
       const row = el('button','contact saved-contact');
       row.type='button';
       const content=el('div','contact-body');
-      content.append(el('span','contact-name',contact.nickname),el('span','contact-preview'+(contact.warning?' contact-warning':''),contact.warning?'Contact deletion incoming':'Start a new chat'));
+      const name=el('span','contact-name',contact.nickname);
+      addContactMarks(name,contact);
+      row.dataset.contactPriority=String(contact.favorite?1:0);
+      content.append(name,el('span','contact-preview'+(contact.warning?' contact-warning':''),contact.warning?'Contact deletion incoming':'Start a new chat'));
       row.append(svg('avatar','avatar'),content,svg('chevron','official-chevron'));
       row.addEventListener('click',async()=>{
         row.disabled=true;
@@ -831,6 +875,7 @@ function renderChat() {
       });
       list.append(row);
     }
+    for(const child of [...list.children].sort((a,b)=>Number(b.dataset.contactPriority||0)-Number(a.dataset.contactPriority||0)))list.append(child);
     list.scrollTop = top;
   }
   $('emptyThread').hidden = Boolean(current || infoOpen);
@@ -870,6 +915,7 @@ function renderChat() {
     return;
   }
   $('threadName').textContent = nameFor(current);
+  addContactMarks($('threadName'),current.contact,current);
   $('chatTimer').textContent = clock(current.expires - now);
   updateExpiry(current);
   const container = $('messages');
@@ -1270,6 +1316,7 @@ function encryptionRequired(room) {
 }
 function encryptionReady(room) {
   const local = roomKeys.get(room.id);
+  if(identityChanged(room))return false;
   return Boolean(local?.until > Date.now() && room.encryption && room.encryption.confirmed && room.encryption.peerConfirmed && local?.context && local.verified === local.context.code && room.encryptionStatus === 'ready');
 }
 function dropExpiredKeys(rooms = null) {
@@ -1317,6 +1364,7 @@ async function prepareEncryptedRooms(data) {
   }
 }
 async function showEncryption(room) {
+  if(identityChanged(room)){show('Contact identity changed',[el('p','','Do not send messages until you verify your contact again.'),button('Manage contact',()=>showContactManagement(room.contact)),button('Close',closeModal,'secondary-button')]);return;}
   if (!native || !state.capabilities?.encryptedDirect || state.capabilities.encryptedProtocol !== 2 || !room.encryption || !globalThis.crypto?.subtle) {
     info('Encryption unavailable', 'Both devices need the current app and compatible encryption support. No plaintext will be sent.');
     return;
@@ -1914,6 +1962,7 @@ if (page === 'connect' && location.hash) {
   history.replaceState(null, '', location.pathname);
 }
 if (native) {
+  if(window.Capacitor.getPlatform()==='ios')devicePlugin.addListener('screenCaptured',()=>{if(unlockToken)lock();}).catch(()=>{});
   console.info('[qzu] Mobile startup; device plugin available:', window.Capacitor.isPluginAvailable('QzuDevice'), '; server:', apiOrigin);
   window.Capacitor.registerPlugin('App').addListener('appStateChange', ({ isActive }) => {
     if (!isActive) { if (!isPublicCheckout()) lock(); }
@@ -2074,6 +2123,7 @@ $('chatOptions').addEventListener('click', () => {
   if (!room || room.admin) return;
   const controls = [];
   if (!room.group) {
+    if(room.contact)controls.push(button('Manage contact',()=>showContactManagement(room.contact),'secondary-button'));
     controls.push(button('Verify encryption', () => showEncryption(room), 'secondary-button'));
     if (!room.extended) controls.push(button('Extend chat', () => showExtension(room), 'secondary-button'));
   }
@@ -2244,6 +2294,9 @@ function blobData(blob) {
 }
 
 async function sendAttachment(room, kind, blob, once) {
+  const startEpoch=authEpoch;
+  if(kind==='image')blob=await QzuMetadata.cleanImage(blob);
+  if(startEpoch!==authEpoch||!unlockToken||selected!==room.id||document.hidden||room.expires<=serverNow())throw Error('Chat unavailable.');
   if (blob.size > 2 * 1024 * 1024 || !blob.size) throw new Error('Attachment must be under 2 MB.');
   const epoch = authEpoch;
   if (room.encryption || (native && directRoom(room))) {
@@ -2274,7 +2327,7 @@ function choosePhoto(room) {
       await sendAttachment(room, 'image', file, viewOnce);
     } catch (error) { send.disabled = false; modalError(error); }
   });
-  show('Send photo', [input, el('p', '', 'JPG, PNG or WebP · Up to 2 MB'), send, button('Cancel', closeModal, 'secondary-button')]);
+  show('Send photo', [input, el('p', '', 'JPG, PNG or WebP · Up to 2 MB · Metadata removed'), send, button('Cancel', closeModal, 'secondary-button')]);
   mediaRoom = room.id;
 }
 

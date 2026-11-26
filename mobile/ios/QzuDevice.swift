@@ -98,6 +98,9 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
         print("[qzu] QzuDevice loaded")
         NotificationCenter.default.addObserver(self, selector: #selector(cover), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(uncover), name: UIApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(captureChanged), name: UIScreen.capturedDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken), name: UIApplication.userDidTakeScreenshotNotification, object: nil)
+        DispatchQueue.main.async { self.captureChanged() }
     }
 
     deinit {
@@ -113,7 +116,19 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
         privacyCover = panel
     }
 
+    @objc private func captureChanged() {
+        if UIScreen.main.isCaptured {
+            cover()
+            notifyListeners("screenCaptured", data: [:])
+        } else { uncover() }
+    }
+
+    @objc private func screenshotTaken() {
+        notifyListeners("screenCaptured", data: [:])
+    }
+
     @objc private func uncover() {
+        guard !UIScreen.main.isCaptured, UIApplication.shared.applicationState == .active else { return }
         privacyCover?.removeFromSuperview()
         privacyCover = nil
     }
