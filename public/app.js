@@ -2594,10 +2594,7 @@ $('attachmentMenu').addEventListener('click', () => {
   }
   const items = burnSeconds ? [] : [button('Gallery', () => choosePhoto(room), 'secondary-button'), button('Camera',()=>choosePhoto(room,true),'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
   if (!room.group && !burnSeconds) items.unshift(button(viewOnce ? 'Disable view once' : 'Enable view once', () => {
-    viewOnce = !viewOnce;
-    burnSeconds = 0;
-    $('attachmentMenu').classList.toggle('once-active', viewOnce);
-    $('message').placeholder = viewOnce ? 'View-once message' : 'Message';
+    setOnceMode(!viewOnce);rememberRoom();
     closeModal();
   }, 'secondary-button'));
   if (!room.group) items.unshift(button(burnSeconds ? 'Timed text · ' + burnSeconds + 's' : 'Burn after reading', () => {
@@ -2639,7 +2636,7 @@ async function sendAttachment(room, kind, blob, once, cleaned=false) {
     if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden) throw new Error('Chat unavailable.');
     await api('message', { id: room.id, kind, mime: blob.type.split(';')[0], data, once });
   }
-  resetOnce();
+  if(!$('message').value.trim())resetOnce();
   closeModal();
   await refresh();
 }

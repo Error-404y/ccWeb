@@ -114,6 +114,8 @@ test('encrypted view-once text and photo are withheld and consumed exactly once'
   assert.throws(()=>chats.openOnce('outsider',id,mid,false,true));
   assert.throws(()=>chats.openOnce('b',id,mid));
   assert.throws(()=>chats.getEncryptedMedia('b',id,mid));
+  assert.throws(()=>chats.getEncryptedMedia('a',id,mid));
+  assert.throws(()=>chats.reactEncrypted('b',id,mid,payload));
   const opened=chats.openOnce('b',id,mid,false,true);
   if(kind==='text')assert.equal(await QzuCrypto.decrypt(bc,opened.cipher,false),'only once');
   else assert.deepEqual(new Uint8Array(await (await QzuCrypto.decryptMedia(bc,kind,opened.cipher,false)).arrayBuffer()),new Uint8Array(await photo.arrayBuffer()));
