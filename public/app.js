@@ -100,6 +100,7 @@ let checkoutEpoch = 0;
 let resumeCheckout = null;
 let checkoutReturn = null;
 let viewOnce = false;
+const openingOnce = new Set();
 let mediaRoom = null;
 let mediaMessage = null;
 let invisibleSaving = false;
@@ -1117,9 +1118,11 @@ function renderMessage(room, message) {
       try { await api('message/burn-open', { id: room.id, messageId: message.id }); await refresh(); } catch (error) { showError(error); }
     }, 'media-message'));
   } else if (message.once) {
-    const label = message.opened ? 'Opened · View once' : message.mine ? 'View-once '+(message.kind==='image'?'photo':message.kind==='audio'?'audio':'message') : 'Open '+(message.kind==='image'?'photo':message.kind==='audio'?'audio':'message')+' once';
-    const open = button(label, () => openOnceMessage(room, message), 'media-message');
-    open.disabled = message.mine || message.opened || (room.encryption&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)));
+    const label = onceLabel(message);
+    const open = button(label, () => openOnceMessage(room, message), 'once-message'+(message.opened?' once-opened':''));
+    open.prepend(svg(message.opened?'viewOnceOpened':'viewOnceIcon'));
+    open.disabled = message.mine || message.opened || openingOnce.has(message.id) || (room.encryption&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)));
+    open.setAttribute('aria-label',message.opened?'Opened view-once content':message.mine?'Sent view-once '+label:'Open '+label.toLowerCase()+' once');
     content.append(open);
   } else if (message.kind === 'image' || message.kind === 'audio') {
     const open = button('', () => openMedia(room, message), 'media-message media-tile');open.setAttribute('aria-label',message.kind==='image'?'View photo':'Play voice message');open.append(svg(message.kind==='image'?'camera':'mic'),el('span','',message.kind==='image'?'Photo':'Voice message'));
@@ -1841,6 +1844,8 @@ function updateSendButton() {
   const send = $('send');
   const mediaReady=Boolean(room&&!room.admin&&!room.readOnly&&!needsSetup&&unlockToken&&!sendingMessage&&room.expires>serverNow());
   const hasText=Boolean($('message').value.trim());$('cameraShortcut').hidden=!mediaReady||hasText;$('voiceShortcut').hidden=!mediaReady||hasText;send.hidden=mediaReady&&!hasText;
+  $('onceShortcut').hidden=!unlockToken||!onceAllowed(room)||(!hasText&&!viewOnce);
+  $('onceShortcut').disabled=sendingMessage;
   send.disabled = !unlockToken || sendingMessage || !room || room.readOnly ||
     room.expires <= serverNow() || (!$('message').value.trim() && !needsSetup);
   send.setAttribute('aria-label', needsSetup ? 'Set up or verify encryption' : 'Send');
@@ -2325,19 +2330,35 @@ loop();
 function previewText(message) {
   if (message.deleted) return 'This message was deleted.';
   if (message.burnSeconds) return 'Timed message';
-  if (message.once) return message.opened ? 'Opened' : 'View-once message';
+  if (message.once) return message.opened ? 'Opened' : 'View-once '+onceLabel(message).toLowerCase();
   if (message.kind === 'image') return 'Photo';
   if (message.kind === 'audio') return 'Voice message';
   return message.text;
 }
 
-function setOnceMode(value){viewOnce=value;burnSeconds=0;if(value)clearReply();$('attachmentMenu').classList.toggle('once-active',value);$('message').placeholder=value?'View-once message':'Message';}
+function onceLabel(message){return message.opened?'Opened':message.kind==='image'?'Photo':message.kind==='audio'?'Voice message':'Message';}
+function onceAllowed(room){
+  return Boolean(room&&!room.group&&!room.admin&&!room.support&&!room.readOnly&&room.expires>serverNow()&&(!encryptionRequired(room)||(state.capabilities?.encryptedOnce&&encryptionReady(room))));
+}
+function syncOnceToggle(control,value){
+  control.classList.toggle('once-selected',value);
+  control.setAttribute('aria-pressed',String(value));
+  control.setAttribute('aria-label',value?'Disable view once':'Enable view once');
+  control.title=value?'View once enabled':'View once';
+}
+function setOnceMode(value){viewOnce=value;burnSeconds=0;if(value)clearReply();$('attachmentMenu').classList.toggle('once-active',value);$('message').placeholder=value?'View-once message':'Message';syncOnceToggle($('onceShortcut'),value);updateSendButton();}
 function resetOnce() {
   viewOnce = false;
   burnSeconds = 0;
   $('attachmentMenu').classList.remove('once-active');
   $('message').placeholder = 'Message';
+  syncOnceToggle($('onceShortcut'),false);
 }
+$('onceShortcut').addEventListener('click',()=>{
+  const room=state.rooms.find(r=>r.id===selected);
+  if(!unlockToken||sendingMessage||!onceAllowed(room))return;
+  setOnceMode(!viewOnce);rememberRoom();haptic();
+});
 
 function renderRequests() {
   const requests = state.requests || [];
@@ -2603,36 +2624,36 @@ async function openMedia(room, message) {
 }
 
 async function openOnceMessage(room, message) {
-  if(message.mine||message.opened||message.deleted)return;
+  if(message.mine||message.opened||message.deleted||openingOnce.has(message.id)||!unlockToken||document.hidden||selected!==room.id)return;
   const epoch=authEpoch,encrypted=Boolean(room.encryption);
-  const open = button('Open once', async () => {
-    open.disabled = true;
-    const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&!document.hidden&&selected===room.id&&body.contains(open)&&state.rooms.some(r=>r.id===room.id&&r.expires>serverNow()&&r.messages.some(m=>m.id===message.id&&!m.deleted));
-    try {
-      if(!active())return;
-      if(encrypted&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)))throw Error('View-once encryption unavailable.');
-      const context=encrypted?roomKeys.get(room.id)?.context:null;
-      const result = await api(encrypted?'encryption/once/open':'message/open', { id: room.id, messageId: message.id });
-      for(const r of state.rooms)if(r.id===room.id){const m=r.messages.find(m=>m.id===message.id);if(m){m.opened=true;m.unread=false;m.text='';m.cipher=null;m.encryptedMedia=false;}}
-      message.opened=true;
-      if(epoch===authEpoch)render();
-      if(!active())return;
-      let text=result.text,source=null;
-      if(result.kind!==message.kind)throw Error('Invalid view-once message.');
-      if(encrypted){
-        if(!context||roomKeys.get(room.id)?.context!==context||!result.cipher)throw Error('Encryption key unavailable.');
-        if(result.kind==='text')text=await QzuCrypto.decrypt(context,result.cipher,false);
-        else source=await QzuCrypto.decryptMedia(context,result.kind,result.cipher,false);
-      }else if(result.media)source='data:'+result.media.mime+';base64,'+result.media.data;
-      if(!active())return;
-      if(source)showMedia(room,result.kind,source,message.id);
-      else {show('View once',[el('p','once-content',text),button('Close',closeModal)]);mediaRoom=room.id;mediaMessage=message.id;}
-      haptic();
-    }catch(error){if(active())modalError(error);}
-    finally{if(epoch===authEpoch&&unlockToken)refresh().catch(()=>{});}
-  });
-  show('View once',[el('p','','This content can only be opened once. Closing it or leaving the app will permanently end the view.'),open,button('Cancel',closeModal,'secondary-button')]);
+  if(encrypted&&(!state.capabilities?.encryptedOnce||!encryptionReady(room))){showError(Error('View-once encryption unavailable.'));return;}
+  const marker=el('p','once-loading','Opening once…');
+  marker.prepend(svg('viewOnceIcon'));
+  openingOnce.add(message.id);
+  const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&!document.hidden&&selected===room.id&&modal.open&&body.contains(marker)&&state.rooms.some(r=>r.id===room.id&&r.expires>serverNow()&&r.messages.some(m=>m.id===message.id&&!m.deleted));
+  show('View once',[marker,el('p','media-status','Closing this view or leaving the app ends the view permanently.'),button('Close',closeModal,'secondary-button')]);
   mediaRoom=room.id;mediaMessage=message.id;
+  try {
+    if(!active())return;
+    const context=encrypted?roomKeys.get(room.id)?.context:null;
+    const result = await api(encrypted?'encryption/once/open':'message/open', { id: room.id, messageId: message.id });
+    for(const r of state.rooms)if(r.id===room.id){const m=r.messages.find(m=>m.id===message.id);if(m){m.opened=true;m.unread=false;m.text='';m.cipher=null;m.encryptedMedia=false;}}
+    message.opened=true;
+    if(epoch===authEpoch)render();
+    if(!active())return;
+    let text=result.text,source=null;
+    if(result.kind!==message.kind)throw Error('Invalid view-once message.');
+    if(encrypted){
+      if(!context||roomKeys.get(room.id)?.context!==context||!result.cipher)throw Error('Encryption key unavailable.');
+      if(result.kind==='text')text=await QzuCrypto.decrypt(context,result.cipher,false);
+      else source=await QzuCrypto.decryptMedia(context,result.kind,result.cipher,false);
+    }else if(result.media)source='data:'+result.media.mime+';base64,'+result.media.data;
+    if(!active())return;
+    if(source)showMedia(room,result.kind,source,message.id);
+    else {show('View once',[el('p','once-content',text),button('Close',closeModal)]);mediaRoom=room.id;mediaMessage=message.id;}
+    haptic();
+  }catch(error){if(active())modalError(error);}
+  finally{openingOnce.delete(message.id);if(epoch===authEpoch&&unlockToken)refresh().catch(()=>{});}
 }
 
 function currentMediaRoom(){const room=state.rooms.find(r=>r.id===selected);return room&&!room.admin&&!room.readOnly&&(!encryptionRequired(room)||encryptionReady(room))?room:null;}
@@ -2668,7 +2689,7 @@ function showAttachmentGrid(title,options){
   const grid=el('div','attachment-grid'),handle=el('div','attachment-handle');
   for(const control of options){
     const label=control.textContent;
-    const icon=label.includes('Gallery')?'camera':label.includes('Camera')?'camera':label.includes('Voice')?'mic':label.toLowerCase().includes('once')?'eye':label.includes('reading')||label.includes('Timed')?'clock':'chat';
+    const icon=label.includes('Gallery')?'camera':label.includes('Camera')?'camera':label.includes('Voice')?'mic':label.toLowerCase().includes('once')?'viewOnceIcon':label.includes('reading')||label.includes('Timed')?'clock':'chat';
     control.className='attachment-tile';control.prepend(svg(icon));grid.append(control);
   }
   show(title,[handle,grid,button('Close',closeModal,'secondary-button')]);
@@ -2740,10 +2761,16 @@ function choosePhoto(room,camera=false){
   const input=el('input','photo-file');input.type='file';input.accept='image/jpeg,image/png,image/webp';if(camera)input.setAttribute('capture','environment');
   const preview=el('img','temporary-media photo-preview');preview.alt='Photo preview';preview.hidden=true;
   const status=el('p','media-status','Choose a photo');
-  const epoch=authEpoch,once=viewOnce;let prepared=null,selection=0;
-  const send=button(once?'Send once':'Send photo',async()=>{if(!prepared)return;send.disabled=true;status.textContent='Sending…';try{await sendAttachment(room,'image',prepared,once,true);}catch(error){send.disabled=false;status.textContent='';modalError(error);}});send.disabled=true;
+  const epoch=authEpoch;let once=viewOnce&&onceAllowed(room),prepared=null,selection=0,sending=false;
+  const toggle=button('',()=>{if(sending||!onceAllowed(room))return;once=!once;syncPhotoMode();haptic();},'icon-button once-toggle photo-once-toggle');
+  toggle.append(svg('viewOnceIcon'));toggle.hidden=!onceAllowed(room);
+  const mode=el('span','photo-once-label','');
+  const send=button('Send photo',async()=>{if(!prepared||sending)return;sending=true;send.disabled=true;toggle.disabled=true;input.disabled=true;status.textContent='Sending…';try{await sendAttachment(room,'image',prepared,once,true);}catch(error){sending=false;send.disabled=false;toggle.disabled=false;input.disabled=false;status.textContent='';modalError(error);}});send.disabled=true;
+  function syncPhotoMode(){syncOnceToggle(toggle,once);mode.textContent=once?'View once enabled':'View once';send.textContent=once?'Send once':'Send photo';}
+  syncPhotoMode();
+  const onceRow=el('div','photo-once-row');onceRow.hidden=toggle.hidden;onceRow.append(mode,toggle);
   input.addEventListener('change',async()=>{const n=++selection,file=input.files?.[0];prepared=null;send.disabled=true;preview.hidden=true;if(mediaUrl){URL.revokeObjectURL(mediaUrl);mediaUrl=null;}if(!file)return;status.textContent='Preparing photo…';try{const blob=await QzuMetadata.cleanImage(file);if(epoch!==authEpoch||n!==selection||!body.contains(input)||document.hidden)return;prepared=blob;mediaUrl=URL.createObjectURL(blob);preview.src=mediaUrl;preview.hidden=false;status.textContent=Math.round(blob.size/1024)+' KB';send.disabled=false;}catch(error){status.textContent='';dialogError(error);}});
-  show(camera?'Camera':'Gallery',[input,preview,status,send,button('Cancel',closeModal,'secondary-button')]);mediaRoom=room.id;
+  show(camera?'Camera':'Gallery',[input,preview,status,onceRow,send,button('Cancel',closeModal,'secondary-button')]);mediaRoom=room.id;
   // File chooser must be opened synchronously from the user's tap.
   input.click();
 }
