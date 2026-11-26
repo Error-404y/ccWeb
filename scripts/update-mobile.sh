@@ -27,11 +27,27 @@ if [[ -d ios/App/App.xcworkspace ]]; then
 else
   PROJECT=(-project ios/App/App.xcodeproj)
 fi
-xcrun devicectl list devices
-printf "Enter iPhone identifier (Enter to build without installing): "
-read -r IPHONE < /dev/tty
+IPHONE="${QZU_IOS_DEVICE:-}"
+if [[ "$IPHONE" == skip ]]; then
+  IPHONE=""
+elif [[ -z "$IPHONE" ]]; then
+  DEVICE_LIST="$(xcrun devicectl list devices)"
+  printf '%s\n' "$DEVICE_LIST"
+  IOS_DEVICES="$(printf '%s\n' "$DEVICE_LIST" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{for(const line of s.split(/\r?\n/)){if(!/\bavailable\s*\(paired\)/i.test(line)||!/\biPhone\b/i.test(line))continue;const m=line.match(/\b([0-9a-f]{8}-[0-9a-f]{16}|[0-9a-f]{40})\s*\(UDID\)/i);if(m)console.log(m[1]);}})')"
+  IOS_COUNT="$(printf '%s\n' "$IOS_DEVICES" | awk 'NF {n++} END {print n+0}')"
+  if [[ "$IOS_COUNT" == 1 ]]; then
+    IPHONE="$IOS_DEVICES"
+    echo "Detected one available iPhone."
+  else
+    echo "No unique available iPhone detected. Building without installing. Set QZU_IOS_DEVICE to select a device."
+  fi
+fi
 DEST="generic/platform=iOS"
 if [[ -n "$IPHONE" ]]; then
+  if [[ ! "$IPHONE" =~ ^([0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}|[0-9A-Fa-f]{40})$ ]]; then
+    echo "QZU_IOS_DEVICE must be an Xcode device UDID or skip." >&2
+    exit 1
+  fi
   DEST="platform=iOS,id=$IPHONE"
 fi
 xcodebuild "${PROJECT[@]}" -scheme App -configuration Debug -destination "$DEST" -derivedDataPath "$IOS_BUILD" -allowProvisioningUpdates build
