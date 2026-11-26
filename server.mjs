@@ -672,7 +672,7 @@ app.use(express.static(resolve(root, 'public'), {
   etag: false,
   lastModified: false
 }));
-app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
+app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
 app.use((req, res) => res.status(404).send('Not found'));
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
