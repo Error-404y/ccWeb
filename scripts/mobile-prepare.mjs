@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 
 const target = process.argv[2];
 if (!['ios', 'android'].includes(target)) throw new Error('Choose ios or android.');
-const api = new URL(process.env.QZU_APP_ORIGIN || 'https://qzu.cc');
+const api = new URL(process.env.QZU_APP_ORIGIN || 'https://qzu.duckdns.org');
 if (api.protocol !== 'https:' || api.username || api.password || api.pathname !== '/' || api.search || api.hash) throw new Error('Use a valid HTTPS server origin.');
 const run = (program, args) => execFileSync(program, args, { stdio: 'inherit' });
 const cap = (...args) => run('npx', ['cap', ...args]);
@@ -12,9 +12,10 @@ rmSync('mobile-dist', { recursive: true, force: true });
 cpSync('public', 'mobile-dist', { recursive: true });
 mkdirSync('mobile-dist/vendor', { recursive: true });
 cpSync('node_modules/jsqr/dist/jsQR.js', 'mobile-dist/vendor/jsqr.js');
+cpSync('node_modules/@capacitor/core/dist/capacitor.js', 'mobile-dist/vendor/capacitor.js');
 writeFileSync('mobile-dist/mobile-config.js', 'window.QZU_API_ORIGIN = ' + JSON.stringify(api.origin) + ';\n');
 let html = readFileSync('mobile-dist/index.html', 'utf8');
-html = html.replace('<script src="/app.js" defer></script>', '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; script-src \'self\'; style-src \'self\'; img-src \'self\' data: blob:; connect-src \'self\' ' + api.origin + '; media-src \'self\' blob: data:; object-src \'none\'; base-uri \'none\'"><script src="/mobile-config.js" defer></script><script src="/app.js" defer></script>');
+html = html.replace('<script src="/app.js" defer></script>', '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; script-src \'self\'; style-src \'self\'; img-src \'self\' data: blob:; connect-src \'self\' ' + api.origin + '; media-src \'self\' blob: data:; object-src \'none\'; base-uri \'none\'"><script src="/vendor/capacitor.js" defer></script><script src="/mobile-config.js" defer></script><script src="/app.js" defer></script>');
 writeFileSync('mobile-dist/index.html', html);
 if (!existsSync(target)) cap('add', target);
 
