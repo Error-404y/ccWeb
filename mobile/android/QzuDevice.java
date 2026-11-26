@@ -1,5 +1,7 @@
 package cc.qzu.app;
 
+import android.content.Intent;
+import android.net.Uri;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
@@ -38,6 +40,24 @@ public class QzuDevice extends Plugin {
         byte[] source = value.toByteArray();
         int length = Math.min(32, source.length);
         System.arraycopy(source, source.length - length, target, offset + 32 - length, length);
+    }
+
+    @PluginMethod
+    public void openUpdate(PluginCall call) {
+        String raw = call.getString("url");
+        Uri uri = raw == null ? null : Uri.parse(raw);
+        if (uri == null || !"https".equals(uri.getScheme()) || uri.getHost() == null || uri.getUserInfo() != null) {
+            call.reject("Invalid update link.");
+            return;
+        }
+        getActivity().runOnUiThread(() -> {
+            try {
+                getActivity().startActivity(new Intent(Intent.ACTION_VIEW, uri));
+                call.resolve();
+            } catch (Exception error) {
+                call.reject("Unable to open update link.");
+            }
+        });
     }
 
     @PluginMethod

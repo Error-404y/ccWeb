@@ -256,7 +256,17 @@ app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
   });
 });
 app.get('/api/security/activity', (req, res) => res.json({ events: listActivity(db, req.account.id) }));
-app.get('/api/version', (req, res) => res.json({ latest: version, notes: 'Security activity, timed text messages, mutual chat extensions and device fingerprint comparison.' }));
+function updateLink(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
+}
+app.get('/api/version', (req, res) => res.json({
+  latest: version,
+  notes: 'Improved touch interactions, settings layout and update reminders.',
+  downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: updateLink(process.env.QZU_ANDROID_UPDATE_URL) }
+}));
 app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
 app.post('/api/message/burn-open', guard('burn-open', 80, 60000), (req, res) => res.json(chats.openBurn(req.account.id, req.body?.id, req.body?.messageId, Boolean(req.account.invisible))));
 app.post('/api/chat/fingerprint', guard('fingerprint', 15, 60000), (req, res) => {

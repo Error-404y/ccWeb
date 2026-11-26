@@ -2185,3 +2185,64 @@ html.native-app,
 .burn-label { display: block; font-size: 11px; color: var(--muted); margin-top: 5px; }
 .fingerprint-code { font: 600 17px/1.8 ui-monospace,monospace; overflow-wrap: anywhere; text-align: center; padding: 12px; background: var(--sub); border-radius: 10px; }
 #extensionNotice { flex-shrink: 0; }
+
+
+.native-app body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.native-app input, .native-app textarea, .native-app [contenteditable=true],
+.native-app .access-address, .native-app .fingerprint-code, .native-app .pin-display, .native-app .reference {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+.native-app button, .native-app a {
+  -webkit-tap-highlight-color: transparent;
+}
+.native-app button.settings-row:hover:not(:active),
+.native-app .settings-link:hover:not(:active),
+.native-app .icon-button:hover:not(:active),
+.native-app .secondary-button:hover:not(:active),
+.native-app .contact:not(.active):hover:not(:active) {
+  background: transparent;
+}
+.native-app button.settings-row:hover:not(:active),
+.native-app .contact:not(.active):hover:not(:active) {
+  border-radius: 0;
+}
+.native-app .reply-action:hover:not(:active):not(:focus-visible) { background: transparent; }
+.native-app button.settings-row:active { background: var(--hover); border-radius: 9px; }
+.settings-row .accent-sample { flex: 0 0 19px; width: 19px; height: 19px; aspect-ratio: 1; }
+.native-app .settings-row > span:not(.accent-sample) { min-width: 0; }
+dialog.update-sheet[open] {
+  position: fixed;
+  inset: auto 0 max(12px, env(safe-area-inset-bottom));
+  top: auto;
+  margin: 0 auto;
+  translate: none;
+  transform: none;
+  width: min(440px, calc(100% - 24px));
+  max-width: calc(100% - 24px);
+  max-height: calc(var(--app-height) - 32px);
+  border-radius: 26px;
+  padding: 24px 20px 20px;
+  background: var(--surface);
+  color: var(--ink);
+  overflow-y: auto;
+}
+dialog.update-sheet[open] .modal-head h2 {
+  font-size: 25px;
+  line-height: 1.16;
+  letter-spacing: -.6px;
+}
+.update-sheet .update-wordmark { width: 40px; height: 27px; margin: 4px 0; }
+.update-sheet .update-description { font-size: 15px; color: var(--ink); }
+.update-sheet .update-version { font-size: 13px; font-weight: 650; }
+.update-sheet .update-notes { line-height: 1.5; overflow-wrap: anywhere; }
+.update-actions { display: grid; grid-template-columns: 1fr; gap: 9px; margin-top: 10px; }
+.update-actions button { min-height: 51px; border-radius: 26px; font-size: 15px; font-weight: 650; }
+.update-actions .update-install { grid-row: 1; background: var(--ink); color: var(--surface); border: 0; }
+:root[data-accent=red] .update-actions .update-install { background: var(--ink); color: var(--surface); }
+.update-actions .update-later { border: 1px solid var(--line); }

@@ -9,7 +9,8 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "QzuDevice"
     public let jsName = "QzuDevice"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "sign", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "sign", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openUpdate", returnType: CAPPluginReturnPromise)
     ]
     private let tag = Data("cc.qzu.app.device.v1".utf8)
     private let queue = DispatchQueue(label: "cc.qzu.device")
@@ -68,6 +69,19 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
             }
         }
     }
+    @objc func openUpdate(_ call: CAPPluginCall) {
+        guard let raw = call.getString("url"), let url = URL(string: raw), url.scheme == "https",
+              url.host != nil, url.user == nil, url.password == nil else {
+            call.reject("Invalid update link.")
+            return
+        }
+        DispatchQueue.main.async {
+            UIApplication.shared.open(url, options: [:]) { success in
+                if success { call.resolve() } else { call.reject("Unable to open update link.") }
+            }
+        }
+    }
+
     private var privacyCover: UIView?
 
     public override func load() {

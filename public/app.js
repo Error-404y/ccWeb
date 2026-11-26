@@ -4,6 +4,9 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
+const installedVersion = window.QZU_APP_VERSION || '0.7.1';
+let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
+const updateReminders = new Map();
 
 async function transport(path, options = {}) {
   if (!native) return fetch(path, options);
@@ -177,6 +180,7 @@ function closeModal() {
 $('modalClose').addEventListener('click', closeModal);
 modal.addEventListener('cancel', e => {
   e.preventDefault();
+  if (modal.classList.contains('update-sheet') && pendingUpdate) deferUpdate(pendingUpdate.latest);
   closeModal();
 });
 modal.addEventListener('close', () => {
@@ -185,12 +189,14 @@ modal.addEventListener('close', () => {
     stopCamera();
     body.replaceChildren();
     modalLocked = false;
+    modal.classList.remove('update-sheet');
   }
 });
 
 function show(title, content, locked = false) {
   stopCheckout();
   delete modal.dataset.checkout;
+  modal.classList.remove('update-sheet');
   clearMedia();
   stopCamera();
   modalLocked = locked;
@@ -603,6 +609,8 @@ function lock(reopen = true) {
   sequence++;
   const old = unlockToken;
   unlockToken = null;
+  pendingUpdate = null;
+  nextUpdateCheck = 0;
   sendingMessage = false;
   invisibleSaving = false;
   $('invisibleMode').checked = false;
@@ -697,6 +705,19 @@ window.addEventListener('resize', setViewport);
 window.visualViewport?.addEventListener('resize', setViewport);
 window.visualViewport?.addEventListener('scroll', setViewport);
 if (native) {
+  const selectable = target => target instanceof Element && Boolean(target.closest('input, textarea, [contenteditable="true"], .access-address, .fingerprint-code, .pin-display, .reference'));
+  for (const type of ['selectstart', 'contextmenu']) document.addEventListener(type, event => {
+    if (!selectable(event.target)) event.preventDefault();
+  });
+  document.addEventListener('pointerup', event => {
+    if (event.pointerType !== 'touch') return;
+    const target = event.target instanceof Element ? event.target.closest('button, a') : null;
+    if (target && document.activeElement === target) target.blur();
+  }, { passive: true });
+  document.addEventListener('click', event => {
+    const target = event.target instanceof Element ? event.target.closest('button, a') : null;
+    if (target && document.activeElement === target && event.detail > 0) target.blur();
+  });
   for (const event of ['gesturestart', 'gesturechange', 'gestureend']) {
     document.addEventListener(event, e => e.preventDefault(), { passive: false });
   }
@@ -1223,6 +1244,7 @@ async function refresh() {
   render();
   purgeExpired();
   acknowledgeMessages();
+  maybePromptUpdate();
 }
 
 function offerPin() {
@@ -2128,15 +2150,80 @@ async function showSecurityActivity() {
     show('Security activity', [el('p', '', 'Up to 50 events from the last 30 days. No PINs, messages or IP addresses recorded here.'), list, button('Close', closeModal)]);
   } catch (error) { showError(error); }
 }
+function newerVersion(latest, current = installedVersion) {
+  if (![latest, current].every(value => typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value))) return false;
+  const a = latest.split('.').map(Number), b = current.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+}
+
+function reminderUntil(version) {
+  let until = updateReminders.get(version) || 0;
+  try { until = Math.max(until, Number(localStorage.getItem('qzu-update-later-' + version)) || 0); } catch {}
+  return until;
+}
+
+function deferUpdate(version) {
+  const until = Date.now() + 6 * 60 * 60 * 1000;
+  updateReminders.set(version, until);
+  try { localStorage.setItem('qzu-update-later-' + version, String(until)); } catch {}
+}
+
+async function installUpdate(release) {
+  const platform = window.Capacitor?.getPlatform?.();
+  const url = release.downloads?.[platform];
+  if (native && url) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error('Invalid update link.');
+      await devicePlugin.openUpdate({ url: parsed.href });
+      deferUpdate(release.latest);
+      closeModal();
+      return;
+    } catch (error) { modalError(error); return; }
+  }
+  show('Install update', [
+    el('p', '', 'Version ' + release.latest + ' is available on the server, but a signed installation file has not been linked for this device yet.'),
+    el('p', '', platform === 'ios' ? 'Use your trusted qzu. iOS build or TestFlight invitation when available.' : 'Install the updated APK from your trusted qzu. distributor when available. Do not uninstall your existing app.'),
+    button('Remind me later', () => { deferUpdate(release.latest); closeModal(); }, 'secondary-button')
+  ]);
+}
+
+function showUpdatePrompt(release) {
+  const logo = svg('logo', 'wordmark update-wordmark');
+  const description = el('p', 'update-description', 'A new version of qzu. is available.');
+  const version = el('p', 'update-version', 'Version ' + release.latest);
+  const notes = el('p', 'update-notes', String(release.notes || 'Performance improvements and fixes.'));
+  const actions = el('div', 'update-actions');
+  actions.append(
+    button('Remind me later', () => { deferUpdate(release.latest); closeModal(); }, 'secondary-button update-later'),
+    button('Install now', () => installUpdate(release), 'primary-button update-install')
+  );
+  show('New update available', [logo, description, version, notes, actions]);
+  modal.classList.add('update-sheet');
+  $('modalClose').hidden = true;
+}
+
+function maybePromptUpdate() {
+  if (!native || !unlockToken || accessDue || document.hidden) return;
+  const now = Date.now();
+  if (!updateChecking && now >= nextUpdateCheck) {
+    updateChecking = true;
+    nextUpdateCheck = now + 15 * 60 * 1000;
+    const epoch = authEpoch;
+    api('version').then(release => {
+      if (epoch === authEpoch && unlockToken) pendingUpdate = newerVersion(release.latest) ? release : null;
+    }).catch(() => {}).finally(() => { updateChecking = false; });
+  }
+  if (!pendingUpdate || !newerVersion(pendingUpdate.latest) || reminderUntil(pendingUpdate.latest) > now || modal.open || $('message').value.trim() || mediaRoom) return;
+  showUpdatePrompt(pendingUpdate);
+}
+
 $('updateCenter').addEventListener('click', async () => {
   try {
-    const current = window.QZU_APP_VERSION || '0.7.0';
-    const result = await api('version');
-    const parts = v => String(v).split('.').map(Number);
-    const local = parts(current), latest = parts(result.latest);
-    let comparison = 0;
-    for (let i = 0; i < 3 && !comparison; i++) comparison = (latest[i] || 0) - (local[i] || 0);
-    show('Update center', [el('strong', '', comparison > 0 ? 'Update available' : 'You are up to date'), el('p', '', 'Installed: ' + current + ' · Server release: ' + result.latest), el('p', '', result.notes), el('p', '', 'Install updates from your trusted qzu. distribution source.'), button('Close', closeModal)]);
+    const release = await api('version');
+    if (newerVersion(release.latest)) { pendingUpdate = release; showUpdatePrompt(release); return; }
+    show('Update center', [el('strong', '', 'You are up to date'), el('p', '', 'Installed: ' + installedVersion + ' · Server release: ' + release.latest), el('p', '', release.notes), button('Close', closeModal)]);
   } catch (error) { showError(error); }
 });
 const backgroundChoices = ['plain', 'grid', 'dots'];
