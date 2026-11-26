@@ -260,6 +260,8 @@ app.post('/api/logout', guard('logout', 3, 60000), (req,res) => {
   res.json({ok:true});
 });
 app.post('/api/contacts/open', guard('contacts-open', 30, 60000), (req,res) => res.json({id:chats.openContact(req.account.id,req.body?.id)}));
+app.post('/api/contacts/update', guard('contacts-update', 30, 60000), (req,res) => res.json(contacts.update(req.account.id,req.body?.id,req.body||{})));
+app.post('/api/contacts/remove', guard('contacts-remove', 20, 60000), (req,res) => res.json(chats.removeContact(req.account.id,req.body?.id,req.body?.block===true)));
 app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
   const result = changeLogin(db, req.account.id, req.body?.current, req.body?.next);
   if (result !== 'ok') return loginError(res, result);
@@ -284,7 +286,7 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Persistent contacts, private nicknames, permanent logout and organized settings.',
+  notes: 'Trusted contacts, contact management, metadata cleaning and screen capture protection.',
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
