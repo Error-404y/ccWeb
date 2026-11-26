@@ -220,7 +220,7 @@ app.post('/api/login/setup', guard('login-setup', 5, 60_000), (req, res) => {
   if (!chats.inviteFor(req.account.id)) chats.newCode(req.account.id);
   res.json({
     token: unlocks.issue(req.account.id),
-    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended)
+    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))
   });
 });
 app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
@@ -229,7 +229,7 @@ app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
   if (result !== 'ok') return loginError(res, result);
   res.json({
     token: unlocks.issue(req.account.id),
-    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended)
+    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))
   });
 });
 app.post('/api/login/lock', (req, res) => {
@@ -274,7 +274,8 @@ app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(
 });
 app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(compliance.accept(req.account.id,req.body?.version)));
 app.use('/api',(req,res,next)=>{
-  if(req.account.suspended)return res.status(403).json({error:'Account suspended.'});
+  if(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
+  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&['/message','/encryption/message','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/invite','/contacts/open','/invite'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
   if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
   if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
@@ -286,10 +287,16 @@ app.post('/api/report',guard('report',5,60000),(req,res)=>{
   if(messageId){const message=room.messages.find(m=>m.id===messageId&&!m.deleted);if(!message||message.sender===req.account.id)return res.status(400).json({error:'Message unavailable.'});target=message.sender;}
   else target=room.group?room.users.find(m=>m!==req.account.id&&room.labels.get(m)===req.body?.member):room.users.find(m=>m!==req.account.id);
   if(!target)return res.status(400).json({error:'Choose a contact.'});
-  res.json(compliance.report(req.account.id,target,room.id,req.body?.reason,req.body?.evidence??'',messageId||null));
+  const items=req.body?.context??[];
+  if(!Array.isArray(items)||items.length>6)return res.status(400).json({error:'Choose up to six messages.'});
+  const selected=new Set();const context=[];for(const entry of items){const m=room.messages.find(x=>x.id===entry?.id&&!x.deleted&&!x.once&&!x.burnSeconds);if(!m||selected.has(m.id)||m.kind!=='text'||typeof entry.text!=='string'||entry.text.length>1000)return res.status(400).json({error:'Selected evidence is unavailable.'});selected.add(m.id);context.push({id:m.id,sender:m.sender===req.account.id?'Reporter':m.sender===target?'Reported account':'Other participant',at:m.at,reported:m.id===messageId,text:room.encryption?entry.text:m.text.slice(0,1000),source:room.encryption?'reporter-submitted':'server-confirmed'});}
+  context.sort((a,b)=>a.at-b.at);
+  const result=compliance.report(req.account.id,target,room.id,req.body?.reason,req.body?.evidence??'',messageId||null,context,room.encryption?'encrypted direct':room.group?'group':room.support?'support':'direct');
+  const admin=db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired'").all().map(a=>a.id);push.notify(admin);res.json(result);
 });
-app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json({items:compliance.list()});});
-app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action);if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
+app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json({items:compliance.list(true)});});
+app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action,req.account.id,req.body?.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
+app.post('/api/admin/reports/reinstate',guard('reinstate',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json(compliance.reinstate(req.body?.target,req.account.id,req.body?.notes??''));});
 const supportAccount = () => db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL").get();
 app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
   const agent=supportAccount();

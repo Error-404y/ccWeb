@@ -2348,3 +2348,5 @@ dialog.update-sheet[open] .modal-head h2 {
 @media(prefers-reduced-motion:reduce){#bootSplash{display:none!important}.swipe-reply{transition:none}}
 
 .trusted-action{color:#159a64!important;font-weight:650}
+
+.report-context-list,.report-transcript{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow:auto}.report-context-row{display:flex;align-items:flex-start;gap:10px;padding:10px;background:var(--sub);border-radius:12px}.report-context-row p,.report-evidence p{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0}.report-context-row strong,.report-evidence strong{font-size:12px;color:var(--muted)}.report-evidence{padding:10px;border-radius:12px;background:var(--sub)}.report-evidence.reported{border:1px solid var(--danger)}.report-evidence small{font-size:10px;color:var(--muted)}
