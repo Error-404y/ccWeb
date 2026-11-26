@@ -1052,27 +1052,43 @@ function attachMessageGesture(bubble,reply,actions){
   let gesture=null,timer=null,suppress=false;
   const indicator=svg('reply','swipe-reply-indicator');bubble.classList.add('swipe-reply');bubble.append(indicator);
   function clear(){clearTimeout(timer);timer=null;gesture=null;bubble.classList.remove('swipe-tracking','swipe-ready');bubble.style.removeProperty('--reply-shift');}
+  function owns(e){return gesture!==null&&e.pointerId===gesture.id;}
+  function horizontal(dx,dy){return Math.abs(dx)>=Math.abs(dy)*1.4;}
   bubble.addEventListener('pointerdown',e=>{
-    if(!e.isPrimary||e.button!==0||e.target.closest('button,a,input,textarea,audio,video')||bubble.classList.contains('masked-message'))return;
-    suppress=false;gesture={id:e.pointerId,x:e.clientX,y:e.clientY,swipe:false};
-    timer=setTimeout(()=>{if(!gesture||!bubble.isConnected)return;suppress=true;clear();if(native)devicePlugin.haptic().catch(()=>{});actions();},430);
+    if(!e.isPrimary||e.button!==0)return;
+    clear();suppress=false;
+    if(e.target.closest('button,a,input,textarea,audio,video')||bubble.classList.contains('masked-message'))return;
+    const active={id:e.pointerId,x:e.clientX,y:e.clientY,swipe:false};
+    gesture=active;
+    timer=setTimeout(()=>{if(gesture!==active||!bubble.isConnected)return;suppress=true;clear();haptic();actions();},430);
   });
   bubble.addEventListener('pointermove',e=>{
-    if(!gesture||e.pointerId!==gesture.id)return;
+    if(!owns(e))return;
     const dx=e.clientX-gesture.x,dy=e.clientY-gesture.y;
     if(Math.abs(dx)>9||Math.abs(dy)>9){clearTimeout(timer);timer=null;}
     if(!gesture.swipe&&Math.abs(dy)>12&&Math.abs(dy)>=Math.abs(dx)){clear();return;}
-    if(!reply||Math.abs(dx)<12||Math.abs(dx)<Math.abs(dy)*1.4)return;
+    if(!reply||(!gesture.swipe&&(Math.abs(dx)<12||!horizontal(dx,dy))))return;
     if(!gesture.swipe){gesture.swipe=true;bubble.classList.add('swipe-tracking');try{bubble.setPointerCapture(e.pointerId);}catch{}}
-    const shift=Math.sign(dx)*Math.min(72,Math.abs(dx));bubble.style.setProperty('--reply-shift',shift+'px');bubble.classList.toggle('swipe-ready',Math.abs(shift)>=48);
+    const shift=horizontal(dx,dy)?Math.sign(dx)*Math.min(72,Math.abs(dx)):0;
+    bubble.style.setProperty('--reply-shift',shift+'px');bubble.classList.toggle('swipe-ready',Math.abs(shift)>=48);
   });
-  bubble.addEventListener('pointerup',e=>{if(!gesture||e.pointerId!==gesture.id)return;const swipe=gesture.swipe,accepted=swipe&&Math.abs(e.clientX-gesture.x)>=48;clear();if(swipe)suppress=true;if(accepted){if(native)devicePlugin.haptic().catch(()=>{});reply();}});
-  for(const name of ['pointercancel','lostpointercapture'])bubble.addEventListener(name,clear);
-  bubble.addEventListener('pointerleave',()=>{if(!gesture?.swipe)clear();});
-  bubble.addEventListener('click',e=>{if(suppress){suppress=false;e.preventDefault();e.stopPropagation();}},true);
-  bubble.addEventListener('contextmenu',e=>{e.preventDefault();clear();actions();});
+  bubble.addEventListener('pointerup',e=>{
+    if(!owns(e))return;
+    const dx=e.clientX-gesture.x,dy=e.clientY-gesture.y,swipe=gesture.swipe;
+    const accepted=swipe&&Math.abs(dx)>=48&&horizontal(dx,dy);
+    clear();if(swipe)suppress=true;
+    if(accepted){haptic();reply();}
+  });
+  bubble.addEventListener('pointercancel',e=>{if(owns(e)){if(gesture.swipe)suppress=true;clear();}});
+  // Touch starts with implicit capture on the child. Transferring capture to
+  // the bubble emits a bubbling lostpointercapture from that child, not a cancellation.
+  bubble.addEventListener('lostpointercapture',e=>{if(owns(e)&&e.target===bubble&&!bubble.hasPointerCapture(e.pointerId)){if(gesture.swipe)suppress=true;clear();}});
+  bubble.addEventListener('pointerleave',e=>{if(owns(e)&&e.target===bubble&&!gesture.swipe)clear();});
+  bubble.addEventListener('click',e=>{if(suppress&&e.detail!==0){suppress=false;e.preventDefault();e.stopPropagation();}},true);
+  bubble.addEventListener('contextmenu',e=>{e.preventDefault();if(suppress)return;clear();actions();});
   bubble.tabIndex=0;bubble.addEventListener('keydown',e=>{if(e.target===bubble&&(e.key==='Enter'||e.key===' ')){e.preventDefault();actions();}});
 }
+
 function beginReply(room,message){
   if(!unlockToken||page!=='chat'||selected!==room.id||document.hidden)return;
   const current=state.rooms.find(r=>r.id===room.id&&r.expires>serverNow()&&!r.readOnly),target=current?.messages.find(m=>m.id===message.id&&!m.deleted&&!m.once&&!m.burnSeconds);
