@@ -49,7 +49,7 @@ test('only authenticated support agent controls timers and deletion',()=>{
   const direct=chats.connectPair('agent','other');
   assert.throws(()=>chats.setSupportTimer('agent',direct,'48h',true));
   assert.equal(chats.setSupportTimer('agent',id,'24h',true).expires,now+86400000);
-  assert.equal(chats.setSupportTimer('agent',id,'30m',true).expires,now+86400000+CHAT_TTL);
+  assert.equal(chats.setSupportTimer('agent',id,'30m',true).expires,now+86400000+30*60_000);
   assert.equal(chats.setSupportTimer('agent',id,'48h',true).expires,now+172800000);
   assert.equal(chats.setSupportTimer('agent',id,'keep',true).persistent,true);
   assert.equal(chats.remove('user',id).requested,true);
