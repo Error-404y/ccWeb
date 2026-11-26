@@ -127,7 +127,7 @@
             <button id="attachmentMenu" class="icon-button" type="button" aria-label="Message options" title="Message options"><svg><use href="#plus"/></svg></button>
             <textarea id="message" aria-label="Message" placeholder="Message" rows="1" maxlength="2000" autocomplete="off"></textarea>
             <button id="cameraShortcut" class="icon-button media-shortcut" type="button" aria-label="Camera"><svg><use href="#camera"/></svg></button>
-            <button id="voiceShortcut" class="icon-button media-shortcut" type="button" aria-label="Record voice message"><svg><use href="#mic"/></svg></button>
+            <button id="voiceShortcut" class="icon-button media-shortcut" type="button" aria-label="Hold to record voice message"><svg><use href="#mic"/></svg></button>
             <button id="send" class="send-button" type="button" aria-label="Send" disabled><svg><use href="#sendIcon"/></svg></button>
           </form>
           <div id="adminComposer" class="admin-composer" hidden>
@@ -162,19 +162,19 @@
         <div class="page-content">
           <div class="panel settings-panel" data-settings-category="main">
             <h1>Settings</h1>
-            <div id="userInterfaceHeading" class="settings-section-heading" hidden>User Interface</div>
+            <div id="userInterfaceHeading" class="settings-section-heading" hidden>User Interface</div><div class="settings-section-heading">General</div><div class="settings-group">
             <a class="settings-row settings-category-link" href="/settings/account"><svg><use href="#key"/></svg><span>Account</span><svg class="chevron"><use href="#chevron"/></svg></a>
-            <a class="settings-row settings-category-link" href="/settings/privacy"><svg><use href="#lock"/></svg><span>Privacy</span><svg class="chevron"><use href="#chevron"/></svg></a>
-            <a class="settings-row settings-category-link" href="/settings/appearance"><svg><use href="#moon"/></svg><span>Appearance</span><svg class="chevron"><use href="#chevron"/></svg></a>
-            <a class="settings-row settings-category-link" href="/settings/updates"><svg><use href="#clock"/></svg><span>Update log</span><svg class="chevron"><use href="#chevron"/></svg></a>
-            <a class="settings-row settings-category-link" href="/settings/help"><svg><use href="#chat"/></svg><span>Help</span><svg class="chevron"><use href="#chevron"/></svg></a>
-            <a class="settings-row settings-category-link" href="/settings/about"><svg><use href="#info"/></svg><span>About</span><svg class="chevron"><use href="#chevron"/></svg></a>
-            <div id="adminInterface" hidden><div class="settings-section-heading">Admin Interface</div>
+            <a class="settings-row settings-category-link" href="/settings/privacy"><svg><use href="#lock"/></svg><span>Privacy &amp; Security</span><svg class="chevron"><use href="#chevron"/></svg></a>
+            <a class="settings-row settings-category-link" href="/settings/appearance"><svg><use href="#moon"/></svg><span>Appearance</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/notifications"><svg><use href="#info"/></svg><span>Notifications</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/motion"><svg><use href="#terminal"/></svg><span>Motion &amp; Experience</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/connections"><svg><use href="#avatar"/></svg><span>Connections</span><svg class="chevron"><use href="#chevron"/></svg></a>
+            </div><div class="settings-section-heading">qzu.</div><div class="settings-group"><a class="settings-row settings-category-link" href="/settings/updates"><svg><use href="#clock"/></svg><span>Update Center</span><svg class="chevron"><use href="#chevron"/></svg></a>
+            <a class="settings-row settings-category-link" href="/settings/help"><svg><use href="#chat"/></svg><span>Help &amp; Support</span><svg class="chevron"><use href="#chevron"/></svg></a>
+            <a class="settings-row settings-category-link" href="/settings/about"><svg><use href="#info"/></svg><span>About qzu.</span><svg class="chevron"><use href="#chevron"/></svg></a>
+            </div><div id="adminInterface" hidden><div class="settings-section-heading">Admin Interface</div>
               <button class="settings-row" id="adminReports" type="button"><svg><use href="#info"/></svg><span>Abuse reports</span><svg class="chevron"><use href="#chevron"/></svg></button>
               <a class="settings-row settings-category-link" id="adminInboxLink" href="/settings/support-requests"><svg><use href="#chat"/></svg><span>View inbox</span><strong id="adminInboxCount"></strong><svg class="chevron"><use href="#chevron"/></svg></a>
               <a class="settings-row settings-category-link" href="/settings/admin-feedback"><svg><use href="#info"/></svg><span>View feedback</span><strong id="adminFeedbackCount"></strong><svg class="chevron"><use href="#chevron"/></svg></a>
             </div>
-            <button class="settings-row logout-row" id="logout"><svg><use href="#back"/></svg><span>Delete account</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row logout-row" id="adminLogout" hidden type="button"><svg><use href="#key"/></svg><span>Admin logout</span><svg class="chevron"><use href="#chevron"/></svg></button><button class="settings-row logout-row" id="logout"><svg><use href="#back"/></svg><span>Delete account</span><svg class="chevron"><use href="#chevron"/></svg></button>
           </div>
           <div class="panel settings-panel" data-settings-category="account" hidden>
             <h1>Account</h1>
@@ -197,14 +197,17 @@
             </div>
             <div class="settings-row"><svg><use href="#lock"/></svg><span>Require PIN when leaving app</span><label class="privacy-switch"><input id="backgroundPin" type="checkbox" checked aria-label="Require PIN when leaving app"><span></span></label></div>
             <p class="background-pin-note">Off keeps the current session unlocked for up to 12 hours of inactivity. A fresh launch still requires your PIN.</p>
-            <button class="settings-row" id="privateNotifications" type="button"><svg><use href="#lock"/></svg><span>Private notifications</span><strong id="pushStatus">Off</strong><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="privacyPolicy" type="button"><svg><use href="#info"/></svg><span>Privacy policy</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="securityCenter"><svg><use href="#lock"/></svg><span>Security center</span><svg class="chevron"><use href="#chevron"/></svg></button>
-            <button class="settings-row" id="manageContacts"><svg><use href="#avatar"/></svg><span>Manage contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
-            <button class="settings-row" id="blockedContacts"><svg><use href="#lock"/></svg><span>Blocked contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row emergency-row" id="emergency"><svg><use href="#terminal"/></svg><span>emg.exe</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <div class="settings-row"><svg><use href="#clock"/></svg><span>Chat lifetime</span><strong>24 hours</strong></div>
           </div>
+          <div class="panel settings-panel" data-settings-category="notifications" hidden><h1>Notifications</h1>            <button class="settings-row" id="privateNotifications" type="button"><svg><use href="#lock"/></svg><span>Private notifications</span><strong id="pushStatus">Off</strong><svg class="chevron"><use href="#chevron"/></svg></button>
+<p class="background-pin-note">Notification delivery also depends on your device permissions.</p></div>
+          <div class="panel settings-panel" data-settings-category="motion" hidden><h1>Motion &amp; Experience</h1><div class="settings-row"><svg><use href="#terminal"/></svg><span>Motion style</span><strong>Balanced</strong></div><p class="background-pin-note">Animations respect your device’s reduced-motion preference.</p></div>
+          <div class="panel settings-panel" data-settings-category="connections" hidden><h1>Connections</h1>            <button class="settings-row" id="manageContacts"><svg><use href="#avatar"/></svg><span>Manage contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row" id="blockedContacts"><svg><use href="#lock"/></svg><span>Blocked contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
+</div>
           <div class="panel settings-panel" data-settings-category="appearance" hidden>
             <h1>Appearance</h1>
             <div class="settings-row"><svg><use href="#moon"/></svg><span>Appearance</span><select id="theme" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
