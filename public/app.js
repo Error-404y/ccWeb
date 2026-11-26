@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.8.1';
+const installedVersion = window.QZU_APP_VERSION || '0.8.2';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -624,6 +624,7 @@ function lock(reopen = true) {
   $('presenceLabel').hidden = true;
   $('presenceLabel').textContent = '';
   $('encryptionStatus').hidden = true;
+  $('encryptionNotice').hidden = true;
   typingRoom = null;
   lastTypingAt = 0;
   receiptsInFlight = false;
@@ -819,6 +820,7 @@ function renderChat() {
   const isAdmin = Boolean(current?.admin);
   const readOnly = Boolean(current?.readOnly);
   $('composer').hidden = !current || readOnly;
+  renderEncryptionNotice(current);
   $('adminComposer').hidden = !readOnly;
   $('deleteChat').hidden = readOnly;
   $('attachmentMenu').hidden = Boolean(current?.support || ((current?.encryption || (native && directRoom(current))) && !encryptionReady(current)));
@@ -1240,9 +1242,12 @@ function clearVolatile() {
 function directRoom(room) {
   return room && !room.group && !room.admin && !room.support;
 }
+function encryptionRequired(room) {
+  return Boolean(room && (room.encryption || (native && directRoom(room))));
+}
 function encryptionReady(room) {
   const local = roomKeys.get(room.id);
-  return Boolean(room.encryption && room.encryption.confirmed && room.encryption.peerConfirmed && local?.context && local.verified === local.context.code && room.encryptionStatus === 'ready');
+  return Boolean(local?.until > Date.now() && room.encryption && room.encryption.confirmed && room.encryption.peerConfirmed && local?.context && local.verified === local.context.code && room.encryptionStatus === 'ready');
 }
 function dropExpiredKeys(rooms = null) {
   const now = Date.now();
@@ -1315,12 +1320,24 @@ async function showEncryption(room) {
         await api('encryption/key', { id: room.id, record: key.record });
         closeModal();
         await refresh();
+        const current = state.rooms.find(item => item.id === room.id);
+        if (current && selected === room.id && unlockToken && current.encryption?.own) showEncryption(current);
       } catch (error) { if (epoch === authEpoch) modalError(error); }
     }), button('Cancel', closeModal, 'secondary-button')]);
     return;
   }
   if (!local?.context || !room.encryption.peer) {
-    info('Waiting for contact', 'Ask your contact to open this chat and generate their encryption key.');
+    show('Waiting for contact', [
+      el('p', '', 'Your key is ready. Ask your contact to open this conversation and tap Set up encryption. Both devices must compare the same safety code.'),
+      button('Check again', async () => {
+        try {
+          await refresh();
+          const current = state.rooms.find(item => item.id === room.id);
+          if (current && selected === room.id && unlockToken) showEncryption(current);
+        } catch (error) { modalError(error); }
+      }),
+      button('Close', closeModal, 'secondary-button')
+    ]);
     return;
   }
   const code = local.context.code;
@@ -1422,10 +1439,37 @@ mobile.addEventListener('change', () => {
   if (!mobile.matches) mobileOpen = false;
   renderChat();
 });
+function renderEncryptionNotice(room) {
+  const notice = $('encryptionNotice');
+  const required = encryptionRequired(room) && !encryptionReady(room);
+  notice.hidden = !required;
+  if (!required) return;
+  const local = roomKeys.get(room.id);
+  $('encryptionNoticeText').textContent = ['lost', 'error'].includes(room.encryptionStatus) ? 'Encryption key unavailable. Tap for help.'
+    : room.encryptionStatus === 'unavailable' ? 'Encryption unavailable. Tap for details.'
+    : !room.encryption?.own ? 'Set up encryption to send messages'
+    : !room.encryption?.peer ? 'Waiting for your contact to set up encryption'
+    : local?.context && local.verified === local.context.code && room.encryption.confirmed ? 'Waiting for your contact to verify the safety code'
+    : 'Compare safety codes before sending';
+}
+$('encryptionNotice').addEventListener('click', () => {
+  const room = state.rooms.find(item => item.id === selected);
+  if (encryptionRequired(room)) showEncryption(room);
+});
 function updateSendButton() {
   const room = state.rooms.find(room => room.id === selected);
-  $('send').disabled = !unlockToken || sendingMessage || !room || room.readOnly ||
-    room.expires <= serverNow() || ((room.encryption || (native && directRoom(room))) && !encryptionReady(room)) || !$('message').value.trim();
+  const needsSetup = encryptionRequired(room) && !encryptionReady(room);
+  const send = $('send');
+  send.disabled = !unlockToken || sendingMessage || !room || room.readOnly ||
+    room.expires <= serverNow() || (!$('message').value.trim() && !needsSetup);
+  send.setAttribute('aria-label', needsSetup ? 'Set up or verify encryption' : 'Send');
+  send.title = needsSetup ? 'Set up or verify encryption' : 'Send';
+  send.classList.toggle('send-setup', needsSetup);
+  const icon = needsSetup ? 'lock' : 'sendIcon';
+  if (send.dataset.icon !== icon) {
+    send.dataset.icon = icon;
+    send.replaceChildren(svg(icon));
+  }
 }
 
 async function sendMessage() {
@@ -1433,11 +1477,16 @@ async function sendMessage() {
   const text = $('message').value.trim();
   const room = state.rooms.find(room => room.id === id);
 
-  if (!unlockToken || sendingMessage || !room || room.readOnly || room.expires <= serverNow() || !text) {
+  if (!unlockToken || sendingMessage || !room || room.readOnly || room.expires <= serverNow()) {
     updateSendButton();
     return;
   }
-
+  if (encryptionRequired(room) && !encryptionReady(room)) {
+    $('message').blur();
+    showEncryption(room);
+    return;
+  }
+  if (!text) return;
   const epoch = authEpoch;
   sendingMessage = true;
   updateSendButton();
