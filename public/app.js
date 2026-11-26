@@ -59,6 +59,7 @@ let state = {
 };
 
 let offset = 0;
+const officialChannel = Symbol('qzu-info');
 let selected = null;
 let mobileOpen = false;
 let sequence = 0;
@@ -621,7 +622,9 @@ function lock(reopen = true) {
   $('memberCount').hidden = true;
   $('memberCount').textContent = '';
   $('expiryProgress').hidden = true;
-  $('qzuSafetyNotice').hidden = true;
+  $('qzuInfoChannel').hidden = true;
+  $('qzuInfoOpen').classList.remove('active');
+  $('qzuInfoOpen').setAttribute('aria-pressed', 'false');
   $('groupInvite').hidden = true;
   revokeToken(old);
   stopCamera();
@@ -709,7 +712,7 @@ function selectRoom(id, open = true) {
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
   const now = serverNow(), rooms = state.rooms.filter(r => r.expires > now);
-  if (!rooms.some(r => r.id === selected)) {
+  if (selected !== officialChannel && !rooms.some(r => r.id === selected)) {
     if (selected !== null) {
       resetOnce();
       stopTyping();
@@ -722,8 +725,12 @@ function renderChat() {
     selected = !mobile.matches ? rooms[0]?.id || null: null;
   }
   const current = rooms.find(r => r.id === selected);
+  const infoOpen = selected === officialChannel;
   renderRequests();
-  $('chatPage').classList.toggle('thread-open', Boolean(current && mobileOpen));
+  $('qzuInfoOpen').classList.toggle('active', infoOpen);
+  $('qzuInfoOpen').setAttribute('aria-pressed', String(infoOpen));
+  $('qzuInfoChannel').hidden = !infoOpen;
+  $('chatPage').classList.toggle('thread-open', Boolean((current || infoOpen) && mobileOpen));
   $('chatCount').textContent = rooms.length ? String(rooms.length): '';
   const key = JSON.stringify([privacyMode, rooms.map(r => [r.id, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.id === selected])]);
   if (key !== contactKey) {
@@ -762,8 +769,8 @@ function renderChat() {
     }
     list.scrollTop = top;
   }
-  $('emptyThread').hidden = Boolean(current);
-  for (const id of ['threadHeader', 'qzuSafetyNotice', 'messages']) $(id).hidden = !current;
+  $('emptyThread').hidden = Boolean(current || infoOpen);
+  for (const id of ['threadHeader', 'messages']) $(id).hidden = !current;
 
   const isAdmin = Boolean(current?.admin);
   const readOnly = Boolean(current?.readOnly);
@@ -1150,6 +1157,10 @@ $('changeLogin').addEventListener('click', () => {
     info('qzu.', 'PIN changed.');
   });
 });
+$('qzuInfoOpen').addEventListener('click', () => {
+  if (unlockToken && !accessDue) selectRoom(officialChannel);
+});
+$('qzuInfoBack').addEventListener('click', () => $('backToChats').click());
 $('backToChats').addEventListener('click', () => {
   resetOnce();
   stopTyping();
@@ -1298,7 +1309,7 @@ async function showGroupInvite(id) {
 }
 
 $('groupInvite').addEventListener('click', () => {
-  if (selected) showGroupInvite(selected);
+  if (state.rooms.some(room => room.id === selected && room.canInvite)) showGroupInvite(selected);
 });
 
 $('newCode').addEventListener('click', async() => {

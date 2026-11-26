@@ -2076,24 +2076,20 @@ dialog:not(.pin-screen) .modal-body { gap: 14px; }
 }
 
 
-.qzu-safety-notice {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px clamp(12px, 3vw, 22px);
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-  min-width: 0;
+.official-channel-entry { flex-shrink: 0; padding: 0 14px; }
+.official-contact { border-bottom: 1px solid var(--line); }
+.official-contact:last-child { border-bottom-color: var(--line); }
+.official-contact .contact-name { display: flex; align-items: center; gap: 5px; }
+.official-chevron { width: 16px; height: 16px; color: var(--muted); }
+.official-channel { display: flex; flex: 1 1 0%; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
+.official-channel-content { flex: 1 1 0%; min-height: 0; overflow-y: auto; overscroll-behavior: none; padding: 26px clamp(16px, 4vw, 40px); }
+.official-channel-intro { display: grid; justify-items: center; gap: 10px; text-align: center; padding: 20px 0 32px; }
+.official-channel-intro h1 { font-size: 24px; }
+.official-channel-intro p { font-size: 13px; color: var(--muted); }
+.official-post { margin: 0 auto; max-width: 540px; padding: 20px 0; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.official-post-title { display: flex; align-items: center; gap: 5px; font-size: 13px; }
+.official-post h2 { font-size: 18px; }
+.official-post p { font-size: 15px; line-height: 1.55; color: var(--muted); }
+@media (max-width: 700px) {
+  .official-channel-entry { padding-inline: 12px; }
 }
-.qzu-safety-logo {
-  width: 23px;
-  height: 17px;
-  stroke: none;
-  flex-shrink: 0;
-}
-.qzu-safety-content { min-width: 0; display: grid; gap: 2px; }
-.qzu-safety-name { display: flex; align-items: center; gap: 5px; line-height: 1.25; }
-.qzu-safety-name strong { font-size: 12px; font-weight: 700; color: var(--ink); }
-.qzu-safety-name .admin-badge { width: 13px; height: 13px; }
-.qzu-safety-content p { font-size: 11px; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
