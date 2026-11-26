@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.8.2';
+const installedVersion = window.QZU_APP_VERSION || '0.8.3';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -2378,37 +2378,32 @@ function deferUpdate(version) {
   try { localStorage.setItem('qzu-update-later-' + version, String(until)); } catch {}
 }
 
+function updateDownload(release) {
+  if (!native) return null;
+  try {
+    const url = new URL(release.downloads?.[window.Capacitor?.getPlatform?.()]);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
+}
+
 async function installUpdate(release) {
-  const platform = window.Capacitor?.getPlatform?.();
-  const url = release.downloads?.[platform];
-  if (native && url) {
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error('Invalid update link.');
-      await devicePlugin.openUpdate({ url: parsed.href });
-      deferUpdate(release.latest);
-      closeModal();
-      return;
-    } catch (error) { modalError(error); return; }
-  }
-  show('Install update', [
-    el('p', '', 'Version ' + release.latest + ' is available on the server, but a signed installation file has not been linked for this device yet.'),
-    el('p', '', platform === 'ios' ? 'Use your trusted qzu. iOS build or TestFlight invitation when available.' : 'Install the updated APK from your trusted qzu. distributor when available. Do not uninstall your existing app.'),
-    button('Remind me later', () => { deferUpdate(release.latest); closeModal(); }, 'secondary-button')
-  ]);
+  const url = updateDownload(release);
+  if (!url) { showUpdatePrompt(release); return; }
+  try {
+    await devicePlugin.openUpdate({ url });
+    deferUpdate(release.latest);
+    closeModal();
+  } catch (error) { modalError(error); }
 }
 
 function showUpdatePrompt(release) {
   const logo = svg('logo', 'wordmark update-wordmark');
-  const description = el('p', 'update-description', 'A new version of qzu. is available.');
-  const version = el('p', 'update-version', 'Version ' + release.latest);
-  const notes = el('p', 'update-notes', String(release.notes || 'Performance improvements and fixes.'));
+  const description = el('p', 'update-description', 'A new version is available.');
   const actions = el('div', 'update-actions');
-  actions.append(
-    button('Remind me later', () => { deferUpdate(release.latest); closeModal(); }, 'secondary-button update-later'),
-    button('Install now', () => installUpdate(release), 'primary-button update-install')
-  );
-  show('New update available', [logo, description, version, notes, actions]);
+  actions.append(button('Remind me later', () => { deferUpdate(release.latest); closeModal(); }, 'secondary-button update-later'));
+  if (updateDownload(release)) actions.append(button('Install now', () => installUpdate(release), 'primary-button update-install'));
+  else actions.classList.add('update-single');
+  show('Update available', [logo, description, actions]);
   modal.classList.add('update-sheet');
   $('modalClose').hidden = true;
 }

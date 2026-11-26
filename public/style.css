@@ -2255,3 +2255,6 @@ dialog.update-sheet[open] .modal-head h2 {
 .encryption-notice span { flex: 1; min-width: 0; }
 .encryption-notice svg { width: 17px; height: 17px; flex-shrink: 0; }
 .send-button.send-setup, :root[data-accent=red] .send-button.send-setup { background: var(--ink); color: var(--surface); }
+
+.update-actions.update-single { display: flex; }
+.update-actions.update-single > button { width: 100%; flex: 1; }
