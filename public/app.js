@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.9.3';
+const installedVersion = window.QZU_APP_VERSION || '0.9.4';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -2664,13 +2664,14 @@ function showAccess() {
   const controls = [plan, terms, purchase];
   const saved = savedInvoice(false);
   if (saved) controls.push(button('Resume purchase', () => showInvoice(saved, null, false), 'secondary-button'));
-  controls.push(button('Enter key or reference', () => showKeyEntry(false), 'secondary-button'));
+  controls.push(button('Redeem Key', () => showKeyEntry(false), 'secondary-button'));
   showCheckout('qzu-Access', controls);
 }
 
 function showKeyEntry(renewal) {
   const input = el('input', 'access-key-input');
-  input.placeholder = renewal ? 'QZU-… or QZO-…' : 'Access or admin key';
+  input.placeholder = 'Use Access-Key';
+  input.setAttribute('aria-label', 'Use Access-Key');
   input.autocomplete = 'off';
   input.spellcheck = false;
   input.maxLength = renewal ? 52 : 58;
@@ -2680,16 +2681,16 @@ function showKeyEntry(renewal) {
       submit.disabled=true;
       try{
         const result=await api('session',{accessKey:value});
-        if(result.accessRequired||!result.needsSetup)throw Error('Admin activation unavailable.');
+        if(result.accessRequired||!result.needsSetup)throw Error('Key activation unavailable.');
         input.value='';forgetInvoice(false);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();
       }catch(error){dialogError(error);submit.disabled=false;}
       return;
     }
-    if (!/^QZ[UO]-[A-F0-9]{48}$/.test(value)) return dialogError(new Error('Enter a valid access key or order reference.'));
+    if (!/^QZ[UO]-[A-F0-9]{48}$/.test(value)) return dialogError(new Error('Enter a valid key.'));
     rememberInvoice(value, renewal);
     showInvoice(value, null, renewal);
   });
-  showCheckout('Access key', [input, submit, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
+  showCheckout('Use Access-Key', [input, submit, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
 }
 
 function showRenewal() {

@@ -16,3 +16,10 @@ test('send arrow identifies the button, not the SVG symbol', () => {
   assert.match(html, /<use href="#sendIcon"\/>/);
   assert.ok(app.includes("$(\'send\').addEventListener(\'click\', sendMessage)"));
 });
+
+test('key redemption uses neutral wording without exposing admin key types', () => {
+  assert.ok(app.includes("button('Redeem Key', () => showKeyEntry(false)"));
+  assert.ok(app.includes("input.placeholder = 'Use Access-Key'"));
+  assert.ok(app.includes("showCheckout('Use Access-Key'"));
+  assert.ok(!app.includes('Access or admin key'));
+});
