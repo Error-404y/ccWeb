@@ -1,6 +1,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { iconPng } from './app-icon.mjs';
+import { playAssets } from './play-assets.mjs';
 
 const target = process.argv[2];
 if (!['ios', 'android'].includes(target)) throw new Error('Choose ios or android.');
@@ -43,6 +44,8 @@ function installIcons() {
 
 rmSync('mobile-dist', { recursive: true, force: true });
 cpSync('public', 'mobile-dist', { recursive: true });
+for(const legal of ['privacy.html','privacy.css','terms.html','delete-account.html'])rmSync('mobile-dist/'+legal,{force:true});
+if(distribution==='google-play')writeFileSync('mobile-dist/app.js',playAssets(readFileSync('mobile-dist/app.js','utf8')));
 mkdirSync('mobile-dist/vendor', { recursive: true });
 cpSync('node_modules/jsqr/dist/jsQR.js', 'mobile-dist/vendor/jsqr.js');
 cpSync('node_modules/@capacitor/core/dist/capacitor.js', 'mobile-dist/vendor/capacitor.js');

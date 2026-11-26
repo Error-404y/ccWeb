@@ -11,7 +11,7 @@ import { feedbackStore } from './lib/feedback.mjs';
 import { privatePush } from './lib/push.mjs';
 import { loadFirebaseDelivery } from './lib/firebase-push.mjs';
 import { versionedState } from './lib/live.mjs';
-import { contactStore, retireAccount } from './lib/contacts.mjs';
+import { contactStore } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
 import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment } from './lib/access.mjs';
@@ -285,7 +285,7 @@ app.post('/api/report',guard('report',5,60000),(req,res)=>{
   if(messageId){const message=room.messages.find(m=>m.id===messageId&&!m.deleted);if(!message||message.sender===req.account.id)return res.status(400).json({error:'Message unavailable.'});target=message.sender;}
   else target=room.group?room.users.find(m=>m!==req.account.id&&room.labels.get(m)===req.body?.member):room.users.find(m=>m!==req.account.id);
   if(!target)return res.status(400).json({error:'Choose a contact.'});
-  res.json(compliance.report(req.account.id,target,room.id,req.body?.reason,req.body?.evidence??''));
+  res.json(compliance.report(req.account.id,target,room.id,req.body?.reason,req.body?.evidence??'',messageId||null));
 });
 app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json({items:compliance.list()});});
 app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action);if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
@@ -327,7 +327,7 @@ function androidUpdateLink() {
 app.get('/api/version', (req, res) => res.json({
   latest: version,
   notes: 'Account deletion, reporting, terms and Google Play distribution controls.',
-  changes: ['Official announcements and unread dot','Authenticated live updates','Improved encryption verification and deletion','Flexible connection-code lifetime','Refined interface and Update Center','Private notification setup and privacy-safe backups'],
+  changes: ['Account deletion in app and on the website','Terms of Service and privacy policy','User and message reports with moderator review','Reusable review access','Google Play distribution support'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
