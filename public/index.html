@@ -87,9 +87,9 @@
           </div>
           <header id="threadHeader" class="thread-header" hidden>
             <button id="backToChats" class="icon-button mobile-back" aria-label="Back to chats"><svg><use href="#back"/></svg></button>
-            <svg class="avatar"><use id="threadAvatar" href="#avatar"/></svg>
+            <button id="profileAvatar" type="button" class="profile-avatar" aria-label="Contact information"><svg class="avatar"><use id="threadAvatar" href="#avatar"/></svg></button>
             <div class="thread-title">
-              <div class="thread-name-wrap"><h2 id="threadName">Chat</h2><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span><button id="encryptionStatus" class="encryption-status" type="button" hidden></button></div>
+              <div class="thread-name-wrap"><button id="profileName" class="profile-name" type="button"><span id="threadName">Chat</span></button><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span><button id="encryptionStatus" class="encryption-status" type="button" hidden></button></div>
               <svg id="threadBadge" class="admin-badge" aria-label="Verified Admin" hidden><use href="#adminBadge"/></svg>
             </div>
             <div class="expiry" title="Chat expires"><svg><use href="#clock"/></svg><span id="chatTimer">30:00</span></div>
@@ -237,8 +237,9 @@
           </div>
         </div>
       </section>
-      <div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
+      <nav id="bottomNav" class="bottom-nav" aria-label="Main navigation" hidden><a href="/chat" data-tab="chat"><span class="nav-icon"><svg><use href="#chat"/></svg><span id="navUnread" class="unread-badge" hidden></span></span><span>Chats</span></a><a href="/connect" data-tab="connect"><svg><use href="#qr"/></svg><span>Connect</span></a><a href="/settings" data-tab="settings"><svg><use href="#settings"/></svg><span>Settings</span></a></nav><div id="activityBanner" class="activity-banner" role="status" hidden></div><div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
     </main>
+    <div id="bootSplash" aria-hidden="true"><div class="boot-grid"></div><div class="boot-center"><i></i><i></i><i></i><svg viewBox="0 0 172 110"><path class="boot-chevron" fill="#bd0000" d="M5 5 85 44 85 64 5 105 5 80 55 54 5 30Z"/><rect class="boot-cursor" x="87" y="86" width="80" height="19" fill="#bd0000"/></svg></div><div class="boot-scan"></div><div class="boot-progress"></div></div>
     <dialog id="modal" aria-labelledby="modalTitle">
       <div class="modal-head"><h2 id="modalTitle" tabindex="-1"></h2><button id="modalClose" class="icon-button" aria-label="Close"><svg><use href="#close"/></svg></button></div>
       <div id="modalBody" class="modal-body"></div>

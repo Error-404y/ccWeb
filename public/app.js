@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.10.3';
+const installedVersion = window.QZU_APP_VERSION || '0.11.0';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -120,6 +120,7 @@ function routeName(path) {
 }
 
 function updatePages() {
+  updateNavigation();
   for (const name of ['chat', 'settings', 'connect']) $(name + 'Page').hidden = !unlockToken || accessDue || termsPending || suspendedAccount || name !== page;
   $('loading').hidden = Boolean(unlockToken);
   $('loading').classList.toggle('locked', !unlockToken);
@@ -151,7 +152,7 @@ document.addEventListener('click', e => {
   const url = new URL(a.href);
   if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/'].includes(url.pathname)) return;
   e.preventDefault();
-  if (unlockToken) navigate(url.pathname);
+  if (unlockToken) {if(a.dataset.tab==='chat'){mobileOpen=false;selected=null;renderedRoom=null;}navigate(url.pathname);}
 });
 window.addEventListener('popstate', () => navigate(location.pathname, false));
 const fmtTime = ms => new Intl.DateTimeFormat(undefined, {
@@ -763,7 +764,7 @@ function selectRoom(id, open = true) {
   selected = id;
   mobileOpen = open;
   renderedRoom = null;
-  renderChat();
+  renderChat();updateNavigation();void acknowledgeMessages();
 }
 
 function identityChanged(room) {
@@ -805,6 +806,8 @@ $('manageContacts').addEventListener('click',()=>{
   if(!list.children.length)list.append(el('p','','No contacts.'));
   show('Contacts',[list,button('Close',closeModal)]);
 });
+function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m.unread===true).length;}
+function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+(state.official?.unread?1:0);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);}
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
   $('supportOpen').hidden=!state.supportAvailable || state.rooms.some(room=>room.mobileSupport&&!room.supportAgent&&room.expires>serverNow());
@@ -832,7 +835,7 @@ function renderChat() {
   const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
   $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, r.id === selected])]);
+  const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -866,6 +869,7 @@ function renderChat() {
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
       content.append(name, el('span', 'contact-preview' + (r.contact?.warning || identityChanged(r) ? ' contact-warning' : ''), preview));
       b.append(svg(r.support && !r.supportAgent ? 'supportAvatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
+      const count=unreadCount(r);if(count){const badge=el('span','unread-badge',count>99?'99+':String(count));badge.setAttribute('aria-label',count+' unread messages');b.append(badge);}
       b.addEventListener('click', () => selectRoom(r.id));
       list.append(b);
     }
@@ -911,7 +915,8 @@ function renderChat() {
   $('threadBadge').hidden = !isAdmin || Boolean(current?.supportAgent);
   $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
-  $('chatOptions').hidden = !current || (isAdmin && !current.support && !(current.supportAgent && state.supportAgent));
+  $('chatOptions').hidden = true;
+  $('profileAvatar').disabled=!current||readOnly;$('profileName').disabled=!current||readOnly;updateNavigation();
   $('presenceLabel').hidden = !current || isAdmin;
   $('presenceLabel').textContent = current?.group ? (current.activeCount || 0) + ' active' : current?.activeCount ? 'Active' : 'Offline';
   $('presenceLabel').classList.toggle('online', Boolean(current?.activeCount));
@@ -982,56 +987,37 @@ function updateStatus(node, status) {
   node.replaceChildren(svg(status === 'sent' ? 'check' : 'doubleCheck'));
 }
 
-function attachSwipeReply(bubble, reply) {
-  let gesture = null;
-  let suppressClick = false;
-  const reset = () => {
-    gesture = null;
-    bubble.classList.remove('swipe-tracking', 'swipe-ready');
-    bubble.style.removeProperty('--reply-shift');
-  };
-  bubble.classList.add('swipe-reply');
-  const indicator = svg('reply', 'swipe-reply-indicator');
-  bubble.append(indicator);
-  bubble.addEventListener('pointerdown', event => {
-    if (event.pointerType !== 'touch' || !event.isPrimary || event.target.closest('button, a, input, textarea, audio, video') || bubble.classList.contains('masked-message')) return;
-    suppressClick = false;
-    gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, dragging: false };
+function attachMessageGesture(bubble,reply,actions){
+  let gesture=null,timer=null,suppress=false;
+  const indicator=svg('reply','swipe-reply-indicator');bubble.classList.add('swipe-reply');bubble.append(indicator);
+  function clear(){clearTimeout(timer);timer=null;gesture=null;bubble.classList.remove('swipe-tracking','swipe-ready');bubble.style.removeProperty('--reply-shift');}
+  bubble.addEventListener('pointerdown',e=>{
+    if(!e.isPrimary||e.button!==0||e.target.closest('button,a,input,textarea,audio,video')||bubble.classList.contains('masked-message'))return;
+    suppress=false;gesture={id:e.pointerId,x:e.clientX,y:e.clientY,swipe:false};
+    timer=setTimeout(()=>{if(!gesture||!bubble.isConnected)return;suppress=true;clear();actions();},430);
   });
-  bubble.addEventListener('pointermove', event => {
-    if (!gesture || gesture.id !== event.pointerId) return;
-    const dx = event.clientX - gesture.x;
-    const dy = event.clientY - gesture.y;
-    if (!gesture.dragging) {
-      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { reset(); return; }
-      if (dx < -10) { reset(); return; }
-      if (dx < 12 || dx < Math.abs(dy) * 1.5) return;
-      gesture.dragging = true;
-      bubble.classList.add('swipe-tracking');
-      try { bubble.setPointerCapture(event.pointerId); } catch {}
-    }
-    const distance = Math.max(0, Math.min(76, dx));
-    bubble.style.setProperty('--reply-shift', distance + 'px');
-    bubble.classList.toggle('swipe-ready', distance >= 52);
+  bubble.addEventListener('pointermove',e=>{
+    if(!gesture||e.pointerId!==gesture.id)return;
+    const dx=e.clientX-gesture.x,dy=e.clientY-gesture.y;
+    if(Math.abs(dx)>9||Math.abs(dy)>9){clearTimeout(timer);timer=null;}
+    if(!gesture.swipe&&Math.abs(dy)>12&&Math.abs(dy)>=Math.abs(dx)){clear();return;}
+    if(!reply||Math.abs(dx)<12||Math.abs(dx)<Math.abs(dy)*1.4)return;
+    if(!gesture.swipe){gesture.swipe=true;bubble.classList.add('swipe-tracking');try{bubble.setPointerCapture(e.pointerId);}catch{}}
+    const shift=Math.sign(dx)*Math.min(72,Math.abs(dx));bubble.style.setProperty('--reply-shift',shift+'px');bubble.classList.toggle('swipe-ready',Math.abs(shift)>=48);
   });
-  bubble.addEventListener('pointerup', event => {
-    if (!gesture || gesture.id !== event.pointerId) return;
-    const dragging = gesture.dragging;
-    const accepted = dragging && event.clientX - gesture.x >= 52;
-    reset();
-    if (dragging) suppressClick = true;
-    if (accepted) reply();
-  });
-  bubble.addEventListener('pointercancel', reset);
-  bubble.addEventListener('lostpointercapture', reset);
-  bubble.addEventListener('click', event => {
-    if (!suppressClick) return;
-    suppressClick = false;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  }, true);
+  bubble.addEventListener('pointerup',e=>{if(!gesture||e.pointerId!==gesture.id)return;const swipe=gesture.swipe,accepted=swipe&&Math.abs(e.clientX-gesture.x)>=48;clear();if(swipe)suppress=true;if(accepted)reply();});
+  for(const name of ['pointercancel','lostpointercapture'])bubble.addEventListener(name,clear);
+  bubble.addEventListener('pointerleave',()=>{if(!gesture?.swipe)clear();});
+  bubble.addEventListener('click',e=>{if(suppress){suppress=false;e.preventDefault();e.stopPropagation();}},true);
+  bubble.addEventListener('contextmenu',e=>{e.preventDefault();clear();actions();});
+  bubble.tabIndex=0;bubble.addEventListener('keydown',e=>{if(e.target===bubble&&(e.key==='Enter'||e.key===' ')){e.preventDefault();actions();}});
 }
-
+function beginReply(room,message){
+  if(!unlockToken||page!=='chat'||selected!==room.id||document.hidden)return;
+  const current=state.rooms.find(r=>r.id===room.id&&r.expires>serverNow()&&!r.readOnly),target=current?.messages.find(m=>m.id===message.id&&!m.deleted&&!m.once&&!m.burnSeconds);
+  if(!target||room.encryption&&!target.decrypted&&target.kind==='text')return;
+  replyTarget={roomId:room.id,id:target.id,sender:target.sender,text:previewText(target)};renderReply();$('message').focus({preventScroll:true});
+}
 function renderMessage(room, message) {
   const row = el('div', 'message-row' + (message.mine ? ' mine' : ''));
   row.id = 'message-' + message.id;
@@ -1098,45 +1084,10 @@ function renderMessage(room, message) {
     bubble.append(reveal);
   }
 
-  if (!room.readOnly && !room.encryption && !(native && directRoom(room)) && !message.once && !message.burnSeconds && !message.deleted) {
-    const startReply = () => {
-      if (!unlockToken || page !== 'chat' || selected !== room.id || document.hidden) return;
-      const current = state.rooms.find(item => item.id === room.id && !item.readOnly && item.expires > serverNow());
-      const target = current?.messages.find(item => item.id === message.id && !item.deleted && !item.once);
-      if (!target) return;
-      replyTarget = { roomId: room.id, id: target.id, sender: target.sender, text: previewText(target) };
-      renderReply();
-      $('message').focus({ preventScroll: true });
-    };
-    const reply = button('', startReply, 'reply-action');
-    attachSwipeReply(bubble, startReply);
-    reply.title = 'Reply';
-    reply.setAttribute('aria-label', 'Reply to message');
-    reply.append(svg('reply'));
-    row.append(reply);
-    const more = button('⋯', () => messageActions(room, message), 'reply-action message-more');
-    more.setAttribute('aria-label', 'Message actions');
-    row.append(more);
-    if (message.reactions?.length) {
-      const bar = el('div', 'message-reactions');
-      for (const reaction of message.reactions) {
-        const chip = button(reaction.emoji + ' ' + reaction.count, () => reactTo(room, message, reaction.emoji), 'reaction-chip' + (reaction.mine ? ' chosen' : ''));
-        bar.append(chip);
-      }
-      bubble.append(bar);
-    }
-  }
-
-  if (!room.readOnly && (message.once || message.burnSeconds) && message.mine && !message.deleted) {
-    const more = button('⋯', () => messageActions(room, message), 'reply-action message-more');
-    more.setAttribute('aria-label', 'Message actions');
-    row.append(more);
-  }
-  if (!message.mine&&!message.deleted&&!room.readOnly){const report=button('Report',()=>showReport(room,{messageId:message.id}),'reply-action');report.setAttribute('aria-label','Report message');row.append(report);}
-  if (room.encryption && message.mine && !message.deleted) {
-    const more = button('⋯', () => confirmUnsend(room, message), 'reply-action message-more');
-    more.setAttribute('aria-label', 'Unsend encrypted message');
-    row.append(more);
+  if (!room.readOnly && !message.deleted) {
+    const canReply=!message.once&&!message.burnSeconds&&!room.encryption;
+    attachMessageGesture(bubble,canReply?()=>beginReply(room,message):null,()=>messageActions(room,message));
+    if(message.reactions?.length){const bar=el('div','message-reactions');for(const reaction of message.reactions)bar.append(button(reaction.emoji+' '+reaction.count,()=>reactTo(room,message,reaction.emoji),'reaction-chip'+(reaction.mine?' chosen':'')));bubble.append(bar);}
   }
   row.append(bubble);
   return row;
@@ -1191,30 +1142,32 @@ async function acknowledgeMessages() {
   for (const room of state.rooms) {
     if (room.readOnly) continue;
     const delivered = [];
-    const read = [];
+    const read = [],seen=[];
     for (const message of room.messages) {
-      if (message.mine || message.deleted || (room.encryption && !message.decrypted)) continue;
+      if (message.mine || message.deleted) continue;
+      if(room.encryption&&!message.decrypted&&message.kind==='text')continue;
       if (!acknowledgedDelivery.has(message.id)) delivered.push(message.id);
       const node = document.getElementById('message-' + message.id);
       const view = $('messages').getBoundingClientRect();
       const rect = node?.getBoundingClientRect();
       const visible = rect && rect.bottom > view.top && rect.top < view.bottom;
+      if(message.unread===true&&room.id===selected&&canReadCurrent()&&visible&&(!privacyMode||revealedMessages.has(message.id)))seen.push(message.id);
       if (!state.invisible && room.id === selected && canReadCurrent() && visible && (!privacyMode || revealedMessages.has(message.id)) && !message.once && (!message.burnSeconds || message.burnAt) && !acknowledgedRead.has(message.id)) read.push(message.id);
     }
-    if (delivered.length || read.length) entries.push({ id: room.id, delivered, read });
+    if (delivered.length || read.length || seen.length) entries.push({ id: room.id, delivered, read, seen });
   }
 
   if (!entries.length) return;
   const batch = [];
   let size = 0;
   for (const entry of entries) {
-    const ids = [...new Set([...entry.delivered, ...entry.read])];
+    const ids = [...new Set([...entry.delivered, ...entry.read, ...entry.seen])];
     const deliveredSet = new Set(entry.delivered);
-    const readSet = new Set(entry.read);
+    const readSet = new Set(entry.read),seenSet=new Set(entry.seen);
     for (let index = 0; index < ids.length; index += 60) {
       const part = ids.slice(index, index + 60);
       if (size + part.length > 100 || batch.length >= 51) break;
-      batch.push({ id: entry.id, delivered: part.filter(id => deliveredSet.has(id)), read: part.filter(id => readSet.has(id)) });
+      batch.push({ id: entry.id, delivered: part.filter(id => deliveredSet.has(id)), read: part.filter(id => readSet.has(id)),seen:part.filter(id=>seenSet.has(id)) });
       size += part.length;
     }
     if (size >= 100 || batch.length >= 51) break;
@@ -1227,6 +1180,7 @@ async function acknowledgeMessages() {
     for (const entry of batch) {
       entry.delivered.forEach(id => acknowledgedDelivery.add(id));
       entry.read.forEach(id => acknowledgedRead.add(id));
+      const room=state.rooms.find(r=>r.id===entry.id);for(const message of room?.messages||[])if(entry.seen.includes(message.id))message.unread=false;
     }
   } catch {} finally {
     if (epoch === authEpoch) receiptsInFlight = false;
@@ -1292,7 +1246,7 @@ function renderSettings() {
 }
 
 function render() {
-  renderChat();
+  updateNavigation();renderChat();
   renderConnect();
   renderSettings();
 }
@@ -2220,6 +2174,7 @@ async function loop() {
   setTimeout(loop, unlockToken&&state.capabilities?.live?500:1500);
 }
 updatePages();
+const boot=$('bootSplash');if(native&&!matchMedia('(prefers-reduced-motion: reduce)').matches){boot.classList.add('boot-running');setTimeout(()=>boot.remove(),1600);}else boot.remove();
 getSession();
 loop();
 
@@ -2297,9 +2252,12 @@ $('adminReports').addEventListener('click',async()=>{
 function messageActions(room, message) {
   const picker = el('div', 'reaction-picker');
   for (const emoji of reactions) picker.append(button(emoji, () => reactTo(room, message, emoji), 'reaction-choice'));
-  const controls = message.once || message.burnSeconds ? [] : [picker];
+  const controls = message.once || message.burnSeconds || room.encryption ? [] : [picker];
+  if(!message.once&&!message.burnSeconds&&!room.encryption)controls.push(button('Reply',()=>{closeModal();beginReply(room,message);},'secondary-button'));
+  if(message.kind==='text'&&!message.once&&!message.burnSeconds&&(!room.encryption||message.decrypted))controls.push(button('Copy',async()=>{try{await navigator.clipboard.writeText(message.text);closeModal();}catch(error){modalError(error);}},'secondary-button'));
+  if(!message.mine)controls.push(button('Report',()=>showReport(room,{messageId:message.id}),'secondary-button'));
 
-  if (!message.once && !message.burnSeconds && message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
+  if (!room.encryption && !message.once && !message.burnSeconds && message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
     controls.push(button('Edit message', () => {
       const input = el('textarea', 'edit-input');
       input.value = message.text;
@@ -2347,6 +2305,7 @@ async function showFingerprint(room) {
     show('Device fingerprints', [el('p', '', 'Compare the entire code with your contact through a separate trusted channel.'), el('div', 'fingerprint-code', result.code.match(/.{1,4}/g).join(' ')), el('p', '', 'Based on server-registered device keys.'), button('Close', closeModal)]);
   } catch (error) { showError(error); }
 }
+for(const id of ['profileAvatar','profileName'])$(id).addEventListener('click',()=>$('chatOptions').click());
 $('chatOptions').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
   if (!room) return;
@@ -2358,7 +2317,7 @@ $('chatOptions').addEventListener('click', () => {
     return;
   }
   if (room.admin&&!room.support) return;
-  const controls = [];
+  const controls = [el('h3','profile-heading',nameFor(room))];
   if(room.support){show('Chat options',[button('Report support conversation',()=>showReport(room),'secondary-button'),button('Close',closeModal,'secondary-button')]);return;}
   if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
   if (!room.group) {
@@ -2381,9 +2340,9 @@ $('chatOptions').addEventListener('click', () => {
   };
   if (room.group) {
     for (const member of room.members || []) controls.push(button('Block ' + member, () => confirm(member), 'secondary-button'));
-  } else controls.push(button('Block contact', () => confirm(null), 'secondary-button'));
+  } else controls.push(button('Block contact', () => confirm(null), 'secondary-button danger-button'));
   controls.push(button('Close', closeModal, 'secondary-button'));
-  show('Chat options', controls);
+  show('Contact information', controls);
 });
 
 $('blockedContacts').addEventListener('click', async () => {

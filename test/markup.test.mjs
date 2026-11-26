@@ -49,3 +49,5 @@ test('chat headers only expose actionable direct-chat encryption controls',()=>{
 test('privacy policy is linked in app settings',()=>{assert.match(html,/id="privacyPolicy"/);assert.ok(app.includes("new URL('/privacy',apiOrigin)"));});
 
 test('Play build disables checkout and direct updater and exposes compliance actions',()=>{assert.match(html,/id="deleteAccount"/);assert.match(html,/id="adminReports"/);assert.match(html,/id="termsPolicy"/);assert.ok(app.includes("window.QZU_DISTRIBUTION==='google-play'"));assert.ok(app.includes("if (!native || playBuild) return null"));assert.ok(app.includes("api('report'"));assert.ok(app.includes("api('terms/accept'"));});
+
+test('bottom navigation and profile controls exist',()=>{assert.match(html,/id="bottomNav"/);assert.match(html,/id="navUnread"/);assert.match(html,/id="profileAvatar"/);assert.ok(app.includes('attachMessageGesture'));assert.ok(!app.includes("button('Report',()=>showReport(room,{messageId:message.id}),'reply-action'"));});
