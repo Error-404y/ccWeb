@@ -152,22 +152,33 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func testLocalNotification(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { self.bridge?.notificationRouter.localNotificationHandler = self.localNotificationHandler }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
-            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { call.reject("Notifications are disabled.");return }
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { call.reject("Enable notification permissions in iPhone Settings first.");return }
             let content = UNMutableNotificationContent();content.title = "qzu.";content.body = "Notification test";content.sound = .default
-            let request = UNNotificationRequest(identifier:"qzu-test",content:content,trigger:UNTimeIntervalNotificationTrigger(timeInterval:3,repeats:false))
-            center.add(request) { error in if let error = error { call.reject(error.localizedDescription) } else { call.resolve() } }
+            let identifier = "qzu-test-" + UUID().uuidString
+            let request = UNNotificationRequest(identifier:identifier,content:content,trigger:UNTimeIntervalNotificationTrigger(timeInterval:5,repeats:false))
+            center.add(request) { error in
+                if let error = error { call.reject(error.localizedDescription);return }
+                center.getPendingNotificationRequests { pending in
+                    let scheduled = pending.contains { $0.identifier == identifier }
+                    if !scheduled { call.reject("iOS did not confirm the pending notification.");return }
+                    call.resolve(["scheduled":true,"seconds":5,"alerts":settings.alertSetting == .enabled,"sounds":settings.soundSetting == .enabled,"badges":settings.badgeSetting == .enabled])
+                }
+            }
         }
     }
 
     @objc func haptic(_ call: CAPPluginCall) {
         DispatchQueue.main.async { UIImpactFeedbackGenerator(style:.light).impactOccurred();call.resolve() }
     }
+    private let localNotificationHandler = QzuLocalNotificationHandler()
     private var privacyCover: UIView?
 
     public override func load() {
         super.load()
+        bridge?.notificationRouter.localNotificationHandler = localNotificationHandler
         if let scrollView = bridge?.webView?.scrollView {
             scrollView.bounces = false
             scrollView.alwaysBounceVertical = false
@@ -214,6 +225,13 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
         privacyCover?.removeFromSuperview()
         privacyCover = nil
     }
+}
+
+private final class QzuLocalNotificationHandler: NSObject, NotificationHandlerProtocol {
+    func willPresent(notification: UNNotification) -> UNNotificationPresentationOptions {
+        return [.banner, .list, .sound, .badge]
+    }
+    func didReceive(response: UNNotificationResponse) {}
 }
 
 class QzuViewController: CAPBridgeViewController {

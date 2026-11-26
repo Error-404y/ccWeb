@@ -55,3 +55,5 @@ test('bottom navigation and profile controls exist',()=>{assert.match(html,/id="
 test('media shortcuts and text-free launch screen are wired',()=>{assert.match(html,/id="cameraShortcut"/);assert.match(html,/id="voiceShortcut"/);assert.ok(app.includes("$('cameraShortcut').addEventListener"));assert.ok(app.includes("$('voiceShortcut').addEventListener"));assert.doesNotMatch(html,/SYSTEM BOOT|Approved design direction|COMMUNICATION \/ REDEFINED/);});
 
 test('startup defers authentication and background lock is optional',()=>{assert.match(html,/id="backgroundPin"/);assert.ok(app.includes('if (bootPending || authBusy'));assert.ok(app.includes("event.animationName==='bootExit'"));assert.ok(app.includes("api('login/background-lock'"));assert.ok(app.includes("room.encryption.offline||room.encryption.peerConfirmed"));});
+
+test('iOS local notification test reports native scheduling status and timeout',()=>{assert.ok(app.includes('result?.scheduled'));assert.ok(app.includes('Native notification test timed out'));assert.ok(app.includes('Local test scheduled for 5 seconds'));});
