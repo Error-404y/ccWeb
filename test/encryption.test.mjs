@@ -97,3 +97,29 @@ test('queued encrypted text retries are idempotent, scoped and never resurrect d
   now+=25*60*60*1000;
   assert.throws(()=>chats.sendEncrypted('a',id,cipher,'text',null,requestId));
 });
+
+test('encrypted view-once text and photo are withheld and consumed exactly once',async()=>{
+ const chats=new Chats();chats.requireEncryptedDirect=true;
+ const id=chats.connectPair('a','b'),alice=identity(),bob=identity();
+ const a=await QzuCrypto.generate(id,alice.sign),b=await QzuCrypto.generate(id,bob.sign);
+ chats.publishRoomKey('a',id,alice.id,a.record);chats.publishRoomKey('b',id,bob.id,b.record);
+ const ac=await QzuCrypto.establish(id,a,a.record,b.record),bc=await QzuCrypto.establish(id,b,b.record,a.record);
+ chats.confirmRoomKey('a',id,ac.code);chats.confirmRoomKey('b',id,bc.code);
+ const cipher=await QzuCrypto.encrypt(ac,'only once'),photo=new Blob([Uint8Array.from([255,216,255,217])],{type:'image/jpeg'});
+ const image=await QzuCrypto.encryptMedia(ac,'image',photo);
+ for(const [kind,payload] of [['text',cipher],['image',image]]){
+  const mid=chats.sendEncrypted('a',id,payload,kind,null,null,true);
+  for(const user of ['a','b']){const m=chats.snapshot(user)[0].messages.find(x=>x.id===mid);assert.equal(m.once,true);assert.equal(m.cipher,null);assert.equal(m.text,'');assert.equal(m.encryptedMedia,false);assert.equal(JSON.stringify(m).includes(payload.data),false);}
+  assert.throws(()=>chats.openOnce('a',id,mid,false,true));
+  assert.throws(()=>chats.openOnce('outsider',id,mid,false,true));
+  assert.throws(()=>chats.openOnce('b',id,mid));
+  assert.throws(()=>chats.getEncryptedMedia('b',id,mid));
+  const opened=chats.openOnce('b',id,mid,false,true);
+  if(kind==='text')assert.equal(await QzuCrypto.decrypt(bc,opened.cipher,false),'only once');
+  else assert.deepEqual(new Uint8Array(await (await QzuCrypto.decryptMedia(bc,kind,opened.cipher,false)).arrayBuffer()),new Uint8Array(await photo.arrayBuffer()));
+  assert.throws(()=>chats.openOnce('b',id,mid,false,true));
+  const raw=chats.rooms.get(id).messages.find(m=>m.id===mid);assert.equal(raw.cipher,null);assert.equal(raw.encryptedMedia,null);
+  assert.equal(chats.snapshot('a')[0].messages.find(m=>m.id===mid).opened,true);
+  assert.throws(()=>chats.sendEncrypted('a',id,payload,kind,null,null,true));
+ }
+});

@@ -76,7 +76,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use((req, res, next) => express.json({
-  limit: ['/api/message', '/api/encryption/message','/api/report'].includes(req.path) ? '3mb' : '12kb',
+  limit: ['/api/message', '/api/encryption/message','/api/encryption/once/send','/api/report'].includes(req.path) ? '3mb' : '12kb',
   verify: (req, res, buffer) => { req.rawBody = buffer.toString('utf8'); }
 })(req, res, next));
 const cookieName = production ? '__Host-qzu': 'qzu';
@@ -277,7 +277,7 @@ app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(
 app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(compliance.accept(req.account.id,req.body?.version)));
 app.use('/api',(req,res,next)=>{
   if(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
-  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&['/message','/encryption/message','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/invite','/contacts/open','/invite'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
+  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/invite','/contacts/open','/invite'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
   if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
   if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
@@ -378,6 +378,15 @@ app.post('/api/encryption/message', guard('encrypted-send', 80, 60000), (req, re
   if(!sent?.duplicate)notifyRoom(req.account.id,req.body.id);
   res.json(typeof sent==='string'?{id:sent}:sent);
 });
+app.post('/api/encryption/once/send',guard('encrypted-send',80,60000),(req,res)=>{
+  if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
+  const id=chats.sendEncrypted(req.account.id,req.body?.id,req.body?.cipher,req.body?.kind,null,null,true);
+  notifyRoom(req.account.id,req.body.id);res.json({id});
+});
+app.post('/api/encryption/once/open',guard('open',80,60000),(req,res)=>{
+  if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
+  res.json(chats.openOnce(req.account.id,req.body?.id,req.body?.messageId,Boolean(req.account.invisible),true));
+});
 app.post('/api/encryption/reaction',guard('encrypted-reaction',80,60000),(req,res)=>{if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});res.json(chats.reactEncrypted(req.account.id,req.body?.id,req.body?.messageId,req.body?.cipher));});
 app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
@@ -387,7 +396,7 @@ function stateData(a) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, encryptedOnce:true, live: true },
     prekeyCount:prekeys.count(a.id),
     official:official.snapshot(a.id),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
