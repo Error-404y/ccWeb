@@ -57,3 +57,16 @@ test('media shortcuts and text-free launch screen are wired',()=>{assert.match(h
 test('startup defers authentication and background lock is optional',()=>{assert.match(html,/id="backgroundPin"/);assert.ok(app.includes('if (bootPending || authBusy'));assert.ok(app.includes("event.animationName==='bootExit'"));assert.ok(app.includes("api('login/background-lock'"));assert.ok(app.includes("room.encryption.offline||room.encryption.peerConfirmed"));});
 
 test('iOS local notification test reports native scheduling status and timeout',()=>{assert.ok(app.includes('result?.scheduled'));assert.ok(app.includes('Native notification test timed out'));assert.ok(app.includes('Local test scheduled for 5 seconds'));});
+
+test('motion update respects reduced motion and exposes outgoing queue and real QR lifetime',()=>{
+ const css=readFileSync(new URL('../public/style.css',import.meta.url),'utf8');
+ assert.match(html,/id="inviteProgress"/);assert.match(html,/id="connectionState"/);assert.match(html,/id="manageOutbox"/);
+ assert.match(css,/ignitionGlow/);assert.match(css,/prefers-reduced-motion:reduce/);assert.ok(app.includes("motion(row,'motion-message')"));
+ assert.ok(app.includes('outbox.set(requestId,{room:id,payload,binding:'));assert.ok(app.includes('outbox.clear()'));
+ assert.ok(app.includes("window.addEventListener('offline', () => {\n  markDisconnected();"));
+});
+test('Android notification setup prompts once by default and preserves opt-out',()=>{
+ assert.ok(app.includes('registerPrivatePush(false,shouldPromptPush())'));
+ assert.ok(app.includes("localStorage.getItem('qzu-push-opt-out')==='1'"));
+ assert.ok(app.includes("localStorage.setItem('qzu-push-permission-requested','1')"));
+});

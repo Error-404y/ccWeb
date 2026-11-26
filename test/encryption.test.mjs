@@ -70,3 +70,30 @@ test('verified direct encryption stores ciphertext only and rejects downgrade, r
   chats.unsend('a', id, message);
   assert.equal(chats.snapshot('b')[0].messages[0].cipher, null);
 });
+
+test('queued encrypted text retries are idempotent, scoped and never resurrect deleted messages', async () => {
+  let now=1000; const chats=new Chats(()=>now); chats.requireEncryptedDirect=true;
+  const id=chats.connectPair('a','b'), alice=identity(), bob=identity();
+  const a=await QzuCrypto.generate(id,alice.sign), b=await QzuCrypto.generate(id,bob.sign);
+  chats.publishRoomKey('a',id,alice.id,a.record);chats.publishRoomKey('b',id,bob.id,b.record);
+  const ac=await QzuCrypto.establish(id,a,a.record,b.record);
+  chats.confirmRoomKey('a',id,ac.code);chats.confirmRoomKey('b',id,ac.code);
+  const cipher=await QzuCrypto.encrypt(ac,'queued secret'), requestId='ed043a52-b225-4f8e-90c0-322e54c6c221';
+  const first=chats.sendEncrypted('a',id,cipher,'text',null,requestId);
+  assert.equal(first.duplicate,false);
+  assert.deepEqual(chats.sendEncrypted('a',id,cipher,'text',null,requestId),{id:first.id,duplicate:true});
+  assert.equal(chats.snapshot('a')[0].messages[0].requestId,requestId);
+  assert.equal(chats.snapshot('b')[0].messages[0].requestId,undefined);
+  assert.equal(chats.snapshot('b')[0].messages.length,1);
+  assert.equal(JSON.stringify(chats.snapshot('a')).includes('queued secret'),false);
+  const different=await QzuCrypto.encrypt(ac,'different content');
+  assert.throws(()=>chats.sendEncrypted('a',id,different,'text',null,requestId),/conflict/);
+  assert.throws(()=>chats.sendEncrypted('a',id,cipher,'text',null,'ed043a52-b225-4f8e-90c0-322e54c6c222'),/Duplicate/);
+  assert.throws(()=>chats.sendEncrypted('outsider',id,cipher,'text',null,requestId));
+  assert.throws(()=>chats.sendEncrypted('a',id,different,'text',null,'invalid'));
+  chats.unsend('a',id,first.id);
+  assert.equal(chats.sendEncrypted('a',id,cipher,'text',null,requestId).duplicate,true);
+  assert.equal(chats.snapshot('b')[0].messages[0].cipher,null);
+  now+=25*60*60*1000;
+  assert.throws(()=>chats.sendEncrypted('a',id,cipher,'text',null,requestId));
+});

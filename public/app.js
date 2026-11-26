@@ -127,11 +127,11 @@ function updateConnection(){const node=$('connectionState');const queued=[...out
 function discardRoomQueue(id){for(const [key,item] of outbox)if(item.room===id)outbox.delete(key);}
 function reconcileOutbox(){for(const [key,item] of outbox){const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()||room.messages.some(m=>m.requestId===key))outbox.delete(key);}updateConnection();}
 async function flushOutbox(){if(flushingOutbox||!online||!unlockToken||document.hidden||accessDue||termsPending||suspendedAccount||Date.now()<nextOutboxAttempt||!state.capabilities?.queuedSends)return;flushingOutbox=true;const epoch=authEpoch;
-try{for(const [key,item] of outbox){if(epoch!==authEpoch||!unlockToken||!online||document.hidden||accessDue||termsPending||suspendedAccount)break;if(item.failed||item.sending)continue;const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()){outbox.delete(key);continue;}if(!encryptionReady(room)||roomKeys.get(room.id)?.context?.code!==item.binding)continue;item.sending=true;try{await api('encryption/message',item.payload);if(epoch!==authEpoch)break;outbox.delete(key);haptic();}catch(error){if(epoch!==authEpoch)break;if(error.status>=400&&error.status<500&&![408,429].includes(error.status)){item.failed=true;item.error=errorMessage(error);}else{nextOutboxAttempt=Date.now()+3000;break;}}finally{item.sending=false;}}}finally{flushingOutbox=false;updateConnection();}}
+try{for(const [key,item] of outbox){if(epoch!==authEpoch||!unlockToken||!online||document.hidden||accessDue||termsPending||suspendedAccount)break;if(item.failed||item.sending)continue;const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()){outbox.delete(key);continue;}if(!encryptionReady(room))continue;if(roomKeys.get(room.id)?.context?.code!==item.binding){item.failed=true;item.error='Conversation key changed. Discard this message.';continue;}item.sending=true;try{await api('encryption/message',item.payload);if(epoch!==authEpoch)break;outbox.delete(key);haptic();}catch(error){if(epoch!==authEpoch)break;if(error.status>=400&&error.status<500&&![408,429].includes(error.status)){item.failed=true;item.error=errorMessage(error);}else{nextOutboxAttempt=Date.now()+3000;break;}}finally{item.sending=false;}}}finally{flushingOutbox=false;updateConnection();}}
 function markDisconnected(){online=false;liveRevision='';updateConnection();}
 
 const motionAllowed=()=>!matchMedia('(prefers-reduced-motion: reduce)').matches;
-function motion(node,cls){if(!node||!motionAllowed()||document.hidden)return;node.classList.remove(cls);void node.offsetWidth;node.classList.add(cls);}
+function motion(node,cls){if(!node||!motionAllowed()||document.hidden)return;node.classList.remove(cls);void node.offsetWidth;node.classList.add(cls);node.addEventListener('animationend',event=>{if(event.target===node)node.classList.remove(cls);},{once:true});}
 function haptic(){if(native&&!document.hidden)devicePlugin.haptic().catch(()=>{});}
 function rememberRoom(){if(typeof selected!=='string'||page!=='chat'||!unlockToken)return;const field=$('message'),view=$('messages');if(field.value)drafts.set(selected,field.value);else drafts.delete(selected);if(renderedRoom===selected&&(!mobile.matches||mobileOpen))scrollMemory.set(selected,{top:view.scrollTop,bottom:view.scrollHeight-view.scrollTop-view.clientHeight<100});}
 function restoreDraft(id){$('message').value=drafts.get(id)||'';}
@@ -1260,7 +1260,7 @@ function renderSettings() {
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
   $('backgroundPin').checked=backgroundPin;$('backgroundPin').disabled=!native||!unlockToken||backgroundPinSaving;
-  $('pushStatus').textContent=state.push?.registered?'On':native&&window.Capacitor.getPlatform()==='ios'?'In-app':pushAvailable()?'Off':'Unavailable';
+  $('pushStatus').textContent=state.push?.registered&&!pushOptedOut()?'On':native&&window.Capacitor.getPlatform()==='ios'?'In-app':pushAvailable()?(pushOptedOut()?'Off':'Permission / setup'):'Unavailable';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('adminInterface').hidden=!state.supportAgent;
@@ -1511,7 +1511,7 @@ async function refresh(live=false) {
   online = true;reconnectDelay=500;updateConnection();
   offset = data.now - Date.now();
   if(!data.unchanged&&data.termsAccepted!==true){termsPending=true;updatePages();showTermsGate(data.termsVersion||1);return;}
-  if(data.unchanged){liveRevision=data.revision;void flushOutbox();if(state.rooms.some(r=>directRoom(r)&&r.encryption&&r.encryptionStatus==='error')&&Date.now()>=nextCryptoRetry){liveRevision='';nextCryptoRetry=Date.now()+5000;}purgeExpired();maybePromptUpdate();void acknowledgeMessages();replenishPrekeys(state);return;}
+  if(data.unchanged){liveRevision=data.revision;void flushOutbox();if(state.rooms.some(r=>directRoom(r)&&r.encryption&&r.encryptionStatus==='error')&&Date.now()>=nextCryptoRetry){liveRevision='';nextCryptoRetry=Date.now()+5000;}purgeExpired();maybePromptUpdate();void acknowledgeMessages();restorePushRegistration();replenishPrekeys(state);return;}
   await prepareEncryptedRooms(data,ticket);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   scrubRemovedRooms(state.rooms,data.rooms);
@@ -1834,7 +1834,7 @@ async function sendMessage() {
 
     if (selected === id && $('message').value.trim() === text) {
       $('message').value = '';drafts.delete(id);
-      resetOnce();
+      resetOnce();haptic();
       clearReply();
       stopTyping();
     }
@@ -2843,51 +2843,59 @@ $('updateCenter').addEventListener('click', async () => {
     show('Update center', [el('strong', '', 'You are up to date'), el('p', '', 'Installed: ' + installedVersion + ' · Server release: ' + release.latest),changes, button('Close', closeModal)]);
   } catch (error) { showError(error); }
 });
-let pushPlugin=null,pushListenersReady=false;
+let pushPlugin=null,pushListenersReady=false,pushRetryAt=0,pushRegisterJob=null;
+function pushOptedOut(){try{return localStorage.getItem('qzu-push-opt-out')==='1';}catch{return false;}}
+function shouldPromptPush(){try{return localStorage.getItem('qzu-push-permission-requested')!=='1';}catch{return false;}}
+function notePushPrompt(){try{localStorage.setItem('qzu-push-permission-requested','1');}catch{}}
 function pushAvailable(){return Boolean(state.push?.available&&(!state.push.platforms||state.push.platforms.includes(window.Capacitor?.getPlatform?.())));}
 function getPushPlugin(){
   if(!native||!window.Capacitor.isPluginAvailable('PushNotifications'))return null;
   if(!pushPlugin)pushPlugin=window.Capacitor.registerPlugin('PushNotifications');
   return pushPlugin;
 }
-async function registerPrivatePush(interactive=false){
+async function registerPrivatePush(interactive=false,requestPermission=interactive){
+  if(pushRegisterJob)return pushRegisterJob;
+  const job=registerPrivatePushOnce(interactive,requestPermission);pushRegisterJob=job;
+  try{return await job;}finally{if(pushRegisterJob===job)pushRegisterJob=null;}
+}
+async function registerPrivatePushOnce(interactive,requestPermission){
   const plugin=getPushPlugin(),epoch=authEpoch;
   if(!plugin||!pushAvailable())throw Error('Push delivery is not available on this device yet.');
   if(!pushListenersReady){
     await plugin.addListener('registration',async({value})=>{
       const job=pushRegistration;
-      if(!job||job.epoch!==authEpoch||!unlockToken)return;
+      if(!job||job.epoch!==authEpoch||!unlockToken||pushOptedOut())return;
       pushRegistration=null;
       try{await api('push/register',{platform:window.Capacitor.getPlatform(),token:value});await refresh();if(job.interactive)info('Private notifications','Enabled. Message content is never included.');}
-      catch(error){if(job.interactive)showError(error);}
+      catch(error){pushEpoch=-1;pushRetryAt=Date.now()+15000;if(job.interactive)showError(error);}
     });
-    await plugin.addListener('registrationError',()=>{const job=pushRegistration;pushRegistration=null;if(job?.interactive&&job.epoch===authEpoch)info('Private notifications','Registration failed. Check device configuration.');});
+    await plugin.addListener('registrationError',()=>{const job=pushRegistration;pushRegistration=null;pushEpoch=-1;pushRetryAt=Date.now()+15000;if(job?.interactive&&job.epoch===authEpoch)info('Private notifications','Registration failed. Check device configuration.');});
     await plugin.addListener('pushNotificationReceived',()=>{if(unlockToken&&!document.hidden)refresh().catch(()=>{});});
     pushListenersReady=true;
   }
   if(window.Capacitor.getPlatform()==='android')await plugin.createChannel({id:'qzu_messages',name:'Messages',description:'New private messages',importance:5,visibility:0,vibration:true,sound:'default'}).catch(()=>{});
   let permission=await plugin.checkPermissions();
-  if(interactive&&permission.receive!=='granted')permission=await plugin.requestPermissions();
+  if(requestPermission&&permission.receive!=='granted'){notePushPrompt();permission=await plugin.requestPermissions();}
   if(permission.receive!=='granted'){if(interactive)throw Error('Notification permission is disabled.');return;}
-  if(epoch!==authEpoch||!unlockToken||document.hidden)return;
-  pushRegistration={epoch:authEpoch,interactive};pushEpoch=authEpoch;
-  try{await plugin.register();}catch(error){pushRegistration=null;throw error;}
+  if(epoch!==authEpoch||!unlockToken||document.hidden||pushOptedOut())return;
+  const pending={epoch:authEpoch,interactive};pushRegistration=pending;pushEpoch=authEpoch;
+  setTimeout(()=>{if(pushRegistration===pending){pushRegistration=null;pushEpoch=-1;pushRetryAt=Date.now()+15000;if(interactive&&epoch===authEpoch&&unlockToken)info('Private notifications','Registration timed out. Try again.');}},15000);
+  try{await plugin.register();}catch(error){pushRegistration=null;pushEpoch=-1;pushRetryAt=Date.now()+15000;throw error;}
 }
 function restorePushRegistration(){
-  let optedOut=false;try{optedOut=localStorage.getItem('qzu-push-opt-out')==='1';}catch{}
-  if(!optedOut&&native&&window.Capacitor.getPlatform()==='android'&&pushAvailable()&&pushEpoch!==authEpoch&&getPushPlugin()){
-    pushEpoch=authEpoch;registerPrivatePush(false).catch(()=>{});
+  if(!pushOptedOut()&&native&&window.Capacitor.getPlatform()==='android'&&pushAvailable()&&pushEpoch!==authEpoch&&!pushRegisterJob&&Date.now()>=pushRetryAt&&getPushPlugin()&&unlockToken&&!document.hidden){
+    pushEpoch=authEpoch;registerPrivatePush(false,shouldPromptPush()).catch(()=>{pushEpoch=-1;pushRetryAt=Date.now()+15000;});
   }
 }
 $('privateNotifications').addEventListener('click',()=>{
   if(!unlockToken)return;
   const registered=state.push?.registered;
-  const controls=[el('p','','Only generic activity alerts. No sender, chat or message details.')];
+  const controls=[el('p','','Only generic activity alerts. No sender, chat or message details.')];if(native&&window.Capacitor.getPlatform()==='android'&&!pushOptedOut())controls.push(el('p','','Message notifications are enabled by default. Allow notifications in Android settings if prompted.'));
   if(native&&window.Capacitor.getPlatform()==='ios'){
     controls.push(el('p','','Internal notifications work in the app. Remote notifications require Apple Push Notification service.'),button('Enable iOS notification permissions',async()=>{try{const count=state.rooms.reduce((n,r)=>n+unreadCount(r),0);const result=await devicePlugin.setBadge({count,requestPermission:true});info('Notifications',result.granted?'Enabled.':'Permission not granted.');}catch(error){modalError(error);}}),button('Test local notification',async event=>{const control=event.currentTarget,epoch=authEpoch;control.disabled=true;control.textContent='Scheduling test…';let timer;try{const result=await Promise.race([devicePlugin.testLocalNotification(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Native notification test timed out. Rebuild the iOS app.')),12000);})]);if(!result?.scheduled)throw Error('Native test was not confirmed. Install the latest iOS build.');if(epoch===authEpoch&&unlockToken)info('Notifications','Local test scheduled for 5 seconds. Stay here or return to the Home Screen. Alerts: '+(result.alerts?'enabled':'disabled')+' · Sounds: '+(result.sounds?'enabled':'disabled')+' · Badges: '+(result.badges?'enabled':'disabled')+'.');}catch(error){if(epoch===authEpoch)modalError(error);}finally{clearTimeout(timer);control.disabled=false;control.textContent='Test local notification';}},'secondary-button'));
   }
   if(registered)controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'),button('Turn off',async()=>{try{try{localStorage.setItem('qzu-push-opt-out','1');}catch{}pushRegistration=null;pushEpoch=authEpoch;await api('push/remove',{});try{await getPushPlugin()?.unregister?.();}catch{}closeModal();await refresh();}catch(error){modalError(error);}}));
-  else if(pushAvailable()&&getPushPlugin())controls.push(button('Enable',async()=>{try{try{localStorage.removeItem('qzu-push-opt-out');}catch{}await registerPrivatePush(true);}catch(error){modalError(error);}}));
+  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{try{localStorage.removeItem('qzu-push-opt-out');}catch{}await registerPrivatePush(true);}catch(error){modalError(error);}}));if(!pushOptedOut())controls.push(button('Turn off',async()=>{try{localStorage.setItem('qzu-push-opt-out','1');pushRegistration=null;pushEpoch=authEpoch;await api('push/remove',{});try{await getPushPlugin()?.unregister?.();}catch{}closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button'));}
   else if(!native||window.Capacitor.getPlatform()!=='ios')controls.push(el('p','','Push delivery is not configured yet.'));
   if(state.push?.diagnostic)controls.push(el('p','','Last push result: '+state.push.diagnostic.result));
   controls.push(button('Close',closeModal,'secondary-button'));show('Private notifications',controls);
