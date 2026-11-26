@@ -1121,7 +1121,7 @@ function renderMessage(room, message) {
     const label = onceLabel(message);
     const open = button(label, () => openOnceMessage(room, message), 'once-message'+(message.opened?' once-opened':''));
     open.prepend(svg(message.opened?'viewOnceOpened':'viewOnceIcon'));
-    open.disabled = message.mine || message.opened || openingOnce.has(message.id) || (room.encryption&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)));
+    open.disabled = message.mine || message.opened || (room.encryption&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)));
     open.setAttribute('aria-label',message.opened?'Opened view-once content':message.mine?'Sent view-once '+label:'Open '+label.toLowerCase()+' once');
     content.append(open);
   } else if (message.kind === 'image' || message.kind === 'audio') {
