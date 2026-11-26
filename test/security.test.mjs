@@ -78,3 +78,5 @@ test('request delivery bookkeeping and developer approval', () => {
   assert.equal(issuePin(db, id, '123457'), '123457');
   db.close();
 });
+
+test('device session idle policy is scoped and expires after twelve hours',()=>{let now=0;const s=new Unlocks(()=>now,45000),token=s.issue('a',true);now=60000;assert(s.check('a',token));assert(!s.setIdle('b',token,false));assert(s.setIdle('a',token,false));now+=45000;assert(!s.check('a',token));const t=s.issue('a',true);now+=12*60*60_000;assert(!s.check('a',t));});

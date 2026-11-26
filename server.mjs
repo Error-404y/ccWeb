@@ -219,7 +219,7 @@ app.post('/api/login/setup', guard('login-setup', 5, 60_000), (req, res) => {
   recordActivity(db, req.account.id, 'PIN created');
   if (!chats.inviteFor(req.account.id)) chats.newCode(req.account.id);
   res.json({
-    token: unlocks.issue(req.account.id),
+    token: unlocks.issue(req.account.id,Boolean(req.deviceId&&req.body?.keepUnlocked===true)),
     access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))
   });
 });
@@ -228,7 +228,7 @@ app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
   recordActivity(db, req.account.id, result === 'ok' ? 'Unlock successful' : result === 'locked' ? 'Unlock temporarily blocked' : 'Unlock rejected');
   if (result !== 'ok') return loginError(res, result);
   res.json({
-    token: unlocks.issue(req.account.id),
+    token: unlocks.issue(req.account.id,Boolean(req.deviceId&&req.body?.keepUnlocked===true)),
     access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))
   });
 });
@@ -265,6 +265,7 @@ app.use('/api',(req,res,next)=>{
   if(!unlocks.check(req.account.id,req.get('x-qzu-unlock')))return res.status(423).json({error:'Locked.'});
   next();
 });
+app.post('/api/login/background-lock',guard('background-lock',10,60000),(req,res)=>{if(!req.deviceId||typeof req.body?.keepUnlocked!=='boolean')return res.status(400).json({error:'Registered device required.'});res.json({ok:unlocks.setIdle(req.account.id,req.get('x-qzu-unlock'),req.body.keepUnlocked)});});
 app.post('/api/account/deletion-code',guard('deletion-code',5,60000),(req,res)=>res.json({code:compliance.deletionCode(req.account.id)}));
 app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(req,res)=>{
   if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});

@@ -28,7 +28,7 @@ test('extension requires other member consent and is limited to once', () => {
   assert.throws(() => c.extend('a',id,'accept',request));
   assert.throws(() => c.extend('x',id,'accept',request));
   c.extend('b',id,'accept',request);
-  assert.equal(c.snapshot('a')[0].expires,expires+CHAT_TTL);
+  assert.equal(c.snapshot('a')[0].expires,expires+30*60_000);
   assert.throws(() => c.extend('a',id,'request'));
 });
 test('activity is bounded and isolated by account', () => {
