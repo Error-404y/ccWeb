@@ -1,6 +1,6 @@
 'use strict';
 globalThis.QzuMetadata = (() => {
-  const limit=2*1024*1024;
+  const limit=2*1024*1024,inputLimit=20*1024*1024;
   const signature=[137,80,78,71,13,10,26,10];
   function stripPng(bytes) {
     if(bytes.length<8||signature.some((v,i)=>bytes[i]!==v))throw Error('Invalid image encoding.');
@@ -22,7 +22,7 @@ globalThis.QzuMetadata = (() => {
     return new Blob(parts,{type:'image/png'});
   }
   async function cleanImage(blob) {
-    if(!blob?.size||blob.size>limit||!['image/jpeg','image/png','image/webp'].includes(blob.type))throw Error('Choose a JPG, PNG or WebP under 2 MB.');
+    if(!blob?.size||blob.size>inputLimit||!['image/jpeg','image/png','image/webp'].includes(blob.type))throw Error('Choose a JPG, PNG or WebP under 20 MB.');
     const url=URL.createObjectURL(blob),image=new Image(),canvas=document.createElement('canvas');
     try {
       await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(Error('Image could not be decoded.'));image.src=url;});

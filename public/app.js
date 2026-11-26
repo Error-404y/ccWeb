@@ -997,7 +997,7 @@ function attachMessageGesture(bubble,reply,actions){
   bubble.addEventListener('pointerdown',e=>{
     if(!e.isPrimary||e.button!==0||e.target.closest('button,a,input,textarea,audio,video')||bubble.classList.contains('masked-message'))return;
     suppress=false;gesture={id:e.pointerId,x:e.clientX,y:e.clientY,swipe:false};
-    timer=setTimeout(()=>{if(!gesture||!bubble.isConnected)return;suppress=true;clear();actions();},430);
+    timer=setTimeout(()=>{if(!gesture||!bubble.isConnected)return;suppress=true;clear();if(native)devicePlugin.haptic().catch(()=>{});actions();},430);
   });
   bubble.addEventListener('pointermove',e=>{
     if(!gesture||e.pointerId!==gesture.id)return;
@@ -1008,7 +1008,7 @@ function attachMessageGesture(bubble,reply,actions){
     if(!gesture.swipe){gesture.swipe=true;bubble.classList.add('swipe-tracking');try{bubble.setPointerCapture(e.pointerId);}catch{}}
     const shift=Math.sign(dx)*Math.min(72,Math.abs(dx));bubble.style.setProperty('--reply-shift',shift+'px');bubble.classList.toggle('swipe-ready',Math.abs(shift)>=48);
   });
-  bubble.addEventListener('pointerup',e=>{if(!gesture||e.pointerId!==gesture.id)return;const swipe=gesture.swipe,accepted=swipe&&Math.abs(e.clientX-gesture.x)>=48;clear();if(swipe)suppress=true;if(accepted)reply();});
+  bubble.addEventListener('pointerup',e=>{if(!gesture||e.pointerId!==gesture.id)return;const swipe=gesture.swipe,accepted=swipe&&Math.abs(e.clientX-gesture.x)>=48;clear();if(swipe)suppress=true;if(accepted){if(native)devicePlugin.haptic().catch(()=>{});reply();}});
   for(const name of ['pointercancel','lostpointercapture'])bubble.addEventListener(name,clear);
   bubble.addEventListener('pointerleave',()=>{if(!gesture?.swipe)clear();});
   bubble.addEventListener('click',e=>{if(suppress){suppress=false;e.preventDefault();e.stopPropagation();}},true);
@@ -1048,7 +1048,7 @@ function renderMessage(room, message) {
     open.disabled = message.mine || message.opened;
     content.append(open);
   } else if (message.kind === 'image' || message.kind === 'audio') {
-    const open = button(message.kind === 'image' ? 'View photo' : 'Play voice message', () => openMedia(room, message), 'media-message');
+    const open = button('', () => openMedia(room, message), 'media-message media-tile');open.setAttribute('aria-label',message.kind==='image'?'View photo':'Play voice message');open.append(svg(message.kind==='image'?'camera':'mic'),el('span','',message.kind==='image'?'Photo':'Voice message'));
     open.disabled = Boolean(room.encryption && !encryptionReady(room));
     content.append(open);
   } else {
@@ -1447,7 +1447,7 @@ async function refresh(live=false) {
   await prepareEncryptedRooms(data);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   scrubRemovedRooms(state.rooms,data.rooms);
-  const previouslyKnown=new Set(state.rooms.flatMap(r=>r.messages.map(m=>m.id)));const newActivity=Boolean(liveRevision)&&data.rooms.some(r=>!r.contact?.muted&&(r.id!==selected||!canReadCurrent())&&r.messages.some(m=>m.unread&&!previouslyKnown.has(m.id)));state = data;
+  const previouslyKnown=new Set(state.rooms.flatMap(r=>r.messages.map(m=>m.id)));const newActivity=Boolean(state.now)&&data.rooms.some(r=>!r.contact?.muted&&(r.id!==selected||!canReadCurrent())&&r.messages.some(m=>m.unread&&!previouslyKnown.has(m.id)));state = data;
   if(newActivity&&!document.hidden)showActivityBanner();
   liveRevision=data.rooms.some(r=>directRoom(r)&&r.encryption&&['waiting','error'].includes(r.encryptionStatus))?'':data.revision||'';
   if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && (!mediaMessage || room.messages.some(message => message.id === mediaMessage && !message.deleted)))) closeModal();
@@ -1706,6 +1706,8 @@ function updateSendButton() {
   const room = state.rooms.find(room => room.id === selected);
   const needsSetup = encryptionRequired(room) && !encryptionReady(room);
   const send = $('send');
+  const mediaReady=Boolean(room&&!room.admin&&!room.readOnly&&!needsSetup&&unlockToken&&!sendingMessage&&room.expires>serverNow());
+  const hasText=Boolean($('message').value.trim());$('cameraShortcut').hidden=!mediaReady||hasText;$('voiceShortcut').hidden=!mediaReady||hasText;send.hidden=mediaReady&&!hasText;
   send.disabled = !unlockToken || sendingMessage || !room || room.readOnly ||
     room.expires <= serverNow() || (!$('message').value.trim() && !needsSetup);
   send.setAttribute('aria-label', needsSetup ? 'Set up or verify encryption' : 'Send');
@@ -2168,7 +2170,7 @@ async function loop() {
   setTimeout(loop, unlockToken&&state.capabilities?.live?500:1500);
 }
 updatePages();
-const boot=$('bootSplash');if(native&&!matchMedia('(prefers-reduced-motion: reduce)').matches){boot.classList.add('boot-running');setTimeout(()=>boot.remove(),1600);}else boot.remove();
+const boot=$('bootSplash');if(native&&!matchMedia('(prefers-reduced-motion: reduce)').matches){document.documentElement.classList.add('booting');boot.classList.add('boot-running');setTimeout(()=>{boot.remove();document.documentElement.classList.remove('booting');},1450);}else boot.remove();
 getSession();
 loop();
 
@@ -2462,16 +2464,19 @@ async function openOnceMessage(room, message) {
   mediaMessage = message.id;
 }
 
+function currentMediaRoom(){const room=state.rooms.find(r=>r.id===selected);return room&&!room.admin&&!room.readOnly&&(!encryptionRequired(room)||encryptionReady(room))?room:null;}
+$('cameraShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){resetOnce();choosePhoto(room,true);}});
+$('voiceShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){resetOnce();recordVoice(room);}});
 $('attachmentMenu').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
   if (!room || room.admin) return;
   if (room.encryption || (native && directRoom(room))) {
     if (!encryptionReady(room)) { showEncryption(room); return; }
     resetOnce();
-    show('Encrypted attachments', [button('Photo', () => choosePhoto(room), 'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button'), button('Close', closeModal)]);
+    show('Encrypted attachments', [button('Gallery', () => choosePhoto(room), 'secondary-button'), button('Camera',()=>choosePhoto(room,true),'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button'), button('Close', closeModal)]);
     return;
   }
-  const items = burnSeconds ? [] : [button('Photo', () => choosePhoto(room), 'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
+  const items = burnSeconds ? [] : [button('Gallery', () => choosePhoto(room), 'secondary-button'), button('Camera',()=>choosePhoto(room,true),'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
   if (!room.group && !burnSeconds) items.unshift(button(viewOnce ? 'Disable view once' : 'Enable view once', () => {
     viewOnce = !viewOnce;
     burnSeconds = 0;
@@ -2501,9 +2506,9 @@ function blobData(blob) {
   });
 }
 
-async function sendAttachment(room, kind, blob, once) {
+async function sendAttachment(room, kind, blob, once, cleaned=false) {
   const startEpoch=authEpoch;
-  if(kind==='image')blob=await QzuMetadata.cleanImage(blob);
+  if(kind==='image'&&!cleaned)blob=await QzuMetadata.cleanImage(blob);
   if(startEpoch!==authEpoch||!unlockToken||selected!==room.id||document.hidden||room.expires<=serverNow())throw Error('Chat unavailable.');
   if (blob.size > 2 * 1024 * 1024 || !blob.size) throw new Error('Attachment must be under 2 MB.');
   const epoch = authEpoch;
@@ -2522,21 +2527,16 @@ async function sendAttachment(room, kind, blob, once) {
   await refresh();
 }
 
-function choosePhoto(room) {
-  const input = el('input');
-  input.type = 'file';
-  input.accept = 'image/jpeg,image/png,image/webp';
-  const send = button(viewOnce ? 'Send once' : 'Send photo', async () => {
-    const file = input.files[0];
-    if (!file) return;
-    send.disabled = true;
-    try {
-      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 2 * 1024 * 1024) throw new Error('Choose a JPG, PNG or WebP image under 2 MB.');
-      await sendAttachment(room, 'image', file, viewOnce);
-    } catch (error) { send.disabled = false; modalError(error); }
-  });
-  show('Send photo', [input, el('p', '', 'JPG, PNG or WebP · Up to 2 MB · Metadata removed'), send, button('Cancel', closeModal, 'secondary-button')]);
-  mediaRoom = room.id;
+function choosePhoto(room,camera=false){
+  const input=el('input','photo-file');input.type='file';input.accept='image/jpeg,image/png,image/webp';if(camera)input.setAttribute('capture','environment');
+  const preview=el('img','temporary-media photo-preview');preview.alt='Photo preview';preview.hidden=true;
+  const status=el('p','media-status','Choose a photo');
+  const epoch=authEpoch;let prepared=null,selection=0;
+  const send=button(viewOnce?'Send once':'Send photo',async()=>{if(!prepared)return;send.disabled=true;status.textContent='Sending…';try{await sendAttachment(room,'image',prepared,viewOnce,true);}catch(error){send.disabled=false;status.textContent='';modalError(error);}});send.disabled=true;
+  input.addEventListener('change',async()=>{const n=++selection,file=input.files?.[0];prepared=null;send.disabled=true;preview.hidden=true;if(mediaUrl){URL.revokeObjectURL(mediaUrl);mediaUrl=null;}if(!file)return;status.textContent='Preparing photo…';try{const blob=await QzuMetadata.cleanImage(file);if(epoch!==authEpoch||n!==selection||!body.contains(input)||document.hidden)return;prepared=blob;mediaUrl=URL.createObjectURL(blob);preview.src=mediaUrl;preview.hidden=false;status.textContent=Math.round(blob.size/1024)+' KB';send.disabled=false;}catch(error){status.textContent='';dialogError(error);}});
+  show(camera?'Camera':'Gallery',[input,preview,status,send,button('Cancel',closeModal,'secondary-button')]);mediaRoom=room.id;
+  // File chooser must be opened synchronously from the user's tap.
+  input.click();
 }
 
 async function recordVoice(room) {
@@ -2557,7 +2557,7 @@ async function recordVoice(room) {
       microphone.getTracks().forEach(track => track.stop());
       return;
     }
-    const mime = ['audio/webm', 'audio/mp4', 'audio/ogg'].find(type => MediaRecorder.isTypeSupported(type));
+    const mime = ['audio/mp4', 'audio/webm', 'audio/ogg'].find(type => MediaRecorder.isTypeSupported(type));
     if (!mime) {
       microphone.getTracks().forEach(track => track.stop());
       throw new Error('No supported recording format.');
@@ -2565,17 +2565,17 @@ async function recordVoice(room) {
     const recorder = new MediaRecorder(microphone, { mimeType: mime, audioBitsPerSecond: 64000 });
     const chunks = [];
     let cancelled = false;
-    let timer;
+    let timer,ticker;
     const cleanup = () => {
       cancelled = true;
-      clearTimeout(timer);
+      clearTimeout(timer);clearInterval(ticker);
       if (recorder.state !== 'inactive') recorder.stop();
       microphone.getTracks().forEach(track => track.stop());
     };
     recordingCleanup = cleanup;
     recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
     recorder.onstop = () => {
-      clearTimeout(timer);
+      clearTimeout(timer);clearInterval(ticker);
       microphone.getTracks().forEach(track => track.stop());
       if (recordingCleanup === cleanup) recordingCleanup = null;
       if (cancelled || epoch !== authEpoch || !body.contains(label)) return;
@@ -2595,7 +2595,7 @@ async function recordVoice(room) {
     stop.disabled = false;
     stop.addEventListener('click', () => { if (recorder.state !== 'inactive') recorder.stop(); });
     recorder.start();
-    label.textContent = 'Recording… Maximum 60 seconds.';
+    const started=Date.now();label.classList.add('recording-indicator');label.textContent='Recording · 0:00';ticker=setInterval(()=>{const seconds=Math.min(60,Math.floor((Date.now()-started)/1000));label.textContent='Recording · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');},200);
     timer = setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 60_000);
   } catch (error) {
     microphone?.getTracks().forEach(track => track.stop());

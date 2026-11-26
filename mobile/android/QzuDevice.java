@@ -76,6 +76,9 @@ public class QzuDevice extends Plugin {
         }catch(Exception e){call.reject("Secure room storage unavailable.");}
     }
 
+    @PluginMethod public void haptic(PluginCall call) {
+        getActivity().runOnUiThread(()->{getActivity().getWindow().getDecorView().performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK);call.resolve();});
+    }
     private static void coordinate(BigInteger value, byte[] target, int offset) {
         byte[] source = value.toByteArray();
         int length = Math.min(32, source.length);

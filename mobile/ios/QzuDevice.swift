@@ -14,7 +14,8 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "openUpdate", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "roomVault", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setBadge", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "testLocalNotification", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "testLocalNotification", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise)
     ]
     private let tag = Data("cc.qzu.app.device.v1".utf8)
     private let queue = DispatchQueue(label: "cc.qzu.device")
@@ -149,6 +150,9 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func haptic(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { UIImpactFeedbackGenerator(style:.light).impactOccurred();call.resolve() }
+    }
     private var privacyCover: UIView?
 
     public override func load() {
