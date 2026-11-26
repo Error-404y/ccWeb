@@ -55,3 +55,7 @@ Optional private push delivery: run npm install on the mobile build machine, ena
 
 ## 0.10.1
 Admin Settings has a separate admin-only section with support request and feedback counts. Feedback is stored without sender identifiers and is accessible only to unlocked admin accounts. Discord forwarding remains optional and best-effort. The private backup excludes feedback content. Previously forwarded Discord feedback is not imported or deleted by the app. The obsolete blanket encryption sentence in Info is removed; chat-specific encryption indicators remain.
+
+## Google Play App Bundle
+
+Run `npm run release:play` on the Mac to create a signed Android App Bundle in release-output. This uses the existing production keystore, prompts for passwords locally, requires the matching Firebase Android configuration and runs tests before building. For the first Play release, review Play App Signing options and preserve the existing production app signing certificate if existing direct-download installations must remain update-compatible. A Play upload key and app signing key may differ. Never upload a raw keystore to GitHub or share its password. Existing debug installations cannot update in place to a differently signed build. The generated bundle is intended for a Play Console draft/internal test; the current external paid access and APK update workflows need a Play policy review and adaptation before distributing a Play build. Do not reuse a version code already uploaded to Play. This command does not publish or deploy anything.
