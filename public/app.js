@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.12.1';
+const installedVersion = window.QZU_APP_VERSION || '0.13.0';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -213,14 +213,14 @@ modal.addEventListener('close', () => {
     stopCamera();
     body.replaceChildren();
     modalLocked = false;
-    modal.classList.remove('update-sheet');
+    modal.classList.remove('update-sheet','attachment-sheet');$('attachmentMenu').classList.remove('sheet-open');
   }
 });
 
 function show(title, content, locked = false) {
   stopCheckout();
   delete modal.dataset.checkout;
-  modal.classList.remove('update-sheet');
+  modal.classList.remove('update-sheet','attachment-sheet');$('attachmentMenu').classList.remove('sheet-open');
   clearMedia();
   stopCamera();
   modalLocked = locked;
@@ -462,7 +462,7 @@ function pinDialog(title, fields, submitLabel, onSubmit, {
       await onSubmit(values);
     } catch (err) {
       if (epoch === authEpoch && body.contains(form)) {
-        dialogError(err);
+        dialogError(err);motion(form,'pin-error-motion');haptic();
         submit.disabled = false;
         if (native) items.forEach(item => {
           item.input.disabled = false;
@@ -598,12 +598,13 @@ function showLockedEmergency() {
 }
 
 async function getSession() {
-  if (bootPending || authBusy || document.hidden || unlockToken || isPublicCheckout()) return;
+  if (authBusy || document.hidden || unlockToken || isPublicCheckout()) return;
   authBusy = true;
   const epoch = authEpoch;
   try {
     const result = await api('session', {});
-    if (epoch !== authEpoch) return;
+    await finishBoot();
+    if (epoch !== authEpoch || document.hidden) return;
     if (result.accessRequired) {
       sessionReady = false;
       const saved = playBuild?'':savedInvoice(false);
@@ -616,6 +617,7 @@ async function getSession() {
     showLogin();
   }
   catch (e) {
+    await finishBoot();
     if (epoch === authEpoch && !document.hidden) show('qzu.', [el('p', '', errorMessage(e)), button('Retry', () => {
       getSession();
     })], true);
@@ -690,7 +692,7 @@ function lock(reopen = true) {
   renderedMessages = [];
   $('contacts').replaceChildren();
   $('supportRequestsList').replaceChildren();
-  $('adminInterface').hidden=true;$('userInterfaceHeading').hidden=true;clearAdminFeedback();
+  $('adminInterface').hidden=true;$('adminLogout').hidden=true;$('userInterfaceHeading').hidden=true;clearAdminFeedback();
   $('messages').replaceChildren();
   $('message').value = '';
   $('enterCode').value = '';
@@ -1275,7 +1277,7 @@ function renderSettings() {
   $('pushStatus').textContent=state.push?.registered&&!pushOptedOut()?'On':native&&window.Capacitor.getPlatform()==='ios'?'In-app':pushAvailable()?(pushOptedOut()?'Off':'Permission / setup'):'Unavailable';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
-  $('adminInterface').hidden=!state.supportAgent;
+  $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
   $('userInterfaceHeading').hidden=!state.supportAgent;
   $('adminInboxCount').textContent=state.supportAgent?String((state.supportRequests||[]).length):'';
   $('adminFeedbackCount').textContent=state.supportAgent?String(state.feedbackCount||0):'';
@@ -1577,6 +1579,19 @@ function showTermsGate(version){
   show('Terms of Service',[el('p','','Harassment, abuse, exploitation, threats and unlawful content are prohibited. Reports are reviewed and violations may result in suspension.'),...legalButtons(),label,accept,button('Decline and lock',()=>lock(),'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button')],true);
 }
 function showRestrictedAccount(title,message){show(title,[el('p','',message),button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button'),button('Lock',()=>lock(),'secondary-button'),...legalButtons()],true);}
+$('adminLogout').addEventListener('click',()=>{
+  if(!state.supportAgent||!unlockToken)return;
+  const confirm=button('Log out',async()=>{
+    confirm.disabled=true;
+    try{
+      await api('admin/logout',{confirmed:true});
+      if(native)await clearPrivateKeys().catch(()=>{});
+      sessionReady=false;needsSetup=false;forgetInvoice(false);forgetInvoice(true);checkoutReturn=null;
+      lock(false);history.replaceState(null,'','/chat');navigate('/chat',false);await getSession();
+    }catch(error){dialogError(error);confirm.disabled=false;}
+  });
+  show('Admin logout?',[el('p','','This ends your admin session and releases its access key.'),confirm,button('Cancel',closeModal,'secondary-button')]);
+});
 function showDeleteAccount(){
   const confirm=button('Permanently delete account',async()=>{
     confirm.disabled=true;
@@ -2221,7 +2236,7 @@ if (page === 'connect' && location.hash) {
   history.replaceState(null, '', location.pathname);
 }
 function backgroundApp(){if(isPublicCheckout())return;if(!native||backgroundPin){if(unlockToken||pinPrompt)lock();return;}if(recordingCleanup||mediaRoom||stream)closeModal();stopCamera();stopTyping();}
-function resumeApp(){if(bootPending)return;if(isPublicCheckout())resumeCheckout?.();else if(!unlockToken)getSession();else if(!document.hidden)refresh().catch(()=>{});}
+function resumeApp(){if(isPublicCheckout())resumeCheckout?.();else if(!unlockToken)getSession();else if(!document.hidden)refresh().catch(()=>{});}
 if (native) {
   if(window.Capacitor.getPlatform()==='ios')devicePlugin.addListener('screenCaptured',()=>{if(unlockToken)lock();}).catch(()=>{});
   console.info('[qzu] Mobile startup; device plugin available:', window.Capacitor.isPluginAvailable('QzuDevice'), '; server:', apiOrigin);
@@ -2264,8 +2279,9 @@ async function loop() {
 }
 updatePages();
 const boot=$('bootSplash');
-function finishBoot(){if(!bootPending)return;bootPending=false;boot.remove();document.documentElement.classList.remove('booting');getSession();}
-if(bootPending){document.documentElement.classList.add('booting');boot.addEventListener('animationend',event=>{if(event.target===boot&&event.animationName==='bootExit')finishBoot();});requestAnimationFrame(()=>requestAnimationFrame(()=>{boot.classList.add('boot-running');setTimeout(finishBoot,2300);}));}else{boot.remove();getSession();}
+const bootMinimum=bootPending?new Promise(resolve=>{document.documentElement.classList.add('booting');boot.classList.add('boot-running');setTimeout(resolve,5000);}):Promise.resolve();
+async function finishBoot(){if(!bootPending)return;await bootMinimum;if(!bootPending)return;bootPending=false;boot.classList.add('boot-ready');await new Promise(resolve=>setTimeout(resolve,240));boot.remove();document.documentElement.classList.remove('booting');}
+if(!bootPending)boot.remove();getSession();
 loop();
 
 
@@ -2581,7 +2597,44 @@ async function openOnceMessage(room, message) {
 
 function currentMediaRoom(){const room=state.rooms.find(r=>r.id===selected);return room&&!room.admin&&!room.readOnly&&(!encryptionRequired(room)||encryptionReady(room))?room:null;}
 $('cameraShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){choosePhoto(room,true);}});
-$('voiceShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){recordVoice(room);}});
+const voiceControl=$('voiceShortcut');
+let voiceGesture=null;
+voiceControl.addEventListener('pointerdown',event=>{
+  if(event.button!==0||voiceGesture)return;
+  const room=currentMediaRoom();if(!room||!unlockToken)return;
+  event.preventDefault();voiceControl.setPointerCapture(event.pointerId);
+  const gesture={id:event.pointerId,x:event.clientX,y:event.clientY,action:'hold',session:null};
+  voiceGesture=gesture;haptic();
+  recordVoice(room,gesture).catch(error=>{if(voiceGesture===gesture)voiceGesture=null;showError(error);});
+});
+voiceControl.addEventListener('pointermove',event=>{
+  const g=voiceGesture;if(!g||event.pointerId!==g.id||g.action!=='hold')return;
+  if(g.x-event.clientX>=75){g.action='cancel';g.session?.cancel();haptic();}
+  else if(g.y-event.clientY>=65){g.action='locked';g.session?.lock();haptic();}
+});
+function endVoiceGesture(event, cancelled=false){
+  const g=voiceGesture;if(!g||g.id!==event.pointerId)return;
+  voiceGesture=null;
+  if(cancelled&&g.action!=='locked'){g.action='cancel';g.session?.cancel();return;}
+  if(g.action==='hold'){g.action='send';g.session?.send();}
+}
+voiceControl.addEventListener('pointerup',event=>endVoiceGesture(event));
+voiceControl.addEventListener('pointercancel',event=>endVoiceGesture(event,true));
+voiceControl.addEventListener('lostpointercapture',event=>endVoiceGesture(event,true));
+voiceControl.addEventListener('click',event=>{if(event.detail===0){const room=currentMediaRoom();if(room)recordVoice(room);}});
+function showAttachmentGrid(title,options){
+  const grid=el('div','attachment-grid'),handle=el('div','attachment-handle');
+  for(const control of options){
+    const label=control.textContent;
+    const icon=label.includes('Gallery')?'camera':label.includes('Camera')?'camera':label.includes('Voice')?'mic':label.toLowerCase().includes('once')?'eye':label.includes('reading')||label.includes('Timed')?'clock':'chat';
+    control.className='attachment-tile';control.prepend(svg(icon));grid.append(control);
+  }
+  show(title,[handle,grid,button('Close',closeModal,'secondary-button')]);
+  modal.classList.add('attachment-sheet');$('attachmentMenu').classList.add('sheet-open');
+  let y=null;handle.addEventListener('pointerdown',e=>{y=e.clientY;handle.setPointerCapture(e.pointerId);});
+  handle.addEventListener('pointerup',e=>{if(y!==null&&e.clientY-y>25)closeModal();y=null;});
+  haptic();
+}
 $('attachmentMenu').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
   if (!room || room.admin) return;
@@ -2589,7 +2642,7 @@ $('attachmentMenu').addEventListener('click', () => {
     if (!encryptionReady(room)) { showEncryption(room); return; }
     const options=[button('Gallery', () => choosePhoto(room), 'secondary-button'),button('Camera',()=>choosePhoto(room,true),'secondary-button'),button('Voice message',()=>recordVoice(room),'secondary-button')];
     if(state.capabilities?.encryptedOnce)options.unshift(button(viewOnce?'Disable view once':'Enable view once',()=>{setOnceMode(!viewOnce);rememberRoom();closeModal();},'secondary-button'));
-    show('Encrypted attachments',[...options,button('Close',closeModal)]);
+    showAttachmentGrid('Encrypted attachments',options);
     return;
   }
   const items = burnSeconds ? [] : [button('Gallery', () => choosePhoto(room), 'secondary-button'), button('Camera',()=>choosePhoto(room,true),'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
@@ -2607,7 +2660,7 @@ $('attachmentMenu').addEventListener('click', () => {
       closeModal();
     }, 'secondary-button'))]);
   }, 'secondary-button'));
-  show('Message options', [...items, button('Close', closeModal)]);
+  showAttachmentGrid('Message options',items);
 });
 
 function blobData(blob) {
@@ -2653,69 +2706,66 @@ function choosePhoto(room,camera=false){
   input.click();
 }
 
-async function recordVoice(room) {
+async function recordVoice(room,gesture=null) {
   const once=viewOnce;
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     info('Voice message', 'Recording is unavailable in this browser.');
     return;
   }
-  const label = el('p', '', 'Allow microphone access to record.');
-  const stop = button('Stop recording', () => {}, 'secondary-button');
-  stop.disabled = true;
-  show('Voice message', [label, stop, button('Cancel', closeModal, 'secondary-button')]);
-  mediaRoom = room.id;
-  const epoch = authEpoch;
-  let microphone;
-  try {
-    microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
-    if (epoch !== authEpoch || !body.contains(label) || document.hidden) {
-      microphone.getTracks().forEach(track => track.stop());
-      return;
-    }
-    const mime = ['audio/mp4', 'audio/webm', 'audio/ogg'].find(type => MediaRecorder.isTypeSupported(type));
-    if (!mime) {
-      microphone.getTracks().forEach(track => track.stop());
-      throw new Error('No supported recording format.');
-    }
-    const recorder = new MediaRecorder(microphone, { mimeType: mime, audioBitsPerSecond: 64000 });
-    const chunks = [];
-    let cancelled = false;
-    let timer,ticker;
-    const cleanup = () => {
-      cancelled = true;
-      clearTimeout(timer);clearInterval(ticker);
-      if (recorder.state !== 'inactive') recorder.stop();
-      microphone.getTracks().forEach(track => track.stop());
+  const epoch=authEpoch, label=el('p','voice-gesture-status','Allow microphone access to record.');
+  const panel=el('div','voice-gesture-panel'), controls=el('div','voice-gesture-controls');
+  const wave=el('canvas','voice-wave');wave.width=320;wave.height=38;
+  panel.append(label,wave,controls);
+  let microphone,recorder,context,source,analyser,ticker,timer,chunks=[],cancelled=false,instant=false,locked=!gesture,pausedAt=0,pausedTotal=0,started=0,finished=false;
+  const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&selected===room.id&&!document.hidden&&room.expires>serverNow()&&body.contains(panel);
+  const stopTracks=()=>{microphone?.getTracks().forEach(track=>track.stop());if(context){context.close().catch(()=>{});context=null;}clearInterval(ticker);clearTimeout(timer);};
+  const cleanup=()=>{cancelled=true;stopTracks();if(recorder&&recorder.state!=='inactive')recorder.stop();chunks=[];if(voiceGesture===gesture)voiceGesture=null;};
+  const cancel=()=>{cleanup();closeModal();};
+  const stop=(send=false)=>{if(finished||cancelled)return;instant=send;if(recorder&&recorder.state!=='inactive')recorder.stop();};
+  const pause=button('Pause',()=>{if(recorder?.state==='recording'){recorder.pause();pausedAt=Date.now();pause.textContent='Resume';}else if(recorder?.state==='paused'){recorder.resume();pausedTotal+=Date.now()-pausedAt;pausedAt=0;pause.textContent='Pause';}},'secondary-button');
+  const preview=button('Preview',()=>stop(false),'secondary-button');
+  const sendNow=button('Send',()=>stop(true));
+  const discard=button('Discard',cancel,'secondary-button');
+  const lock=()=>{locked=true;controls.replaceChildren(discard,pause,preview,sendNow);label.textContent='Recording hands-free';};
+  if(gesture)gesture.session={cancel,lock,send:()=>stop(true)};
+  // Pointer capture remains on the composer while permission is pending.
+  // Do not open the modal until the capture ends or the recording is locked.
+  show('Voice message',[panel]);mediaRoom=room.id;
+  if(gesture){voiceControl.setPointerCapture?.(gesture.id);controls.replaceChildren(discard);label.textContent='Hold · Slide left to cancel · Slide up to lock';}else lock();
+  recordingCleanup=cleanup;
+  try{
+    microphone=await navigator.mediaDevices.getUserMedia({audio:true});
+    if(cancelled||!active()||gesture?.action==='cancel'){cleanup();return;}
+    if(gesture?.action==='send'){cleanup();closeModal();return;}
+    const mime=['audio/mp4','audio/webm','audio/ogg'].find(type=>MediaRecorder.isTypeSupported(type));
+    if(!mime)throw Error('No supported recording format.');
+    recorder=new MediaRecorder(microphone,{mimeType:mime,audioBitsPerSecond:64000});
+    recorder.ondataavailable=event=>{if(!cancelled&&event.data.size)chunks.push(event.data);};
+    recorder.onerror=()=>{cleanup();if(active())modalError(Error('Recording interrupted.'));};
+    for(const track of microphone.getTracks())track.addEventListener('ended',()=>{if(!finished&&!cancelled)cancel();},{once:true});
+    recorder.onstop=async()=>{
+      if(finished)return;finished=true;stopTracks();
+      if(recordingCleanup===cleanup)recordingCleanup=null;
+      if(cancelled||!active()){chunks=[];return;}
+      const blob=new Blob(chunks,{type:mime});chunks=[];
+      if(!blob.size){closeModal();return;}
+      if(instant){try{await sendAttachment(room,'audio',blob,once);}catch(error){if(active())modalError(error);}return;}
+      const player=el('audio','temporary-media');player.controls=true;
+      const send=button(once?'Send once':'Send recording',async()=>{send.disabled=true;try{await sendAttachment(room,'audio',blob,once);}catch(error){send.disabled=false;modalError(error);}});
+      show('Voice message',[player,send,button('Discard',closeModal,'secondary-button')]);mediaRoom=room.id;mediaUrl=URL.createObjectURL(blob);player.src=mediaUrl;
     };
-    recordingCleanup = cleanup;
-    recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
-    recorder.onstop = () => {
-      clearTimeout(timer);clearInterval(ticker);
-      microphone.getTracks().forEach(track => track.stop());
-      if (recordingCleanup === cleanup) recordingCleanup = null;
-      if (cancelled || epoch !== authEpoch || !body.contains(label)) return;
-      const blob = new Blob(chunks, { type: mime });
-      const send = button(once ? 'Send once' : 'Send recording', async () => {
-        send.disabled = true;
-        try { await sendAttachment(room, 'audio', blob, once); }
-        catch (error) { send.disabled = false; modalError(error); }
-      });
-      const player = el('audio', 'temporary-media');
-      player.controls = true;
-      show('Voice message', [player, send, button('Discard', closeModal, 'secondary-button')]);
-      mediaRoom = room.id;
-      mediaUrl = URL.createObjectURL(blob);
-      player.src = mediaUrl;
-    };
-    stop.disabled = false;
-    stop.addEventListener('click', () => { if (recorder.state !== 'inactive') recorder.stop(); });
-    recorder.start();
-    const started=Date.now();label.classList.add('recording-indicator');label.textContent='Recording · 0:00';ticker=setInterval(()=>{const seconds=Math.min(60,Math.floor((Date.now()-started)/1000));label.textContent='Recording · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');},200);
-    timer = setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 60_000);
-  } catch (error) {
-    microphone?.getTracks().forEach(track => track.stop());
-    if (epoch === authEpoch && body.contains(label)) modalError(error);
-  }
+    recorder.start();started=Date.now();if(gesture?.action==='locked')lock();
+    try{const AudioCtx=window.AudioContext||window.webkitAudioContext;if(AudioCtx){context=new AudioCtx();source=context.createMediaStreamSource(microphone);analyser=context.createAnalyser();analyser.fftSize=256;source.connect(analyser);}}catch{}
+    ticker=setInterval(()=>{
+      if(!active()){cancel();return;}
+      const seconds=Math.floor(((pausedAt||Date.now())-started-pausedTotal)/1000);
+      label.textContent=(locked?'Recording':'‹ Slide left to cancel · ↑ Lock')+' · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
+      const ctx=wave.getContext('2d');if(!ctx)return;ctx.clearRect(0,0,wave.width,wave.height);
+      const data=new Uint8Array(128);if(analyser)analyser.getByteTimeDomainData(data);else data.fill(128);
+      ctx.fillStyle=getComputedStyle(wave).color;for(let i=0;i<40;i++){const h=Math.max(2,Math.abs(data[i*3]-128)/128*36);ctx.fillRect(i*8,(38-h)/2,4,h);}
+    },100);
+    timer=setTimeout(()=>stop(false),60000);
+  }catch(error){cleanup();if(active())modalError(error);}
 }
 
 function confirmUnsend(room, message) {
@@ -2870,7 +2920,7 @@ $('updateCenter').addEventListener('click', async () => {
   } catch (error) { showError(error); }
 });
 let pushPlugin=null,pushListenersReady=false,pushRetryAt=0,pushRegisterJob=null,pushRemovalJob=null;
-function pushOptedOut(){try{return localStorage.getItem('qzu-push-opt-out')==='1';}catch{return false;}}
+function pushOptedOut(){try{localStorage.removeItem('qzu-push-opt-out');}catch{}return false;}
 function shouldPromptPush(){try{return localStorage.getItem('qzu-push-permission-requested')!=='1';}catch{return false;}}
 function notePushPrompt(){try{localStorage.setItem('qzu-push-permission-requested','1');}catch{}}
 function pushAvailable(){return Boolean(state.push?.available&&(!state.push.platforms||state.push.platforms.includes(window.Capacitor?.getPlatform?.())));}
@@ -2922,8 +2972,8 @@ $('privateNotifications').addEventListener('click',()=>{
   if(native&&window.Capacitor.getPlatform()==='ios'){
     controls.push(el('p','','Internal notifications work in the app. Remote notifications require Apple Push Notification service.'),button('Enable iOS notification permissions',async()=>{try{const count=state.rooms.reduce((n,r)=>n+unreadCount(r),0);const result=await devicePlugin.setBadge({count,requestPermission:true});info('Notifications',result.granted?'Enabled.':'Permission not granted.');}catch(error){modalError(error);}}),button('Test local notification',async event=>{const control=event.currentTarget,epoch=authEpoch;control.disabled=true;control.textContent='Scheduling test…';let timer;try{const result=await Promise.race([devicePlugin.testLocalNotification(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Native notification test timed out. Rebuild the iOS app.')),12000);})]);if(!result?.scheduled)throw Error('Native test was not confirmed. Install the latest iOS build.');if(epoch===authEpoch&&unlockToken)info('Notifications','Local test scheduled for 5 seconds. Stay here or return to the Home Screen. Alerts: '+(result.alerts?'enabled':'disabled')+' · Sounds: '+(result.sounds?'enabled':'disabled')+' · Badges: '+(result.badges?'enabled':'disabled')+'.');}catch(error){if(epoch===authEpoch)modalError(error);}finally{clearTimeout(timer);control.disabled=false;control.textContent='Test local notification';}},'secondary-button'));
   }
-  if(registered&&!pushOptedOut())controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'),button('Turn off',async()=>{try{try{localStorage.setItem('qzu-push-opt-out','1');}catch{}await disablePrivatePush();closeModal();await refresh();}catch(error){modalError(error);}}));
-  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{if(pushRemovalJob)await pushRemovalJob;try{localStorage.removeItem('qzu-push-opt-out');}catch{}pushRetryAt=0;await registerPrivatePush(true);}catch(error){modalError(error);}}));if(!pushOptedOut())controls.push(button('Turn off',async()=>{try{localStorage.setItem('qzu-push-opt-out','1');await disablePrivatePush();closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button'));}
+  if(registered&&!pushOptedOut())controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'));
+  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{if(pushRemovalJob)await pushRemovalJob;try{localStorage.removeItem('qzu-push-opt-out');}catch{}pushRetryAt=0;await registerPrivatePush(true);}catch(error){modalError(error);}}));}
   else if(!native||window.Capacitor.getPlatform()!=='ios')controls.push(el('p','','Push delivery is not configured yet.'));
   if(state.push?.diagnostic)controls.push(el('p','','Last push result: '+state.push.diagnostic.result));
   controls.push(button('Close',closeModal,'secondary-button'));show('Private notifications',controls);
