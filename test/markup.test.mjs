@@ -47,3 +47,5 @@ test('admin-only settings section and feedback route',()=>{assert.match(html,/id
 test('chat headers only expose actionable direct-chat encryption controls',()=>{assert.ok(app.includes('encryptionStatus.hidden = !showDirectSecurity'));assert.ok(app.includes("!showDirectSecurity ? ''"));assert.ok(!app.includes('Not end-to-end encrypted'));assert.ok(!app.includes("info('Connection security'"));assert.ok(!app.includes("['End-to-end encryption', 'Not implemented']"));assert.ok(app.includes('Transport encryption; server can access content'));});
 
 test('privacy policy is linked in app settings',()=>{assert.match(html,/id="privacyPolicy"/);assert.ok(app.includes("new URL('/privacy',apiOrigin)"));});
+
+test('Play build disables checkout and direct updater and exposes compliance actions',()=>{assert.match(html,/id="deleteAccount"/);assert.match(html,/id="adminReports"/);assert.match(html,/id="termsPolicy"/);assert.ok(app.includes("window.QZU_DISTRIBUTION==='google-play'"));assert.ok(app.includes("if (!native || playBuild) return null"));assert.ok(app.includes("api('report'"));assert.ok(app.includes("api('terms/accept'"));});

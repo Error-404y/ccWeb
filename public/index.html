@@ -165,13 +165,16 @@
             <a class="settings-row settings-category-link" href="/settings/help"><svg><use href="#chat"/></svg><span>Help</span><svg class="chevron"><use href="#chevron"/></svg></a>
             <a class="settings-row settings-category-link" href="/settings/about"><svg><use href="#info"/></svg><span>About</span><svg class="chevron"><use href="#chevron"/></svg></a>
             <div id="adminInterface" hidden><div class="settings-section-heading">Admin Interface</div>
+              <button class="settings-row" id="adminReports" type="button"><svg><use href="#info"/></svg><span>Abuse reports</span><svg class="chevron"><use href="#chevron"/></svg></button>
               <a class="settings-row settings-category-link" id="adminInboxLink" href="/settings/support-requests"><svg><use href="#chat"/></svg><span>View inbox</span><strong id="adminInboxCount"></strong><svg class="chevron"><use href="#chevron"/></svg></a>
               <a class="settings-row settings-category-link" href="/settings/admin-feedback"><svg><use href="#info"/></svg><span>View feedback</span><strong id="adminFeedbackCount"></strong><svg class="chevron"><use href="#chevron"/></svg></a>
             </div>
-            <button class="settings-row logout-row" id="logout"><svg><use href="#back"/></svg><span>Log out</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row logout-row" id="logout"><svg><use href="#back"/></svg><span>Delete account</span><svg class="chevron"><use href="#chevron"/></svg></button>
           </div>
           <div class="panel settings-panel" data-settings-category="account" hidden>
             <h1>Account</h1>
+            <button class="settings-row" id="deleteAccount" type="button"><svg><use href="#key"/></svg><span>Delete account</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row" id="externalDeletion" type="button"><svg><use href="#key"/></svg><span>External deletion code</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="accessSettings"><svg><use href="#key"/></svg><span>qzu-Access</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="changeLogin"><svg><use href="#key"/></svg><span>Change login PIN</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="resetPin"><svg><use href="#key"/></svg><span id="resetLabel">Request Reset</span><svg class="chevron"><use href="#chevron"/></svg></button>
@@ -223,6 +226,7 @@
           <div class="panel settings-panel" data-settings-category="admin-feedback" hidden><h1>Feedback</h1><div id="adminFeedbackList" class="request-list support-request-list"></div><button id="feedbackOlder" class="secondary-button" type="button" hidden>Load earlier feedback</button></div>
           <div class="panel settings-panel" data-settings-category="about" hidden>
             <h1>About</h1>
+            <button class="settings-row" id="termsPolicy" type="button"><svg><use href="#info"/></svg><span>Terms of Service</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="submitFeedback"><svg><use href="#chat"/></svg><span>Submit feedback</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="appInfo">
               <svg><use href="#info"/></svg>

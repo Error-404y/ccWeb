@@ -13,7 +13,7 @@ ALIAS="${QZU_ANDROID_ALIAS:-qzu-release}"
 node --input-type=module -e 'import {readFileSync} from "node:fs"; const config=JSON.parse(readFileSync("android/app/google-services.json","utf8"));if(!config.client?.some(c=>c.client_info?.android_client_info?.package_name==="cc.qzu.app"))throw Error("Firebase package mismatch");'
 VERSION="$(node -p "require('./package.json').version")"
 npm test
-npm run mobile:prepare -- android
+QZU_DISTRIBUTION=google-play npm run mobile:prepare -- android
 (cd android && ./gradlew --no-daemon "-Dorg.gradle.java.home=$JAVA_HOME" :app:bundleRelease)
 BUNDLE="android/app/build/outputs/bundle/release/app-release.aab"
 [[ -f "$BUNDLE" ]] || { echo "Android App Bundle missing." >&2; exit 1; }

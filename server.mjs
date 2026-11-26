@@ -219,7 +219,7 @@ app.post('/api/login/setup', guard('login-setup', 5, 60_000), (req, res) => {
   if (!chats.inviteFor(req.account.id)) chats.newCode(req.account.id);
   res.json({
     token: unlocks.issue(req.account.id),
-    access: accessStatus(req.account)
+    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended)
   });
 });
 app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
@@ -228,7 +228,7 @@ app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
   if (result !== 'ok') return loginError(res, result);
   res.json({
     token: unlocks.issue(req.account.id),
-    access: accessStatus(req.account)
+    access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended)
   });
 });
 app.post('/api/login/lock', (req, res) => {
@@ -326,7 +326,7 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Admin-only settings, support requests and persistent feedback inbox.',
+  notes: 'Account deletion, reporting, terms and Google Play distribution controls.',
   changes: ['Official announcements and unread dot','Authenticated live updates','Improved encryption verification and deletion','Flexible connection-code lifetime','Refined interface and Update Center','Private notification setup and privacy-safe backups'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));

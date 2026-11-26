@@ -4,7 +4,9 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.10.1';
+const installedVersion = window.QZU_APP_VERSION || '0.10.2';
+const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
+let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -118,7 +120,7 @@ function routeName(path) {
 }
 
 function updatePages() {
-  for (const name of ['chat', 'settings', 'connect']) $(name + 'Page').hidden = !unlockToken || accessDue || name !== page;
+  for (const name of ['chat', 'settings', 'connect']) $(name + 'Page').hidden = !unlockToken || accessDue || termsPending || suspendedAccount || name !== page;
   $('loading').hidden = Boolean(unlockToken);
   $('loading').classList.toggle('locked', !unlockToken);
 }
@@ -471,9 +473,12 @@ function showLogin() {
     });
     unlockToken = result.token;
     accessDue = result.access?.active === false;
+    termsPending=result.termsAccepted!==true;suspendedAccount=result.suspended===true;
     needsSetup = false;
     modalLocked = false;
     closeModal();
+    if(suspendedAccount){updatePages();showRestrictedAccount('Account suspended','Your account access has been restricted.');return;}
+    if(termsPending){updatePages();showTermsGate(result.termsVersion||1);return;}
     if (accessDue || checkoutReturn) {
       updatePages();
       const resume = checkoutReturn;
@@ -583,7 +588,7 @@ async function getSession() {
     if (epoch !== authEpoch) return;
     if (result.accessRequired) {
       sessionReady = false;
-      const saved = savedInvoice(false);
+      const saved = playBuild?'':savedInvoice(false);
       if (saved) showInvoice(saved, null, false);
       else showAccess();
       return;
@@ -605,12 +610,12 @@ async function getSession() {
 
 function lock(reopen = true) {
   if (isPublicCheckout()) return;
-  if (modal.dataset.checkout === 'renewal') {
+  if (!playBuild && modal.dataset.checkout === 'renewal') {
     const saved = savedInvoice(true);
     checkoutReturn = saved ? () => showInvoice(saved, null, true) : showRenewal;
   }
   stopCheckout();
-  accessDue = false;
+  accessDue = false;termsPending=false;suspendedAccount=false;
   authEpoch++;
   sequence++;
   const old = unlockToken;
@@ -906,7 +911,7 @@ function renderChat() {
   $('threadBadge').hidden = !isAdmin || Boolean(current?.supportAgent);
   $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
-  $('chatOptions').hidden = !current || (isAdmin && !(current.supportAgent && state.supportAgent));
+  $('chatOptions').hidden = !current || (isAdmin && !current.support && !(current.supportAgent && state.supportAgent));
   $('presenceLabel').hidden = !current || isAdmin;
   $('presenceLabel').textContent = current?.group ? (current.activeCount || 0) + ' active' : current?.activeCount ? 'Active' : 'Offline';
   $('presenceLabel').classList.toggle('online', Boolean(current?.activeCount));
@@ -1127,6 +1132,7 @@ function renderMessage(room, message) {
     more.setAttribute('aria-label', 'Message actions');
     row.append(more);
   }
+  if (!message.mine&&!message.deleted&&!room.readOnly){const report=button('Report',()=>showReport(room,{messageId:message.id}),'reply-action');report.setAttribute('aria-label','Report message');row.append(report);}
   if (room.encryption && message.mine && !message.deleted) {
     const more = button('⋯', () => confirmUnsend(room, message), 'reply-action message-more');
     more.setAttribute('aria-label', 'Unsend encrypted message');
@@ -1488,6 +1494,7 @@ async function refresh(live=false) {
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   online = true;
   offset = data.now - Date.now();
+  if(!data.unchanged&&data.termsAccepted!==true){termsPending=true;updatePages();showTermsGate(data.termsVersion||1);return;}
   if(data.unchanged){liveRevision=data.revision;purgeExpired();maybePromptUpdate();return;}
   await prepareEncryptedRooms(data);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
@@ -1528,25 +1535,36 @@ function offerPin() {
     note: 'Choose a different PIN from your login PIN. Single-use.'
   });
 }
-$('logout').addEventListener('click',()=>{
-  const confirm=button('Log out',async()=>{
+async function openLegal(path){
+  const url=new URL(path,apiOrigin).href;
+  try{if(native)await devicePlugin.openUpdate({url});else window.open(url,'_blank','noopener,noreferrer');}catch(error){dialogError(error);}
+}
+function legalButtons(){return [button('Terms of Service',()=>openLegal('/terms'),'secondary-button'),button('Privacy policy',()=>openLegal('/privacy'),'secondary-button')];}
+function showTermsGate(version){
+  const check=el('input');check.type='checkbox';const label=el('label','feedback-confirm');label.append(check,el('span','','I am 18 or older and agree to the Terms of Service.'));
+  const accept=button('Accept and continue',async()=>{accept.disabled=true;try{await api('terms/accept',{version});termsPending=false;modalLocked=false;closeModal();if(accessDue){showRenewal();return;}navigate(location.pathname,false);await refresh();}catch(error){dialogError(error);accept.disabled=!check.checked;}});
+  accept.disabled=true;check.addEventListener('change',()=>{accept.disabled=!check.checked;});
+  show('Terms of Service',[el('p','','Harassment, abuse, exploitation, threats and unlawful content are prohibited. Reports are reviewed and violations may result in suspension.'),...legalButtons(),label,accept,button('Decline and lock',()=>lock(),'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button')],true);
+}
+function showRestrictedAccount(title,message){show(title,[el('p','',message),button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button'),button('Lock',()=>lock(),'secondary-button'),...legalButtons()],true);}
+function showDeleteAccount(){
+  const confirm=button('Permanently delete account',async()=>{
     confirm.disabled=true;
     try{
-      await api('logout',{confirmed:true});
-      roomKeys.clear();
-      roomKeyJobs.clear();
-      sessionReady=false;
-      needsSetup=false;
-      forgetInvoice(false);
-      forgetInvoice(true);
-      lock(false);
-      history.replaceState(null,'','/chat');
-      navigate('/chat',false);
-      await getSession();
-    }catch(error){modalError(error);confirm.disabled=false;}
+      await api('account/delete',{confirmed:true});
+      roomKeys.clear();roomKeyJobs.clear();sessionReady=false;needsSetup=false;forgetInvoice(false);forgetInvoice(true);
+      checkoutReturn=null;lock(false);history.replaceState(null,'','/chat');navigate('/chat',false);await getSession();
+    }catch(error){dialogError(error);confirm.disabled=false;}
   },'primary-button danger-button');
-  show('Are you sure?',[el('p','','This account cannot be recovered. A new activation key is required.'),confirm,button('Cancel',closeModal,'secondary-button')]);
-});
+  show('Delete account?',[el('p','','Your account, active chats, contacts and access will be permanently removed. Limited legal or safety records may remain. This cannot be undone.'),confirm,button('Cancel',()=>{if(suspendedAccount)showRestrictedAccount('Account suspended','Your account access has been restricted.');else if(termsPending)showTermsGate(1);else if(accessDue)showRenewal();else closeModal();},'secondary-button')]);
+}
+function showDeletionCode(){
+  show('External deletion code',[el('p','','Generate a private code to delete your account later from the public website. A new code invalidates any previous code.'),button('Generate code',async()=>{try{const result=await api('account/deletion-code',{});const code=el('p','fingerprint-code',result.code);show('Save your deletion code',[el('p','','Anyone with this code can permanently delete your account. Keep it private.'),code,button('Copy code',async()=>{try{await navigator.clipboard.writeText(result.code);}catch{dialogError(Error('Select and copy the code manually.'));}},'secondary-button'),button('Deletion website',()=>openLegal('/delete-account'),'secondary-button'),button('Done',()=>{if(suspendedAccount)showRestrictedAccount('Account suspended','Your account access has been restricted.');else if(accessDue)showRenewal();else closeModal();},'secondary-button')]);}catch(error){dialogError(error);}}),button('Cancel',()=>{if(suspendedAccount)showRestrictedAccount('Account suspended','Your account access has been restricted.');else if(accessDue)showRenewal();else closeModal();},'secondary-button')]);
+}
+$('logout').addEventListener('click',showDeleteAccount);
+$('deleteAccount').addEventListener('click',showDeleteAccount);
+$('externalDeletion').addEventListener('click',showDeletionCode);
+$('termsPolicy').addEventListener('click',()=>openLegal('/terms'));
 $('changeLogin').addEventListener('click', () => {
   pinDialog('Change login PIN', ['Current PIN', 'New PIN', 'Confirm PIN'], 'Save', async values => {
     if (values[1] !== values[2]) throw new Error('PINs do not match.');
@@ -2191,7 +2209,7 @@ window.addEventListener('pageshow', e => {
 setInterval(purgeExpired, 250);
 
 async function loop() {
-  if (unlockToken && !accessDue && !document.hidden) {
+  if (unlockToken && !accessDue && !termsPending && !suspendedAccount && !document.hidden) {
     const epoch=authEpoch;
     try {
       await refresh(Boolean(state.capabilities?.live));
@@ -2263,6 +2281,18 @@ async function reactTo(room, message, emoji) {
   } catch (error) { showError(error); }
 }
 
+function showReport(room,selection={}){
+  const reason=el('select','edit-input');for(const name of ['Harassment','Threats or violence','Sexual exploitation','Spam or scam','Other']){const option=el('option','',name);option.value=name;reason.append(option);}
+  const evidence=el('textarea','edit-input');evidence.maxLength=2000;evidence.placeholder='Optional details or quoted content';evidence.setAttribute('aria-label','Optional report evidence');
+  const send=button('Submit report',async()=>{send.disabled=true;try{await api('report',{id:room.id,...selection,reason:reason.value,evidence:evidence.value});info('Report received','Thank you. The report will be reviewed. You can also block this contact.');}catch(error){dialogError(error);send.disabled=false;}});
+  show('Report abuse',[el('p','','Your report and any details you enter will be visible to authorized moderators. Encrypted messages are not automatically decrypted or uploaded.'),reason,evidence,send,button('Cancel',closeModal,'secondary-button')]);
+}
+$('adminReports').addEventListener('click',async()=>{
+  try{const result=await api('admin/reports');const list=el('div','request-list');if(!result.items.length)list.append(el('p','','No pending reports.'));
+    for(const item of result.items){const row=el('div','request-item');row.append(el('strong','',item.reason),el('p','',item.evidence||'No additional evidence'),el('p','','Received '+new Date(item.created).toLocaleString()));for(const [label,action] of [['Dismiss','dismiss'],['Suspend account','suspend']])row.append(button(label,()=>{show('Resolve report?',[el('p','',action==='suspend'?'This suspends the reported account and ends its active chats.':'Mark this report as reviewed without suspension.'),button('Confirm',async()=>{try{await api('admin/reports/resolve',{id:item.id,action});$('adminReports').click();}catch(error){dialogError(error);}}),button('Cancel',()=>$('adminReports').click(),'secondary-button')]);},'secondary-button'));list.append(row);}
+    show('Abuse reports',[list,button('Close',closeModal,'secondary-button')]);
+  }catch(error){showError(error);}
+});
 function messageActions(room, message) {
   const picker = el('div', 'reaction-picker');
   for (const emoji of reactions) picker.append(button(emoji, () => reactTo(room, message, emoji), 'reaction-choice'));
@@ -2326,8 +2356,10 @@ $('chatOptions').addEventListener('click', () => {
     show('Support admin controls',[el('p','',room.deletionRequested?'The user has requested deletion.':'Manage retention for both participants.'),el('p','','Timers delete the conversation for both sides. +30 minutes adds to the existing timer, or starts a 30-minute timer if none is active.'),control('10 minutes from now','10m'),control('+30 minutes','30m'),control('24 hours from now','24h'),control('48 hours from now','48h'),control('Keep until deleted','keep'),button('Delete for both',()=>{$('deleteChat').click();},'primary-button danger-button'),button('Close',closeModal,'secondary-button')]);
     return;
   }
-  if (room.admin) return;
+  if (room.admin&&!room.support) return;
   const controls = [];
+  if(room.support){show('Chat options',[button('Report support conversation',()=>showReport(room),'secondary-button'),button('Close',closeModal,'secondary-button')]);return;}
+  if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
   if (!room.group) {
     if(room.contact)controls.push(button('Manage contact',()=>showContactManagement(room.contact),'secondary-button'));
     if (encryptionRequired(room) && directRoom(room)) controls.push(button('Verify encryption', () => showEncryption(room), 'secondary-button'));
@@ -2697,7 +2729,7 @@ function deferUpdate(version) {
 }
 
 function updateDownload(release) {
-  if (!native) return null;
+  if (!native || playBuild) return null;
   try {
     const url = new URL(release.downloads?.[window.Capacitor?.getPlatform?.()]);
     return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
@@ -2729,7 +2761,7 @@ function showUpdatePrompt(release) {
 }
 
 function maybePromptUpdate() {
-  if (!native || !unlockToken || accessDue || document.hidden) return;
+  if (!native || playBuild || !unlockToken || accessDue || document.hidden) return;
   const now = Date.now();
   if (!updateChecking && now >= nextUpdateCheck) {
     updateChecking = true;
@@ -2744,6 +2776,7 @@ function maybePromptUpdate() {
 }
 
 $('updateCenter').addEventListener('click', async () => {
+  if(playBuild){info('Update center','Installed: '+installedVersion+'. Updates are delivered by Google Play.');return;}
   try {
     const release = await api('version');
     if (newerVersion(release.latest)) { pendingUpdate = release; showUpdatePrompt(release); return; }
@@ -2873,6 +2906,7 @@ function forgetInvoice(renewal) {
 }
 
 function showAccess() {
+  if(playBuild){showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key',()=>showKeyEntry(false)),...legalButtons()]);return;}
   const plan = el('div', 'access-plan');
   plan.append(el('strong', 'access-price', '€19.99'), el('span', '', 'First 5 months included'), el('span', 'access-mini', 'Then €2.99/month · Incl. 19% tax'), el('span', 'access-mini', '12 months · €40.92 total'));
   const terms = el('label', 'feedback-confirm');
@@ -2908,7 +2942,7 @@ function showKeyEntry(renewal) {
   input.maxLength = renewal ? 52 : 58;
   const submit = button('Continue', async () => {
     const value = input.value.trim().toUpperCase();
-    if(!renewal&&(/^[Q]ZU-ADMIN-[A-F0-9]{48}$/.test(value)||/^QZU-REVIEW-[A-F0-9]{40}$/.test(value))){
+    if(!renewal&&(/^QZU-ADMIN-[A-F0-9]{48}$/.test(value)||/^QZU-REVIEW-[A-F0-9]{40}$/.test(value)||(playBuild&&/^QZU-[A-F0-9]{48}$/.test(value)))){
       submit.disabled=true;
       try{
         const result=await api('session',{accessKey:value});
@@ -2917,7 +2951,7 @@ function showKeyEntry(renewal) {
       }catch(error){dialogError(error);submit.disabled=false;}
       return;
     }
-    if (!/^QZ[UO]-[A-F0-9]{48}$/.test(value)) return dialogError(new Error('Enter a valid key.'));
+    if (playBuild || !/^QZ[UO]-[A-F0-9]{48}$/.test(value)) return dialogError(new Error('Enter a valid key.'));
     rememberInvoice(value, renewal);
     showInvoice(value, null, renewal);
   });
@@ -2925,6 +2959,7 @@ function showKeyEntry(renewal) {
 }
 
 function showRenewal() {
+  if(playBuild){showRestrictedAccount('Access unavailable','Your current access is no longer active.');return;}
   const plan = el('div', 'access-plan');
   plan.append(el('strong', 'access-price', '€2.99'), el('span', '', 'One month · Incl. 19% tax'));
   const controls = [plan, button('Renew access', async () => {
@@ -2938,10 +2973,12 @@ function showRenewal() {
   if (saved) controls.push(button('Resume renewal', () => showInvoice(saved, null, true), 'secondary-button'));
   controls.push(button('Enter renewal key or reference', () => showKeyEntry(true), 'secondary-button'));
   controls.push(button(accessDue ? 'Lock' : 'Close', accessDue ? () => { delete modal.dataset.checkout; checkoutReturn = null; lock(); } : () => { modalLocked = false; closeModal(); }, 'secondary-button'));
+  controls.push(button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button'));
   showCheckout('Renew access', controls, true);
 }
 
 function showInvoice(secret, initial, renewal) {
+  if(playBuild){if(renewal)showRenewal();else showAccess();return;}
   const content = el('div', 'access-invoice');
   const status = el('strong', 'access-status', 'Checking order…');
   const details = el('div', 'access-details');
@@ -3104,6 +3141,7 @@ $('accessSettings').addEventListener('click', () => {
     info('qzu-Access', 'Lifetime or existing account access.');
     return;
   }
+  if(playBuild){info('qzu-Access','Existing access until '+new Date(access.paidUntil).toLocaleDateString()+'.');return;}
   const date = new Date(access.paidUntil).toLocaleDateString();
   show('qzu-Access', [el('p', '', 'Paid through ' + date), el('p', '', 'Months paid: ' + access.monthsPaid + '. Renewal €2.99 including 19% tax.'), button('Renew access', showRenewal), button('Close', closeModal, 'secondary-button')]);
 });
