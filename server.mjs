@@ -15,7 +15,7 @@ import { versionedState } from './lib/live.mjs';
 import { contactStore } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
-import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment } from './lib/access.mjs';
+import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey } from './lib/access.mjs';
 import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
@@ -267,6 +267,18 @@ app.use('/api',(req,res,next)=>{
   next();
 });
 app.post('/api/login/background-lock',guard('background-lock',10,60000),(req,res)=>{if(!req.deviceId||typeof req.body?.keepUnlocked!=='boolean')return res.status(400).json({error:'Registered device required.'});res.json({ok:unlocks.setIdle(req.account.id,req.get('x-qzu-unlock'),req.body.keepUnlocked)});});
+app.post('/api/admin/logout',guard('admin-logout',5,60000),(req,res)=>{
+  const a=req.account;
+  if(a.access_plan!=='admin'||!req.deviceId||req.body?.confirmed!==true)return res.status(403).json({error:'Confirmed admin logout required.'});
+  if(a.suspended&&(!a.suspended_until||a.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
+  if(!db.prepare('SELECT hash FROM support_keys WHERE account=? AND redeemed IS NOT NULL').get(a.id))return res.status(409).json({error:'Admin key unavailable.'});
+  // Assigned support cases belong to the slot; personal conversations and device secrets do not.
+  chats.erase(a.id,true);chats.hidePresence(a.id);prekeys.remove(a.id);push.remove(a.id);official.erase(a.id);unlocks.revokeAll(a.id);
+  db.prepare('DELETE FROM blocks WHERE owner=? OR target=?').run(a.id,a.id);
+  db.prepare('DELETE FROM security_activity WHERE owner=?').run(a.id);
+  db.prepare('UPDATE accounts SET deletion_hash=NULL,terms_version=0 WHERE id=?').run(a.id);
+  res.json(releaseSupportKey(db,a.id));
+});
 app.post('/api/account/deletion-code',guard('deletion-code',5,60000),(req,res)=>res.json({code:compliance.deletionCode(req.account.id)}));
 app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(req,res)=>{
   if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});
@@ -310,9 +322,18 @@ app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.ac
 app.get('/api/admin/reports/media/:id',guard('report-media',40,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const media=compliance.media(req.params.id);if(!media)return res.sendStatus(404);res.set('Cache-Control','no-store').type(media.mime).send(Buffer.from(media.body));});
 app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action,req.account.id,req.body?.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
 app.post('/api/admin/reports/reinstate',guard('reinstate',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json(compliance.reinstate(req.body?.target,req.account.id,req.body?.notes??''));});
-const supportAccount = () => db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL").get();
+const activeSupportAccounts=()=>db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL AND device_id IS NOT NULL AND (suspended=0 OR suspended_until<=?)").all(Date.now());
+const supportAccount=(user=null)=>{
+  const agents=activeSupportAccounts();
+  if(user){
+    const existing=[...chats.rooms.values()].find(room=>room.supportAgent&&room.users.includes(user)&&agents.some(agent=>agent.id===room.supportAgent));
+    if(existing)return agents.find(agent=>agent.id===existing.supportAgent);
+  }
+  const load=id=>[...chats.rooms.values()].filter(room=>room.supportAgent===id).length;
+  return agents.sort((a,b)=>load(a.id)-load(b.id)||a.id.localeCompare(b.id))[0];
+};
 app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
-  const agent=supportAccount();
+  const agent=supportAccount(req.account.id);
   if(!agent||agent.id===req.account.id)return res.status(404).json({error:'Support unavailable.'});
   res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
 });
@@ -470,12 +491,12 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   if (!/^[A-Z0-9]{6}$/.test(code)) return res.status(400).json({
     error: 'Enter a 6-character code.'
   });
-  const agent=supportAccount();
   chats.sweep();
   const invite=chats.codes.get(code);
-  if(agent&&invite&&!invite.group&&invite.user!==req.account.id){
-    if(invite.user===agent.id)return res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
-    if(req.account.id===agent.id)return res.json({id:chats.openMobileSupport(invite.user,agent.id,true)});
+  if(invite&&!invite.group&&invite.user!==req.account.id){
+    const agents=activeSupportAccounts(),senderAdmin=agents.some(a=>a.id===req.account.id),targetAdmin=agents.some(a=>a.id===invite.user);
+    if(targetAdmin&&!senderAdmin)return res.json({id:chats.openMobileSupport(req.account.id,invite.user)});
+    if(senderAdmin&&!targetAdmin)return res.json({id:chats.openMobileSupport(invite.user,req.account.id,true)});
   }
   res.json(chats.requestConnection(req.account.id, code, req.body?.nickname));
 });
