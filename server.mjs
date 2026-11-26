@@ -306,7 +306,7 @@ function androidUpdateLink() {
 app.get('/api/version', (req, res) => res.json({
   latest: version,
   notes: 'Official announcements, live chat updates, safer verification and improved privacy.',
-  changes: ['Official announcements and unread dot','Authenticated live updates','Improved encryption verification and deletion','Flexible connection-code lifetime','Refined interface and Update Center'],
+  changes: ['Official announcements and unread dot','Authenticated live updates','Improved encryption verification and deletion','Flexible connection-code lifetime','Refined interface and Update Center','Private notification setup and privacy-safe backups'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
@@ -391,6 +391,7 @@ app.post('/api/official/publish',guard('official-publish',10,60000),(req,res)=>{
   res.json(result);
 });
 app.post('/api/official/read',guard('official-read',60,60000),(req,res)=>res.json(official.mark(req.account.id,req.body?.id)));
+app.get('/api/official/history',guard('official-history',30,60000),(req,res)=>res.json(official.history(Number(req.query.before))));
 app.post('/api/push/register',guard('push-register',10,60000),(req,res)=>{
   if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
   res.json(push.register(req.account.id,req.body?.platform,req.body?.token));

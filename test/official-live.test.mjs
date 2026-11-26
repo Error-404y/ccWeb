@@ -4,6 +4,12 @@ import {DatabaseSync} from 'node:sqlite';
 import {officialStore} from '../lib/official.mjs';
 import {versionedState} from '../lib/live.mjs';
 import {Chats} from '../lib/chats.mjs';
+import {privatePush} from '../lib/push.mjs';
+import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 test('official posts persist and read cursors are independent, monotonic and admin-only',()=>{
   const db=new DatabaseSync(':memory:');let channel=officialStore(db,()=>100);
   assert.throws(()=>channel.publish('Not authorized'));
@@ -32,4 +38,37 @@ test('code lifetime choices',()=>{
   assert.throws(()=>chats.newCode('a',60));
   assert.equal(chats.newCode('a',5).expires,now+300000);
   assert.equal(chats.newCode('a',15).expires,now+900000);
+});
+
+test('private push relay only sends generic payload and respects opt out',async()=>{
+  const db=new DatabaseSync(':memory:');
+  db.exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,pin_state TEXT,access_plan TEXT,paid_until INTEGER);INSERT INTO accounts VALUES('a','ready','lifetime',NULL),('b','ready','lifetime',NULL)");
+  const calls=[];const service=privatePush(db,{url:'https://relay.example/push',secret:'example',fetch:async(url,options)=>{calls.push(JSON.parse(options.body));return {ok:true};}});
+  service.register('a','ios','a'.repeat(64));service.register('b','android','b'.repeat(64));
+  assert.throws(()=>service.register('b','ios','a'.repeat(64)));
+  service.notify(['a']);service.notify(['a']);await Promise.resolve();
+  assert.deepEqual(calls,[{platform:'ios',token:'a'.repeat(64),title:'qzu.',body:'New activity. Open qzu. to view.'}]);
+  service.remove('b');service.broadcast('a');await Promise.resolve();assert.equal(calls.length,1);
+  db.close();
+});
+test('room deletion scrubs stale server references',()=>{
+  const chats=new Chats(),id=chats.connectPair('a','b');chats.send('a',id,'secret');
+  const old=chats.rooms.get(id),message=old.messages[0];
+  chats.remove('a',id);assert.equal(message.text,'');assert.equal(old.messages.length,0);assert.equal(chats.snapshot('b').length,0);
+});
+test('backup excludes support content and push tokens while preserving account and official data',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'qzu-backup-'));
+  try{
+    const input=join(dir,'source.sqlite'),output=join(dir,'backup.sqlite');
+    const db=new DatabaseSync(input);
+    db.exec("CREATE TABLE accounts(id TEXT PRIMARY KEY);INSERT INTO accounts VALUES('a');CREATE TABLE mobile_support_rooms(id TEXT PRIMARY KEY,body TEXT);INSERT INTO mobile_support_rooms VALUES('r','sensitive-support-text');CREATE TABLE push_devices(account TEXT PRIMARY KEY,token TEXT);INSERT INTO push_devices VALUES('a','sensitive-push-token')");
+    officialStore(db,()=>100).publish('Official post',true);db.close();
+    execFileSync(process.execPath,[fileURLToPath(new URL('../scripts/privacy-backup.mjs',import.meta.url)),output],{env:{...process.env,QZU_DB:input}});
+    const copy=new DatabaseSync(output,{readOnly:true});
+    assert.equal(copy.prepare('SELECT count(*) AS n FROM accounts').get().n,1);
+    assert.equal(copy.prepare('SELECT count(*) AS n FROM official_posts').get().n,1);
+    assert.equal(copy.prepare('SELECT count(*) AS n FROM mobile_support_rooms').get().n,0);
+    assert.equal(copy.prepare('SELECT count(*) AS n FROM push_devices').get().n,0);copy.close();
+    const bytes=readFileSync(output);assert.equal(bytes.includes('sensitive-support-text'),false);assert.equal(bytes.includes('sensitive-push-token'),false);
+  }finally{rmSync(dir,{recursive:true,force:true});}
 });

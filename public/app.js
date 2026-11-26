@@ -9,7 +9,7 @@ const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
 const updateReminders = new Map();
-let officialReadJob=null,officialRenderKey='',liveRevision='',manualRefreshes=0,pushRegistration=null,pushEpoch=-1;
+let officialReadJob=null,officialRenderKey='',liveRevision='',officialHistory=[],manualRefreshes=0,pushRegistration=null,pushEpoch=-1;
 
 async function transport(path, options = {}) {
   if (!native) return fetch(path, options);
@@ -642,7 +642,7 @@ function lock(reopen = true) {
   $('extensionNotice').hidden = true;
   $('supportOpen').hidden = true;
   $('qzuInfoChannel').hidden = true;
-  $('officialUnread').hidden=true;$('officialPosts').replaceChildren();$('officialMessage').value='';$('officialSend').disabled=true;$('officialComposer').hidden=true;officialRenderKey='';liveRevision='';pushRegistration=null;pushEpoch=-1;
+  $('officialUnread').hidden=true;$('officialPosts').replaceChildren();$('officialMessage').value='';$('officialSend').disabled=true;$('officialComposer').hidden=true;officialRenderKey='';officialHistory=[];$('officialOlder').hidden=true;liveRevision='';pushRegistration=null;pushEpoch=-1;
   $('qzuInfoOpen').classList.remove('active');
   $('qzuInfoOpen').setAttribute('aria-pressed', 'false');
   $('groupInvite').hidden = true;
@@ -1617,11 +1617,13 @@ function renderOfficial(open){
   $('officialComposer').hidden=!state.supportAgent;
   $('officialReadOnly').hidden=Boolean(state.supportAgent);
   if(!open)return;
-  const key=JSON.stringify(feed.posts);
+  const postsToShow=[...new Map([...officialHistory,...feed.posts].map(post=>[post.id,post])).values()].sort((a,b)=>a.id-b.id);
+  $('officialOlder').hidden=!(postsToShow[0]?.id>1);
+  const key=JSON.stringify(postsToShow);
   if(key!==officialRenderKey){
     officialRenderKey=key;
     const posts=$('officialPosts');posts.replaceChildren();
-    for(const post of feed.posts){
+    for(const post of postsToShow){
       const article=el('article','official-post');
       const head=el('div','official-post-title');
       head.append(el('strong','','qzu.'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));
@@ -1638,6 +1640,13 @@ function renderOfficial(open){
     }).catch(()=>{}).finally(()=>{officialReadJob=null;});
   }
 }
+$('officialOlder').addEventListener('click',async()=>{
+  const older=$('officialOlder'),first=Math.min(...[...officialHistory,...(state.official?.posts||[])].map(post=>post.id));
+  if(!Number.isFinite(first)||first<=1)return;
+  older.disabled=true;const epoch=authEpoch;
+  try{const result=await api('official/history?before='+first);if(epoch!==authEpoch||!unlockToken)return;officialHistory=[...result.posts,...officialHistory];renderOfficial(selected===officialChannel);if(!result.posts.length)older.hidden=true;}
+  catch(error){if(epoch===authEpoch)showError(error);}finally{older.disabled=false;}
+});
 $('officialMessage').addEventListener('input',()=>{$('officialSend').disabled=!$('officialMessage').value.trim();});
 $('officialComposer').addEventListener('submit',event=>{
   event.preventDefault();
@@ -2004,7 +2013,7 @@ $('appInfo').addEventListener('click', () => {
 
   const topics = [
     ['Notifications', 'Private notifications show only generic activity. Enable them in Privacy when the server is configured.'],
-    ['Temporary chats', 'Conversations and messages are automatically removed from the server 30 minutes after the chat begins. No message backups are created.'],
+    ['Temporary chats', 'Ordinary chats expire after their timer. Support chats are stored until deleted or expired. Private backups exclude support chat content.'],
     ['Anonymous access', 'No phone number, email address or public username is required.'],
     ['Connection codes', 'New codes can last 5, 10 or 15 minutes. Generating a new code invalidates the previous one.'],
     ['Automatic lock', 'Leaving the tab locks qzu. Unlock with your login PIN.'],

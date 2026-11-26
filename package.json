@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
     "test": "node --test",
+    "backup:private": "node --env-file-if-exists=.env scripts/privacy-backup.mjs",
     "reset-pin": "node --env-file-if-exists=.env scripts/reset-pin.mjs",
     "admin-list": "node --env-file-if-exists=.env scripts/admin-list.mjs",
     "admin-message": "node --env-file-if-exists=.env scripts/admin-message.mjs",
