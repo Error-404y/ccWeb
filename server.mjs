@@ -6,6 +6,7 @@ import QRCode from 'qrcode';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { Chats } from './lib/chats.mjs';
+import { contactStore, retireAccount } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
 import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, applyRenewal, submitPayment } from './lib/access.mjs';
@@ -27,6 +28,8 @@ const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).
 const devices = deviceVerifier();
 const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
+const contacts = contactStore(db);
+chats.contacts = contacts;
 const unlocks = new Unlocks(), sendingResets = new Map();
 const production = process.env.NODE_ENV === 'production';
 if (production && !process.env.PUBLIC_ORIGIN) throw new Error('Set PUBLIC_ORIGIN to your HTTPS origin.');
@@ -247,6 +250,16 @@ app.use('/api', (req, res, next) => {
   if (!accessStatus(req.account).active) return res.status(402).json({ error: 'qzu-Access renewal required.' });
   next();
 });
+app.post('/api/logout', guard('logout', 3, 60000), (req,res) => {
+  if (req.body?.confirmed !== true) return res.status(400).json({error:'Confirmation required.'});
+  retireAccount(db,contacts,req.account.id);
+  chats.erase(req.account.id);
+  unlocks.revokeAll(req.account.id);
+  chats.hidePresence(req.account.id);
+  res.clearCookie(cookieName,{httpOnly:true,secure:production,sameSite:'strict',path:'/'});
+  res.json({ok:true});
+});
+app.post('/api/contacts/open', guard('contacts-open', 30, 60000), (req,res) => res.json({id:chats.openContact(req.account.id,req.body?.id)}));
 app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
   const result = changeLogin(db, req.account.id, req.body?.current, req.body?.next);
   if (result !== 'ok') return loginError(res, result);
@@ -271,7 +284,7 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Simplified update notifications.',
+  notes: 'Persistent contacts, private nicknames, permanent logout and organized settings.',
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
@@ -305,6 +318,7 @@ app.get('/api/state', (req, res) => {
     capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2 },
     access: accessStatus(a),
     rooms: chats.snapshot(a.id),
+    contacts: contacts.list(a.id),
     requests: chats.connectionRequests(a.id),
     invite: chats.ensureInvite(a.id),
     pinState: a.pin_state,
@@ -329,7 +343,7 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   if (!/^[A-Z0-9]{6}$/.test(code)) return res.status(400).json({
     error: 'Enter a 6-character code.'
   });
-  res.json(chats.requestConnection(req.account.id, code));
+  res.json(chats.requestConnection(req.account.id, code, req.body?.nickname));
 });
 app.post('/api/message', guard('send', 80, 60_000), (req, res) => {
   chats.send(req.account.id, req.body?.id, req.body?.text, req.body?.replyTo ?? null, req.body || {});
@@ -338,7 +352,7 @@ app.post('/api/message', guard('send', 80, 60_000), (req, res) => {
   });
 });
 app.post('/api/connection/respond', guard('connection-response', 30, 60_000), (req, res) => {
-  res.json(chats.respondConnection(req.account.id, req.body?.id, req.body?.accept === true));
+  res.json(chats.respondConnection(req.account.id, req.body?.id, req.body?.accept === true, req.body?.nickname));
 });
 
 app.post('/api/message/unsend', guard('unsend', 40, 60_000), (req, res) => {
@@ -485,7 +499,7 @@ app.use(express.static(resolve(root, 'public'), {
   etag: false,
   lastModified: false
 }));
-app.get(['/', '/chat', '/connect', '/settings'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
+app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
 app.use((req, res) => res.status(404).send('Not found'));
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
