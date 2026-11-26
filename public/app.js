@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const native = window.Capacitor?.isNativePlatform?.() === true;
+if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
 
@@ -195,6 +196,7 @@ function show(title, content, locked = false) {
   $('modalTitle').textContent = title;
   body.replaceChildren(...content);
   if (!modal.open) modal.showModal();
+  if (native) $('modalTitle').focus({ preventScroll: true });
 }
 
 function button(text, fn, cls = 'primary-button') {
@@ -299,7 +301,8 @@ function revokeToken(token) {
 function pinField(label, placeholder = '6-digit PIN') {
   const wrap = el('label', '', label), input = el('input', 'pin-input');
   input.type = 'password';
-  input.inputMode = 'numeric';
+  input.inputMode = native ? 'none' : 'numeric';
+  input.readOnly = native;
   input.autocomplete = 'off';
   input.maxLength = 6;
   input.placeholder = placeholder;
@@ -316,6 +319,47 @@ function pinField(label, placeholder = '6-digit PIN') {
   };
 }
 
+function pinKeypad(inputs) {
+  if (!native) return null;
+  const pad = el('div', 'pin-keypad');
+  pad.setAttribute('role', 'group');
+  pad.setAttribute('aria-label', 'PIN keypad');
+  let active = inputs[0];
+  function select(input) {
+    active = input;
+    for (const field of inputs) field.classList.toggle('pin-selected', field === input);
+  }
+  function enter(key) {
+    if (!active.isConnected || active.disabled) return;
+    if (key === 'clear') active.value = '';
+    else if (key === 'back') active.value = active.value.slice(0, -1);
+    else if (active.value.length < 6) active.value += key;
+    active.dispatchEvent(new Event('input', { bubbles: true }));
+    if (/^\d$/.test(key) && active.value.length === 6) {
+      const next = inputs[inputs.indexOf(active) + 1];
+      if (next) select(next);
+    }
+  }
+  for (const field of inputs) {
+    field.addEventListener('click', () => select(field));
+    field.addEventListener('focus', () => select(field));
+    field.addEventListener('keydown', event => {
+      if (/^\d$/.test(event.key) || event.key === 'Backspace' || event.key === 'Delete') {
+        event.preventDefault();
+        enter(event.key === 'Backspace' ? 'back' : event.key === 'Delete' ? 'clear' : event.key);
+      }
+    });
+  }
+  for (const key of ['1','2','3','4','5','6','7','8','9','clear','0','back']) {
+    const control = button(key === 'clear' ? 'Clear' : key === 'back' ? '⌫' : key, () => enter(key), 'pin-key');
+    if (key === 'back') control.setAttribute('aria-label', 'Delete last digit');
+    if (key === 'clear') control.setAttribute('aria-label', 'Clear PIN');
+    pad.append(control);
+  }
+  select(active);
+  return pad;
+}
+
 function pinDialog(title, fields, submitLabel, onSubmit, {
   locked = false,
   note = '',
@@ -324,6 +368,8 @@ function pinDialog(title, fields, submitLabel, onSubmit, {
   const form = el('form', 'auth-form'), items = fields.map(label => pinField(label));
   if (note) form.append(el('p', '', note));
   for (const item of items) form.append(item.wrap);
+  const keypad = pinKeypad(items.map(item => item.input));
+  if (keypad) form.append(keypad);
   const submit = el('button', 'primary-button', submitLabel);
   submit.type = 'submit';
   form.append(submit);
@@ -333,7 +379,10 @@ function pinDialog(title, fields, submitLabel, onSubmit, {
     e.preventDefault();
     if (submit.disabled || epoch !== authEpoch) return;
     const values = items.map(item => item.input.value);
-    if (values.some(v => !/^\d{6}$/.test(v))) return;
+    if (values.some(v => !/^\d{6}$/.test(v))) {
+      dialogError(new Error('Enter all six digits for each PIN.'));
+      return;
+    }
     submit.disabled = true;
     try {
       await onSubmit(values);
@@ -411,7 +460,10 @@ function showLockedEmergency() {
   execute.type = 'submit';
   execute.disabled = true;
   actions.append(cancel, execute);
-  form.append(wrap, warning, confirmation, actions);
+  form.append(wrap);
+  const keypad = pinKeypad([input]);
+  if (keypad) form.append(keypad);
+  form.append(warning, confirmation, actions);
 
   function updateButton() {
     execute.disabled = input.value.length !== 6 || !check.checked;
@@ -450,12 +502,12 @@ function showLockedEmergency() {
       cancel.disabled = false;
       updateButton();
       dialogError(error);
-      input.focus();
+      if (!native) input.focus();
     }
   });
 
   show('emg.exe', [form], true);
-  input.focus();
+  if (!native) input.focus();
 }
 
 async function getSession() {
@@ -576,12 +628,16 @@ $('theme').value = theme;
 $('theme').addEventListener('change', () => applyTheme($('theme').value));
 
 function setViewport() {
-  const h = window.visualViewport?.height || window.innerHeight;
-  document.documentElement.style.setProperty('--app-height', Math.round(h) + 'px');
+  const viewport = window.visualViewport;
+  const h = viewport?.height || window.innerHeight;
+  const root = document.documentElement;
+  root.style.setProperty('--app-height', Math.round(h) + 'px');
+  root.style.setProperty('--viewport-top', Math.max(0, Math.round(viewport?.offsetTop || 0)) + 'px');
 }
 setViewport();
 window.addEventListener('resize', setViewport);
 window.visualViewport?.addEventListener('resize', setViewport);
+window.visualViewport?.addEventListener('scroll', setViewport);
 
 function selectRoom(id, open = true) {
   if (selected !== id) {
@@ -1399,7 +1455,8 @@ $('emergency').addEventListener('click', () => {
   }
   const pin = el('input', 'pin-input');
   pin.type = 'password';
-  pin.inputMode = 'numeric';
+  pin.inputMode = native ? 'none' : 'numeric';
+  pin.readOnly = native;
   pin.maxLength = 6;
   pin.autocomplete = 'off';
   pin.setAttribute('aria-label', 'Six-digit security PIN');
@@ -1421,7 +1478,7 @@ $('emergency').addEventListener('click', () => {
       pin.value = '';
       modalError(e);
       execute.disabled = true;
-      pin.focus();
+      if (!native) pin.focus();
     }
   }, 'primary-button danger-button');
   execute.disabled = true;
@@ -1429,8 +1486,12 @@ $('emergency').addEventListener('click', () => {
     pin.value = pin.value.replace(/\D/g, '').slice(0, 6);
     execute.disabled = pin.value.length !== 6;
   });
-  show('emg.exe', [el('p', '', 'Delete all your conversations for both sides. This PIN can only be used once.'), pin, execute, button('Cancel', closeModal, 'secondary-button')]);
-  pin.focus();
+  const keypad = pinKeypad([pin]);
+  const content = [el('p', '', 'Delete all your conversations for both sides. This PIN can only be used once.'), pin];
+  if (keypad) content.push(keypad);
+  content.push(execute, button('Cancel', closeModal, 'secondary-button'));
+  show('emg.exe', content);
+  if (!native) pin.focus();
 });
 if (page === 'connect' && location.hash) {
   const code = location.hash.slice(1).toUpperCase();
@@ -1656,7 +1717,7 @@ async function openMedia(room, message) {
   const epoch = authEpoch;
   try {
     const response = await transport('/api/media/' + encodeURIComponent(room.id) + '/' + encodeURIComponent(message.id), {
-      headers: { 'X-QZU-Unlock': unlockToken }, cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(8000)
+      headers: { 'X-QZU-Unlock': unlockToken }, cache: 'no-store', credentials: 'same-origin', signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
     });
     if (!response.ok) throw new Error('Attachment unavailable.');
     const blob = await response.blob();

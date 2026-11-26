@@ -1769,3 +1769,74 @@ dialog, .request-list, .security-list, .access-invoice, .composer textarea {
     font-size: 16px;
   }
 }
+
+
+.native-app body {
+  top: var(--viewport-top, 0px);
+  bottom: auto;
+}
+
+.native-app dialog {
+  position: fixed;
+  inset: var(--viewport-top, 0px) 0 auto;
+  top: calc(var(--viewport-top, 0px) + var(--app-height) / 2);
+  margin: 0 auto;
+  translate: 0 -50%;
+  max-height: calc(var(--app-height) - 24px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.native-app #modalTitle:focus {
+  outline: none;
+}
+
+.native-app input, .native-app textarea, .native-app select {
+  font-size: 16px;
+}
+
+.native-app .pin-input {
+  cursor: pointer;
+  caret-color: transparent;
+  min-height: 46px;
+}
+
+.native-app .pin-input.pin-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.pin-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  width: 100%;
+}
+
+.pin-key {
+  min-height: 44px;
+  padding: 5px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--sub);
+  font-size: 21px;
+  font-weight: 600;
+  touch-action: manipulation;
+}
+
+.pin-key:active {
+  background: var(--active);
+  border-color: var(--accent);
+}
+
+.pin-key:nth-child(10) {
+  font-size: 13px;
+}
+
+@media (max-height: 680px) {
+  .pin-key { min-height: 39px; }
+  .native-app dialog { padding: 16px; }
+}
