@@ -41,3 +41,5 @@ test('official channel exposes an admin composer and unread indicator',()=>{
   assert.ok(app.includes("officialComposer').hidden=!state.supportAgent"));
   assert.ok(app.includes("api('official/publish',{text})"));
 });
+
+test('admin-only settings section and feedback route',()=>{assert.match(html,/id="adminInterface" hidden/);assert.match(html,/data-settings-category="admin-feedback" hidden/);assert.ok(app.includes("$('adminInterface').hidden=!state.supportAgent"));assert.ok(!app.includes('Messages are not yet end-to-end encrypted.'));});

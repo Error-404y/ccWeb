@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { Chats } from './lib/chats.mjs';
 import { officialStore } from './lib/official.mjs';
+import { feedbackStore } from './lib/feedback.mjs';
 import { privatePush } from './lib/push.mjs';
 import { versionedState } from './lib/live.mjs';
 import { contactStore, retireAccount } from './lib/contacts.mjs';
@@ -32,7 +33,7 @@ const devices = deviceVerifier();
 const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
-const official=officialStore(db),liveWaiters=new Map();
+const official=officialStore(db),feedback=feedbackStore(db),liveWaiters=new Map();
 const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET});
 let liveTotal=0;
 const contacts = contactStore(db);
@@ -305,7 +306,7 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Official announcements, live chat updates, safer verification and improved privacy.',
+  notes: 'Admin-only settings, support requests and persistent feedback inbox.',
   changes: ['Official announcements and unread dot','Authenticated live updates','Improved encryption verification and deletion','Flexible connection-code lifetime','Refined interface and Update Center','Private notification setup and privacy-safe backups'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
@@ -349,6 +350,7 @@ function stateData(a) {
     supportAgent: a.access_plan==='admin',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
+    ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
     rooms: chats.snapshot(a.id),
     contacts: contacts.list(a.id),
     requests: chats.connectionRequests(a.id),
@@ -454,13 +456,13 @@ app.post('/api/feedback', guard('feedback', 3, 10 * 60_000), async (req, res) =>
   if (typeof message !== 'string' || !message.trim() || message.trim().length > 2000 || req.body?.confirmed !== true) {
     return res.status(400).json({ error: 'Enter and confirm your feedback.' });
   }
-  try {
-    await sendFeedback(message);
-    res.json({ ok: true });
-  } catch {
-    res.status(503).json({ error: 'Feedback delivery unavailable.' });
-  }
+  feedback.submit(message,true);
+  res.json({ok:true});
+  if(process.env.QZU_FEEDBACK_WEBHOOK)void sendFeedback(message).catch(()=>{});
 });
+app.get('/api/admin/feedback',guard('admin-feedback',60,60000),(req,res)=>res.json({items:feedback.list(req.account.access_plan==='admin',req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before))}));
+app.post('/api/admin/feedback/review',guard('admin-feedback-review',60,60000),(req,res)=>res.json(feedback.review(req.account.access_plan==='admin',req.body?.id)));
+app.post('/api/admin/feedback/delete',guard('admin-feedback-delete',30,60000),(req,res)=>res.json(feedback.remove(req.account.access_plan==='admin',req.body?.id)));
 
 app.post('/api/message/edit', guard('edit', 40, 60_000), (req, res) => {
   chats.edit(req.account.id, req.body?.id, req.body?.messageId, req.body?.text);
@@ -579,7 +581,7 @@ app.use(express.static(resolve(root, 'public'), {
   etag: false,
   lastModified: false
 }));
-app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
+app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
 app.use((req, res) => res.status(404).send('Not found'));
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);

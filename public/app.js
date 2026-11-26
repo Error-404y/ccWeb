@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.10.0';
+const installedVersion = window.QZU_APP_VERSION || '0.10.1';
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
@@ -147,7 +147,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('a[href]');
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const url = new URL(a.href);
-  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/about', '/'].includes(url.pathname)) return;
+  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/'].includes(url.pathname)) return;
   e.preventDefault();
   if (unlockToken) navigate(url.pathname);
 });
@@ -666,6 +666,7 @@ function lock(reopen = true) {
   renderedMessages = [];
   $('contacts').replaceChildren();
   $('supportRequestsList').replaceChildren();
+  $('adminInterface').hidden=true;$('userInterfaceHeading').hidden=true;clearAdminFeedback();
   $('messages').replaceChildren();
   $('message').value = '';
   $('enterCode').value = '';
@@ -1260,9 +1261,9 @@ function renderConnect() {
 function renderSettings() {
   if (page !== 'settings') return;
   const requested = location.pathname.split('/')[2] || 'main';
-  const category = requested==='support-requests' && !state.supportAgent ? 'help' : requested;
+  const category = ['support-requests','admin-feedback'].includes(requested) && !state.supportAgent ? 'main' : requested;
   for (const panel of document.querySelectorAll('[data-settings-category]')) panel.hidden = panel.dataset.settingsCategory !== category;
-  $('settingsBack').href = category === 'main' ? '/chat' : category==='support-requests' ? '/settings/help' : '/settings';
+  $('settingsBack').href = category === 'main' ? '/chat' : '/settings';
   $('resetPin').disabled = !state.pinState || Boolean(state.resetDelivered) || ['new', 'approved'].includes(state.pinState);
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
   $('emergency').disabled = !state.pinState;
@@ -1270,6 +1271,12 @@ function renderSettings() {
   $('pushStatus').textContent=state.push?.registered?'On':state.push?.available?'Off':'Unavailable';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
+  $('adminInterface').hidden=!state.supportAgent;
+  $('userInterfaceHeading').hidden=!state.supportAgent;
+  $('adminInboxCount').textContent=state.supportAgent?String((state.supportRequests||[]).length):'';
+  $('adminFeedbackCount').textContent=state.supportAgent?String(state.feedbackCount||0):'';
+  if(category==='admin-feedback'&&state.supportAgent){if(feedbackLoadedCount!==state.feedbackCount&&!feedbackLoading)loadAdminFeedback();}
+  else if(feedbackLoadedCount!==null||feedbackLoading){clearAdminFeedback();}
   $('supportRequestCount').textContent = state.supportAgent ? String((state.supportRequests || []).length) : '';
   if(category==='support-requests')renderSupportRequests();
   else $('supportRequestsList').replaceChildren();
@@ -1553,6 +1560,41 @@ $('changeLogin').addEventListener('click', () => {
     info('qzu.', 'PIN changed.');
   });
 });
+let feedbackItems=[],feedbackLoadedCount=null,feedbackLoading=false,feedbackEpoch=0;
+function clearAdminFeedback(){
+  feedbackEpoch++;feedbackItems=[];feedbackLoadedCount=null;feedbackLoading=false;
+  $('adminFeedbackList').replaceChildren();$('feedbackOlder').hidden=true;
+}
+function renderAdminFeedback(){
+  const list=$('adminFeedbackList');list.replaceChildren();
+  if(!feedbackItems.length)list.append(el('p','support-help-notes','No feedback yet.'));
+  for(const entry of feedbackItems){
+    const item=el('div','request-item');
+    item.append(el('strong','','Feedback #'+entry.id+(entry.reviewed?' · Reviewed':' · New')),el('span','',new Date(entry.at).toLocaleString()),el('p','support-request-preview',privacyMode?'Feedback hidden':entry.text));
+    const actions=el('div','request-actions');
+    const act=async action=>{
+      try{await api('admin/feedback/'+action,{id:entry.id});closeModal();await refresh();if(state.supportAgent&&location.pathname==='/settings/admin-feedback')await loadAdminFeedback();}
+      catch(error){showError(error);}
+    };
+    if(!entry.reviewed)actions.append(button('Mark reviewed',()=>act('review'),'secondary-button'));
+    actions.append(button('Delete',()=>show('Delete feedback?',[el('p','','Remove this feedback permanently?'),button('Delete',()=>act('delete'),'primary-button danger-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
+    item.append(actions);list.append(item);
+  }
+}
+async function loadAdminFeedback(older=false){
+  if(!state.supportAgent||!unlockToken||feedbackLoading)return;
+  feedbackLoading=true;const epoch=feedbackEpoch,auth=authEpoch,count=state.feedbackCount;
+  try{
+    const before=older?feedbackItems.at(-1)?.id:null;
+    const result=await api('admin/feedback'+(before?'?before='+before:''));
+    if(epoch!==feedbackEpoch||auth!==authEpoch||!state.supportAgent||location.pathname!=='/settings/admin-feedback')return;
+    feedbackItems=older?[...feedbackItems,...result.items]:result.items;
+    feedbackLoadedCount=count;renderAdminFeedback();
+    $('feedbackOlder').hidden=result.items.length<100;
+  }catch(error){if(epoch===feedbackEpoch&&auth===authEpoch){feedbackLoadedCount=count;const list=$('adminFeedbackList');list.replaceChildren(el('p','','Unable to load feedback.'),button('Retry',()=>loadAdminFeedback(),'secondary-button'));}}
+  finally{if(epoch===feedbackEpoch)feedbackLoading=false;}
+}
+$('feedbackOlder').addEventListener('click',()=>loadAdminFeedback(true));
 function renderSupportRequests() {
   const list=$('supportRequestsList');
   const requests=state.supportAgent ? state.supportRequests || [] : [];
@@ -2024,8 +2066,8 @@ $('appInfo').addEventListener('click', () => {
     ['Media', 'Photos and voice messages are held temporarily in server memory and expire with the chat.'],
     ['Connections', 'New connections require approval. Blocked accounts cannot reconnect while using the same account.'],
     ['Invisible mode', 'Hides active status, typing and read receipts. Delivery status and opening view-once messages may still be visible.'],
-    ['Feedback', 'Only the text you explicitly submit is sent to the developer via Discord.'],
-    ['Privacy', 'Messages are not yet end-to-end encrypted. Screenshots and externally saved copies cannot be removed by qzu.']
+    ['Feedback', 'Only the feedback you explicitly submit is shared with Support.'],
+    ['Privacy', 'Screenshots and externally saved copies cannot be removed by qzu.']
   ];
 
   const list = el('div', 'info-list');
