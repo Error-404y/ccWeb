@@ -922,7 +922,7 @@ function renderMessage(room, message) {
   row.id = 'message-' + message.id;
   const bubble = el('div', 'bubble');
   const content = el('div', 'message-content');
-  const masked = privacyMode && !revealedMessages.has(message.id) && !message.once && !message.deleted;
+  const masked = privacyMode && !revealedMessages.has(message.id) && !message.once && !message.deleted && !(message.burnSeconds && !message.burnAt && !message.mine);
 
   if (room.group && !message.mine) content.append(el('strong', 'message-author', message.sender));
 
@@ -1077,7 +1077,7 @@ async function acknowledgeMessages() {
       const view = $('messages').getBoundingClientRect();
       const rect = node?.getBoundingClientRect();
       const visible = rect && rect.bottom > view.top && rect.top < view.bottom;
-      if (!state.invisible && room.id === selected && canReadCurrent() && visible && (!privacyMode || revealedMessages.has(message.id)) && !message.once && !acknowledgedRead.has(message.id)) read.push(message.id);
+      if (!state.invisible && room.id === selected && canReadCurrent() && visible && (!privacyMode || revealedMessages.has(message.id)) && !message.once && (!message.burnSeconds || message.burnAt) && !acknowledgedRead.has(message.id)) read.push(message.id);
     }
     if (delivered.length || read.length) entries.push({ id: room.id, delivered, read });
   }
@@ -1167,6 +1167,9 @@ function purgeExpired() {
     state.rooms = state.rooms.filter(r => r.expires > now);
     if (state.invite?.expires <= now) state.invite = null;
     render();
+  }
+  for (const item of state.rooms) for (const message of item.messages) {
+    if (message.burnAt && message.burnAt <= now) { message.text = ''; message.deleted = true; }
   }
   for (const label of $('messages').querySelectorAll('[data-burn-at]')) {
     const remaining = Number(label.dataset.burnAt) - now;
@@ -1933,8 +1936,8 @@ async function openOnceMessage(room, message) {
 $('attachmentMenu').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
   if (!room || room.admin) return;
-  const items = [button('Photo', () => choosePhoto(room), 'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
-  if (!room.group) items.unshift(button(viewOnce ? 'Disable view once' : 'Enable view once', () => {
+  const items = burnSeconds ? [] : [button('Photo', () => choosePhoto(room), 'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
+  if (!room.group && !burnSeconds) items.unshift(button(viewOnce ? 'Disable view once' : 'Enable view once', () => {
     viewOnce = !viewOnce;
     burnSeconds = 0;
     $('attachmentMenu').classList.toggle('once-active', viewOnce);
