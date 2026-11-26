@@ -259,6 +259,12 @@ app.post('/api/logout', guard('logout', 3, 60000), (req,res) => {
   res.clearCookie(cookieName,{httpOnly:true,secure:production,sameSite:'strict',path:'/'});
   res.json({ok:true});
 });
+const supportAccount = () => db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL").get();
+app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
+  const agent=supportAccount();
+  if(!agent||agent.id===req.account.id)return res.status(404).json({error:'Support unavailable.'});
+  res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
+});
 app.post('/api/contacts/open', guard('contacts-open', 30, 60000), (req,res) => res.json({id:chats.openContact(req.account.id,req.body?.id)}));
 app.post('/api/contacts/update', guard('contacts-update', 30, 60000), (req,res) => res.json(chats.updateContact(req.account.id,req.body?.id,req.body||{})));
 app.post('/api/contacts/remove', guard('contacts-remove', 20, 60000), (req,res) => res.json(chats.removeContact(req.account.id,req.body?.id,req.body?.block===true)));
@@ -286,7 +292,7 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Trusted contacts, contact management, metadata cleaning and screen capture protection.',
+  notes: 'Verified two-way qzu-Support accounts.',
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
@@ -319,6 +325,8 @@ app.get('/api/state', (req, res) => {
     now: Date.now(),
     capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2 },
     access: accessStatus(a),
+    supportAgent: a.access_plan==='admin',
+    supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
     rooms: chats.snapshot(a.id),
     contacts: contacts.list(a.id),
     requests: chats.connectionRequests(a.id),
@@ -345,6 +353,13 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   if (!/^[A-Z0-9]{6}$/.test(code)) return res.status(400).json({
     error: 'Enter a 6-character code.'
   });
+  const agent=supportAccount();
+  chats.sweep();
+  const invite=chats.codes.get(code);
+  if(agent&&invite&&!invite.group&&invite.user!==req.account.id){
+    if(invite.user===agent.id)return res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
+    if(req.account.id===agent.id)return res.json({id:chats.openMobileSupport(invite.user,agent.id)});
+  }
   res.json(chats.requestConnection(req.account.id, code, req.body?.nickname));
 });
 app.post('/api/message', guard('send', 80, 60_000), (req, res) => {
