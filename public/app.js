@@ -167,7 +167,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('a[href]');
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const url = new URL(a.href);
-  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/'].includes(url.pathname)) return;
+  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/'].includes(url.pathname)) return;
   e.preventDefault();
   if (unlockToken) {if(a.dataset.tab==='chat'){rememberRoom();mobileOpen=false;selected=null;renderedRoom=null;$('message').value='';}navigate(url.pathname);}
 });
@@ -716,6 +716,7 @@ function lock(reopen = true) {
 }
 
 function applyTheme(value) {
+  if(document.documentElement.dataset.theme&&document.documentElement.dataset.theme!==value)motion($('app'),'motion-theme');
   document.documentElement.dataset.theme = value;
   try {
     localStorage.setItem('qzu-theme', value);
@@ -1769,6 +1770,7 @@ $('qzuInfoOpen').addEventListener('click', () => {
 });
 $('qzuInfoBack').addEventListener('click', () => $('backToChats').click());
 $('backToChats').addEventListener('click', () => {
+  if(recordingCleanup)clearMedia();
   rememberRoom();
   resetOnce();
   stopTyping();
@@ -2600,17 +2602,19 @@ $('cameraShortcut').addEventListener('click',()=>{const room=currentMediaRoom();
 const voiceControl=$('voiceShortcut');
 let voiceGesture=null;
 voiceControl.addEventListener('pointerdown',event=>{
-  if(event.button!==0||voiceGesture)return;
+  if(event.button!==0||voiceGesture||recordingCleanup)return;
   const room=currentMediaRoom();if(!room||!unlockToken)return;
   event.preventDefault();voiceControl.setPointerCapture(event.pointerId);
   const gesture={id:event.pointerId,x:event.clientX,y:event.clientY,action:'hold',session:null};
   voiceGesture=gesture;haptic();
   recordVoice(room,gesture).catch(error=>{if(voiceGesture===gesture)voiceGesture=null;showError(error);});
 });
+function voiceSwipe(dx,dy){return dx>=75&&dx>=dy?'cancel':dy>=65?'locked':'hold';}
 voiceControl.addEventListener('pointermove',event=>{
   const g=voiceGesture;if(!g||event.pointerId!==g.id||g.action!=='hold')return;
-  if(g.x-event.clientX>=75){g.action='cancel';g.session?.cancel();haptic();}
-  else if(g.y-event.clientY>=65){g.action='locked';g.session?.lock();haptic();}
+  const action=voiceSwipe(g.x-event.clientX,g.y-event.clientY);
+  if(action==='cancel'){g.action=action;g.session?.cancel();haptic();}
+  else if(action==='locked'){g.action=action;g.session?.lock();haptic();}
 });
 function endVoiceGesture(event, cancelled=false){
   const g=voiceGesture;if(!g||g.id!==event.pointerId)return;
@@ -2717,10 +2721,10 @@ async function recordVoice(room,gesture=null) {
   const wave=el('canvas','voice-wave');wave.width=320;wave.height=38;
   panel.append(label,wave,controls);
   let microphone,recorder,context,source,analyser,ticker,timer,chunks=[],cancelled=false,instant=false,locked=!gesture,pausedAt=0,pausedTotal=0,started=0,finished=false;
-  const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&selected===room.id&&!document.hidden&&room.expires>serverNow()&&body.contains(panel);
+  const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&selected===room.id&&page==='chat'&&(!mobile.matches||mobileOpen)&&!document.hidden&&room.expires>serverNow()&&panel.isConnected;
   const stopTracks=()=>{microphone?.getTracks().forEach(track=>track.stop());if(context){context.close().catch(()=>{});context=null;}clearInterval(ticker);clearTimeout(timer);};
-  const cleanup=()=>{cancelled=true;stopTracks();if(recorder&&recorder.state!=='inactive')recorder.stop();chunks=[];if(voiceGesture===gesture)voiceGesture=null;};
-  const cancel=()=>{cleanup();closeModal();};
+  const cleanup=()=>{cancelled=true;stopTracks();if(recorder&&recorder.state!=='inactive')recorder.stop();chunks=[];panel.remove();$('composer').classList.remove('voice-recording');if(recordingCleanup===cleanup)recordingCleanup=null;if(voiceGesture===gesture)voiceGesture=null;};
+  const cancel=()=>{cleanup();if(!gesture)closeModal();};
   const stop=(send=false)=>{if(finished||cancelled)return;instant=send;if(recorder&&recorder.state!=='inactive')recorder.stop();};
   const pause=button('Pause',()=>{if(recorder?.state==='recording'){recorder.pause();pausedAt=Date.now();pause.textContent='Resume';}else if(recorder?.state==='paused'){recorder.resume();pausedTotal+=Date.now()-pausedAt;pausedAt=0;pause.textContent='Pause';}},'secondary-button');
   const preview=button('Preview',()=>stop(false),'secondary-button');
@@ -2728,28 +2732,29 @@ async function recordVoice(room,gesture=null) {
   const discard=button('Discard',cancel,'secondary-button');
   const lock=()=>{locked=true;controls.replaceChildren(discard,pause,preview,sendNow);label.textContent='Recording hands-free';};
   if(gesture)gesture.session={cancel,lock,send:()=>stop(true)};
-  // Pointer capture remains on the composer while permission is pending.
-  // Do not open the modal until the capture ends or the recording is locked.
-  show('Voice message',[panel]);mediaRoom=room.id;
-  if(gesture){voiceControl.setPointerCapture?.(gesture.id);controls.replaceChildren(discard);label.textContent='Hold · Slide left to cancel · Slide up to lock';}else lock();
+  // A modal would make the pointer-capture target inert. Keep hold gestures in the composer.
+  if(gesture){$('composer').before(panel);$('composer').classList.add('voice-recording');controls.replaceChildren(discard);label.textContent='Hold · Slide left to cancel · Slide up to lock';}
+  else{show('Voice message',[panel]);lock();}
+  mediaRoom=room.id;
   recordingCleanup=cleanup;
   try{
     microphone=await navigator.mediaDevices.getUserMedia({audio:true});
     if(cancelled||!active()||gesture?.action==='cancel'){cleanup();return;}
-    if(gesture?.action==='send'){cleanup();closeModal();return;}
+    if(gesture?.action==='send'){cleanup();return;}
     const mime=['audio/mp4','audio/webm','audio/ogg'].find(type=>MediaRecorder.isTypeSupported(type));
     if(!mime)throw Error('No supported recording format.');
     recorder=new MediaRecorder(microphone,{mimeType:mime,audioBitsPerSecond:64000});
     recorder.ondataavailable=event=>{if(!cancelled&&event.data.size)chunks.push(event.data);};
-    recorder.onerror=()=>{cleanup();if(active())modalError(Error('Recording interrupted.'));};
+    recorder.onerror=()=>{const visible=active();cleanup();if(visible)showError(Error('Recording interrupted.'));};
     for(const track of microphone.getTracks())track.addEventListener('ended',()=>{if(!finished&&!cancelled)cancel();},{once:true});
     recorder.onstop=async()=>{
       if(finished)return;finished=true;stopTracks();
       if(recordingCleanup===cleanup)recordingCleanup=null;
-      if(cancelled||!active()){chunks=[];return;}
+      if(cancelled||!active()){cleanup();return;}
       const blob=new Blob(chunks,{type:mime});chunks=[];
-      if(!blob.size){closeModal();return;}
-      if(instant){try{await sendAttachment(room,'audio',blob,once);}catch(error){if(active())modalError(error);}return;}
+      if(!blob.size){cleanup();if(!gesture)closeModal();return;}
+      panel.remove();$('composer').classList.remove('voice-recording');
+      if(instant){try{await sendAttachment(room,'audio',blob,once);}catch(error){if(epoch===authEpoch&&unlockToken&&!document.hidden)showError(error);}return;}
       const player=el('audio','temporary-media');player.controls=true;
       const send=button(once?'Send once':'Send recording',async()=>{send.disabled=true;try{await sendAttachment(room,'audio',blob,once);}catch(error){send.disabled=false;modalError(error);}});
       show('Voice message',[player,send,button('Discard',closeModal,'secondary-button')]);mediaRoom=room.id;mediaUrl=URL.createObjectURL(blob);player.src=mediaUrl;
@@ -2765,7 +2770,7 @@ async function recordVoice(room,gesture=null) {
       ctx.fillStyle=getComputedStyle(wave).color;for(let i=0;i<40;i++){const h=Math.max(2,Math.abs(data[i*3]-128)/128*36);ctx.fillRect(i*8,(38-h)/2,4,h);}
     },100);
     timer=setTimeout(()=>stop(false),60000);
-  }catch(error){cleanup();if(active())modalError(error);}
+  }catch(error){const visible=active();cleanup();if(visible)showError(error);}
 }
 
 function confirmUnsend(room, message) {
