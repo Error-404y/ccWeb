@@ -62,3 +62,6 @@ Run `npm run release:play` on the Mac to create a signed Android App Bundle in r
 
 ## 0.10.2 Google Play edition
 The release:play script sets QZU_DISTRIBUTION=google-play. This edition only redeems existing access keys; it has no external purchase, renewal, payment instructions or direct APK update action. Direct builds retain their existing checkout. Deploy the server before installing updated clients. New accounts must accept the current Terms before messaging; existing legacy accounts retain write access until they accept Terms in the new client, to avoid locking out previously activated direct-distribution users. Every 0.10.2 client presents Terms before messaging. Set QZU_PRIVACY_OPERATOR and QZU_PRIVACY_EMAIL to the real operator and monitored address. Verify /privacy, /terms and /delete-account over HTTPS, reusable review access, reporting, blocking, moderation and deletion on test accounts before submission. Review the store declarations and screenshots against the real app. The operator must actively moderate abuse reports.
+
+## 0.10.3
+Version-only rebuild of the 0.10.2 Google Play edition with Android version code 10004 because 10003 was already registered in Play Console. No functional changes.
