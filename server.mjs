@@ -75,7 +75,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use((req, res, next) => express.json({
-  limit: ['/api/message', '/api/encryption/message'].includes(req.path) ? '3mb' : '12kb',
+  limit: ['/api/message', '/api/encryption/message','/api/report'].includes(req.path) ? '3mb' : '12kb',
   verify: (req, res, buffer) => { req.rawBody = buffer.toString('utf8'); }
 })(req, res, next));
 const cookieName = production ? '__Host-qzu': 'qzu';
@@ -291,10 +291,21 @@ app.post('/api/report',guard('report',5,60000),(req,res)=>{
   if(!Array.isArray(items)||items.length>6)return res.status(400).json({error:'Choose up to six messages.'});
   const selected=new Set();const context=[];for(const entry of items){const m=room.messages.find(x=>x.id===entry?.id&&!x.deleted&&!x.once&&!x.burnSeconds);if(!m||selected.has(m.id)||m.kind!=='text'||typeof entry.text!=='string'||entry.text.length>1000)return res.status(400).json({error:'Selected evidence is unavailable.'});selected.add(m.id);context.push({id:m.id,sender:m.sender===req.account.id?'Reporter':m.sender===target?'Reported account':'Other participant',at:m.at,reported:m.id===messageId,text:room.encryption?entry.text:m.text.slice(0,1000),source:room.encryption?'reporter-submitted':'server-confirmed'});}
   context.sort((a,b)=>a.at-b.at);
-  const result=compliance.report(req.account.id,target,room.id,req.body?.reason,req.body?.evidence??'',messageId||null,context,room.encryption?'encrypted direct':room.group?'group':room.support?'support':'direct');
+  let attachment=null;
+  if(req.body?.attachment){
+    const item=req.body.attachment,m=room.messages.find(x=>x.id===messageId&&!x.deleted&&!x.once&&!x.burnSeconds);
+    if(!m||!['image','audio'].includes(m.kind))return res.status(400).json({error:'Reported attachment unavailable.'});
+    const types=m.kind==='image'?['image/jpeg','image/png','image/webp']:['audio/mp4','audio/webm','audio/ogg'];
+    if(!types.includes(item.mime)||typeof item.data!=='string'||item.data.length>Math.ceil(2*1024*1024/3)*4||!/^[A-Za-z0-9+/]+={0,2}$/.test(item.data))return res.status(400).json({error:'Invalid evidence attachment.'});
+    const bytes=Buffer.from(item.data,'base64');if(!bytes.length||bytes.length>2*1024*1024||bytes.toString('base64')!==item.data)return res.status(400).json({error:'Invalid evidence attachment.'});
+    if(!room.encryption&&(!m.media||m.media.mime!==item.mime||!m.media.bytes.equals(bytes)))return res.status(400).json({error:'Evidence does not match the message.'});
+    attachment={messageId:m.id,kind:m.kind,mime:item.mime,body:bytes,source:room.encryption?'reporter-submitted':'server-confirmed',at:m.at};
+  }
+  const result=compliance.report(req.account.id,target,room.id,req.body?.reason,req.body?.evidence??'',messageId||null,context,room.encryption?'encrypted direct':room.group?'group':room.support?'support':'direct',attachment);
   const admin=db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired'").all().map(a=>a.id);push.notify(admin);res.json(result);
 });
 app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json({items:compliance.list(true)});});
+app.get('/api/admin/reports/media/:id',guard('report-media',40,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const media=compliance.media(req.params.id);if(!media)return res.sendStatus(404);res.set('Cache-Control','no-store').type(media.mime).send(Buffer.from(media.body));});
 app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action,req.account.id,req.body?.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
 app.post('/api/admin/reports/reinstate',guard('reinstate',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json(compliance.reinstate(req.body?.target,req.account.id,req.body?.notes??''));});
 const supportAccount = () => db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL").get();
