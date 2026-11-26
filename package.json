@@ -26,7 +26,8 @@
     "admin-support-send": "node --env-file-if-exists=.env scripts/admin-support.mjs send",
     "release:android": "bash scripts/release-android.sh",
     "deploy:oracle": "bash scripts/deploy-oracle.sh",
-    "mobile:update": "bash scripts/update-mobile.sh"
+    "mobile:update": "bash scripts/update-mobile.sh",
+    "publish:release": "bash scripts/publish-release.sh"
   },
   "dependencies": {
     "express": "^5.1.0",
