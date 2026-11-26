@@ -71,6 +71,11 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
 
     public override func load() {
         super.load()
+        if let scrollView = bridge?.webView?.scrollView {
+            scrollView.bounces = false
+            scrollView.alwaysBounceVertical = false
+            scrollView.alwaysBounceHorizontal = false
+        }
         print("[qzu] QzuDevice loaded")
         NotificationCenter.default.addObserver(self, selector: #selector(cover), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(uncover), name: UIApplication.didBecomeActiveNotification, object: nil)
