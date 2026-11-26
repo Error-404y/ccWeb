@@ -4,7 +4,8 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.8.0';
+const installedVersion = window.QZU_APP_VERSION || '0.8.1';
+const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
 const updateReminders = new Map();
@@ -548,6 +549,7 @@ function showLockedEmergency() {
       input.value = '';
       pendingInvite = '';
       roomKeys.clear();
+      roomKeyJobs.clear();
       lock(false);
 
       show('emg.exe', [
@@ -819,10 +821,10 @@ function renderChat() {
   $('composer').hidden = !current || readOnly;
   $('adminComposer').hidden = !readOnly;
   $('deleteChat').hidden = readOnly;
-  $('attachmentMenu').hidden = Boolean(current?.support || current?.encryption || (native && directRoom(current)));
+  $('attachmentMenu').hidden = Boolean(current?.support || ((current?.encryption || (native && directRoom(current))) && !encryptionReady(current)));
   const encryptionStatus = $('encryptionStatus');
   encryptionStatus.hidden = !current;
-  encryptionStatus.textContent = !current ? '' : directRoom(current) && (native || current.encryption) ? encryptionReady(current) ? '🔒 Verified encrypted text' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Encryption key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption' : 'Not end-to-end encrypted';
+  encryptionStatus.textContent = !current ? '' : directRoom(current) && (native || current.encryption) ? encryptionReady(current) ? '🔒 Verified encrypted chat' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Encryption key unavailable' : current.encryptionStatus === 'verify' ? 'Compare safety code' : 'Set up encryption' : 'Not end-to-end encrypted';
   $('threadBadge').hidden = !isAdmin;
   $('threadAvatar').setAttribute('href', isAdmin ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
@@ -850,7 +852,7 @@ function renderChat() {
   $('chatTimer').textContent = clock(current.expires - now);
   updateExpiry(current);
   const container = $('messages');
-  const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.deleted, message.reactions, message.reply, message.burnSeconds, message.burnAt]));
+  const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.deleted, message.reactions, message.reply, message.burnSeconds, message.burnAt, message.encryptedMedia, current.encryptionStatus]));
   const sameRoom = renderedRoom === current.id;
   const appendOnly = sameRoom && renderedMessages.length <= ids.length &&
     renderedMessages.every((id, index) => ids[index] === id);
@@ -972,6 +974,7 @@ function renderMessage(room, message) {
     content.append(open);
   } else if (message.kind === 'image' || message.kind === 'audio') {
     const open = button(message.kind === 'image' ? 'View photo' : 'Play voice message', () => openMedia(room, message), 'media-message');
+    open.disabled = Boolean(room.encryption && !encryptionReady(room));
     content.append(open);
   } else {
     content.append(el('div', 'message-text', message.text));
@@ -1218,6 +1221,7 @@ function purgeExpired() {
 
 function clearVolatile() {
   roomKeys.clear();
+  roomKeyJobs.clear();
   stopTyping();
   clearReply();
   revealedMessages.clear();
@@ -1252,7 +1256,7 @@ async function prepareEncryptedRooms(data) {
     room.encryptionStatus = 'waiting';
     const local = roomKeys.get(room.id), encryption = room.encryption;
     if (local) local.until = Date.now() + Math.max(0, room.expires - data.now);
-    if (!data.capabilities?.encryptedDirect || !encryption || !globalThis.crypto?.subtle) room.encryptionStatus = 'unavailable';
+    if (!data.capabilities?.encryptedDirect || data.capabilities.encryptedProtocol !== 2 || !encryption || !globalThis.crypto?.subtle) room.encryptionStatus = 'unavailable';
     else if (encryption.own && !local) room.encryptionStatus = 'lost';
     else if (local && encryption.own && encryption.peer) {
       try {
@@ -1273,7 +1277,9 @@ async function prepareEncryptedRooms(data) {
     for (const message of room.messages) {
       message.text = message.deleted ? '' : 'Encrypted message — locked';
       message.reply = null;
-      if (message.deleted || !encryptionReady(room) || !message.cipher) continue;
+      if (message.deleted || !encryptionReady(room)) continue;
+      if (message.encryptedMedia) { message.text = 'Encrypted attachment'; continue; }
+      if (!message.cipher) continue;
       const nonce = String(message.mine) + ':' + message.cipher.iv;
       if (seen.has(nonce)) { message.text = 'Duplicate encrypted message'; continue; }
       seen.add(nonce);
@@ -1283,7 +1289,7 @@ async function prepareEncryptedRooms(data) {
   }
 }
 async function showEncryption(room) {
-  if (!native || !state.capabilities?.encryptedDirect || !room.encryption || !globalThis.crypto?.subtle) {
+  if (!native || !state.capabilities?.encryptedDirect || state.capabilities.encryptedProtocol !== 2 || !room.encryption || !globalThis.crypto?.subtle) {
     info('Encryption unavailable', 'Both devices need the current app and compatible encryption support. No plaintext will be sent.');
     return;
   }
@@ -1298,8 +1304,11 @@ async function showEncryption(room) {
       try {
         let key = roomKeys.get(room.id);
         if (!key) {
-          key = await QzuCrypto.generate(room.id, message => devicePlugin.sign({ message }));
-          if (epoch !== authEpoch || !unlockToken) return;
+          if (!roomKeyJobs.has(room.id)) roomKeyJobs.set(room.id, QzuCrypto.generate(room.id, message => devicePlugin.sign({ message })));
+          const job = roomKeyJobs.get(room.id);
+          try { key = await job; } finally { if (roomKeyJobs.get(room.id) === job) roomKeyJobs.delete(room.id); }
+          if (epoch !== authEpoch || !unlockToken || room.expires <= serverNow()) return;
+          key = roomKeys.get(room.id) || key;
           key.until = Date.now() + Math.max(0, room.expires - serverNow());
           roomKeys.set(room.id, key);
         }
@@ -1318,7 +1327,7 @@ async function showEncryption(room) {
   const content = [
     el('p', '', 'Compare the entire safety code in person or through a separate trusted channel. Do not confirm unless every character matches.'),
     el('div', 'fingerprint-code', code.match(/.{1,4}/g).join(' ')),
-    el('p', '', 'Experimental encrypted text. Photos, audio, replies, edits and timed messages are disabled here.'),
+    el('p', '', 'Experimental encrypted text, photos and audio. Replies, edits and timed messages are disabled here.'),
   ];
   if (local.verified !== code || !room.encryption.confirmed) content.push(button('Codes match — verify', async () => {
     try {
@@ -2051,6 +2060,17 @@ function showMedia(room, kind, source, messageId) {
 async function openMedia(room, message) {
   const epoch = authEpoch;
   try {
+    if (room.encryption || (native && directRoom(room))) {
+      if (!encryptionReady(room) || !message.encryptedMedia) throw Error('Verify encryption before opening attachments.');
+      const result = await api('encryption/media/' + encodeURIComponent(room.id) + '/' + encodeURIComponent(message.id));
+      if (result.kind !== message.kind) throw Error('Invalid attachment.');
+      const context = roomKeys.get(room.id)?.context;
+      if (!context) throw Error('Encryption key unavailable.');
+      const blob = await QzuCrypto.decryptMedia(context, message.kind, result.cipher, message.mine);
+      if (epoch !== authEpoch || document.hidden || selected !== room.id || !state.rooms.some(item => item.id === room.id && item.messages.some(m => m.id === message.id && !m.deleted))) return;
+      showMedia(room, message.kind, blob, message.id);
+      return;
+    }
     const response = await transport('/api/media/' + encodeURIComponent(room.id) + '/' + encodeURIComponent(message.id), {
       headers: { 'X-QZU-Unlock': unlockToken }, cache: 'no-store', credentials: 'same-origin', signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
     });
@@ -2084,7 +2104,13 @@ async function openOnceMessage(room, message) {
 
 $('attachmentMenu').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
-  if (!room || room.admin || room.encryption || (native && directRoom(room))) return;
+  if (!room || room.admin) return;
+  if (room.encryption || (native && directRoom(room))) {
+    if (!encryptionReady(room)) { showEncryption(room); return; }
+    resetOnce();
+    show('Encrypted attachments', [button('Photo', () => choosePhoto(room), 'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button'), button('Close', closeModal)]);
+    return;
+  }
   const items = burnSeconds ? [] : [button('Photo', () => choosePhoto(room), 'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
   if (!room.group && !burnSeconds) items.unshift(button(viewOnce ? 'Disable view once' : 'Enable view once', () => {
     viewOnce = !viewOnce;
@@ -2118,9 +2144,16 @@ function blobData(blob) {
 async function sendAttachment(room, kind, blob, once) {
   if (blob.size > 2 * 1024 * 1024 || !blob.size) throw new Error('Attachment must be under 2 MB.');
   const epoch = authEpoch;
-  const data = await blobData(blob);
-  if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden) throw new Error('Chat unavailable.');
-  await api('message', { id: room.id, kind, mime: blob.type.split(';')[0], data, once });
+  if (room.encryption || (native && directRoom(room))) {
+    if (!encryptionReady(room) || once) throw Error('Verified encryption required.');
+    const cipher = await QzuCrypto.encryptMedia(roomKeys.get(room.id).context, kind, blob);
+    if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden || room.expires <= serverNow()) throw Error('Chat unavailable.');
+    await api('encryption/message', { id: room.id, kind, cipher });
+  } else {
+    const data = await blobData(blob);
+    if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden) throw new Error('Chat unavailable.');
+    await api('message', { id: room.id, kind, mime: blob.type.split(';')[0], data, once });
+  }
   resetOnce();
   closeModal();
   await refresh();

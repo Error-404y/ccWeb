@@ -61,7 +61,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use((req, res, next) => express.json({
-  limit: req.path === '/api/message' ? '3mb' : '12kb',
+  limit: ['/api/message', '/api/encryption/message'].includes(req.path) ? '3mb' : '12kb',
   verify: (req, res, buffer) => { req.rawBody = buffer.toString('utf8'); }
 })(req, res, next));
 const cookieName = production ? '__Host-qzu': 'qzu';
@@ -265,7 +265,7 @@ function updateLink(value) {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Experimental verified encryption for direct text chats. Both devices must update and compare safety codes.',
+  notes: 'Experimental encrypted direct chats with photos and voice messages. Both devices must update and compare safety codes.',
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: updateLink(process.env.QZU_ANDROID_UPDATE_URL) }
 }));
 app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
@@ -285,14 +285,18 @@ app.post('/api/encryption/confirm', guard('encryption-confirm', 20, 60000), (req
 });
 app.post('/api/encryption/message', guard('encrypted-send', 80, 60000), (req, res) => {
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
-  res.json({ id: chats.sendEncrypted(req.account.id, req.body?.id, req.body?.cipher) });
+  res.json({ id: chats.sendEncrypted(req.account.id, req.body?.id, req.body?.cipher, req.body?.kind) });
+});
+app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 60000), (req, res) => {
+  if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
+  res.json(chats.getEncryptedMedia(req.account.id, req.params.room, req.params.message));
 });
 app.get('/api/state', (req, res) => {
   const a = req.account;
   chats.markPresent(a.id, Boolean(a.invisible));
   res.json({
     now: Date.now(),
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2 },
     access: accessStatus(a),
     rooms: chats.snapshot(a.id),
     requests: chats.connectionRequests(a.id),
