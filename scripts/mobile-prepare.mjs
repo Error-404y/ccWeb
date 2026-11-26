@@ -51,3 +51,10 @@ if (target === 'ios') {
   writeFileSync(manifest, xml);
 }
 cap('sync', target);
+if (target === 'ios') {
+  const configPath = 'ios/App/App/capacitor.config.json';
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  config.packageClassList = [...new Set([...(config.packageClassList || []), 'QzuDevice'])];
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  console.log('Registered iOS QzuDevice in native plugin configuration.');
+}

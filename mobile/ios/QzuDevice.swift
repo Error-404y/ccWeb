@@ -67,20 +67,21 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
             }
         }
     }
-}
-
-class QzuViewController: CAPBridgeViewController {
     private var privacyCover: UIView?
 
-    override func capacitorDidLoad() {
-        bridge?.registerPluginInstance(QzuDevice())
-        print("[qzu] QzuDevice registered: \(bridge != nil)")
+    public override func load() {
+        super.load()
+        print("[qzu] QzuDevice loaded")
         NotificationCenter.default.addObserver(self, selector: #selector(cover), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(uncover), name: UIApplication.didBecomeActiveNotification, object: nil)
     }
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     @objc private func cover() {
-        guard privacyCover == nil else { return }
+        guard privacyCover == nil, let view = bridge?.viewController?.view else { return }
         let panel = UIView(frame: view.bounds)
         panel.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         panel.backgroundColor = UIColor(red: 0.067, green: 0.082, blue: 0.078, alpha: 1)
@@ -93,3 +94,5 @@ class QzuViewController: CAPBridgeViewController {
         privacyCover = nil
     }
 }
+
+class QzuViewController: CAPBridgeViewController {}
