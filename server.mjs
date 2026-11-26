@@ -369,7 +369,7 @@ function androidUpdateLink() {
 app.get('/api/version', (req, res) => res.json({
   latest: version,
   notes: 'Account deletion, reporting, terms and Google Play distribution controls.',
-  changes: ['Account deletion in app and on the website','Terms of Service and privacy policy','User and message reports with moderator review','Reusable review access','Google Play distribution support'],
+  changes: ['GLITCH.exe startup with readiness-gated PIN','Native-style settings and animated attachment grid','Balanced transitions and microphone recording gestures','Eight reusable admin key slots with explicit logout','Encrypted view-once messages and default private notifications'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
