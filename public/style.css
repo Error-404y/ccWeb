@@ -2437,3 +2437,10 @@ dialog.attachment-sheet{margin:auto auto 0;width:min(100%,480px);max-width:100%;
 @keyframes glitchJump{0%{left:50%;top:46%;transform:translate(-50%,-50%)}12%{left:76%;top:22%;transform:translate(-50%,-50%) skewX(-12deg)}23%{left:24%;top:75%;transform:translate(-50%,-50%)}34%{left:50%;top:46%;transform:translate(-50%,-50%)}42%{left:21%;top:22%;transform:translate(-50%,-50%) skewX(12deg)}52%{left:77%;top:72%;transform:translate(-50%,-50%)}62%{left:50%;top:46%;transform:translate(-50%,-50%) skewX(-10deg)}70%{left:48%;top:47%;transform:translate(-50%,-50%)}78%,100%{left:50%;top:46%;transform:translate(-50%,-50%)}}
 @keyframes glitchNoise{0%,23%,34%,52%,78%,100%{opacity:0}12%,42%,62%,70%{opacity:1}}
 @media(prefers-reduced-motion:reduce){.attachment-tile,dialog.attachment-sheet,.pin-error-motion{animation:none!important}#attachmentMenu{transition:none}}
+
+.attachment-handle{touch-action:none;min-height:8px;cursor:grab}
+#thread>.voice-gesture-panel{padding:12px 16px;border-top:1px solid var(--line);background:var(--surface);animation:tileEnter .2s var(--motion-ease) both}
+.composer.voice-recording textarea,.composer.voice-recording #attachmentMenu,.composer.voice-recording #cameraShortcut,.composer.voice-recording #send{pointer-events:none;opacity:.35}
+.composer.voice-recording #voiceShortcut{color:var(--accent);transform:scale(1.12)}
+.motion-theme{animation:themeFade .18s ease-out both}@keyframes themeFade{from{opacity:.85}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){#thread>.voice-gesture-panel,.motion-theme{animation:none!important}}
