@@ -87,6 +87,13 @@
             <button id="deleteChat" class="icon-button" aria-label="Delete chat" title="Delete chat"><svg><use href="#trash"/></svg></button>
           </header>
           <progress id="expiryProgress" class="expiry-progress" max="1800000" value="1800000" aria-label="Remaining chat lifetime" hidden></progress>
+          <aside id="qzuSafetyNotice" class="qzu-safety-notice" aria-label="Official qzu security notice" hidden>
+            <svg class="qzu-safety-logo" aria-hidden="true"><use href="#logo"/></svg>
+            <div class="qzu-safety-content">
+              <div class="qzu-safety-name"><strong>qzu.</strong><svg class="admin-badge" role="img" aria-label="Verified qzu"><use href="#adminBadge"/></svg></div>
+              <p>We never ask for your PIN or personal information in chats.</p>
+            </div>
+          </aside>
           <div id="messages" class="messages" aria-label="Messages" hidden></div>
           <div id="typingIndicator" class="typing-indicator" hidden><span class="typing-dots"><i></i><i></i><i></i></span><span id="typingLabel"></span></div>
           <div id="replyComposer" class="reply-composer" hidden>

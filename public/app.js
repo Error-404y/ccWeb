@@ -621,6 +621,7 @@ function lock(reopen = true) {
   $('memberCount').hidden = true;
   $('memberCount').textContent = '';
   $('expiryProgress').hidden = true;
+  $('qzuSafetyNotice').hidden = true;
   $('groupInvite').hidden = true;
   revokeToken(old);
   stopCamera();
@@ -762,7 +763,7 @@ function renderChat() {
     list.scrollTop = top;
   }
   $('emptyThread').hidden = Boolean(current);
-  for (const id of ['threadHeader', 'messages']) $(id).hidden = !current;
+  for (const id of ['threadHeader', 'qzuSafetyNotice', 'messages']) $(id).hidden = !current;
 
   const isAdmin = Boolean(current?.admin);
   const readOnly = Boolean(current?.readOnly);

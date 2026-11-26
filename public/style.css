@@ -2074,3 +2074,26 @@ dialog:not(.pin-screen) .modal-body { gap: 14px; }
   .connect-panel { gap: 8px; }
   .settings-row { min-height: 54px; }
 }
+
+
+.qzu-safety-notice {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px clamp(12px, 3vw, 22px);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.qzu-safety-logo {
+  width: 23px;
+  height: 17px;
+  stroke: none;
+  flex-shrink: 0;
+}
+.qzu-safety-content { min-width: 0; display: grid; gap: 2px; }
+.qzu-safety-name { display: flex; align-items: center; gap: 5px; line-height: 1.25; }
+.qzu-safety-name strong { font-size: 12px; font-weight: 700; color: var(--ink); }
+.qzu-safety-name .admin-badge { width: 13px; height: 13px; }
+.qzu-safety-content p { font-size: 11px; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
