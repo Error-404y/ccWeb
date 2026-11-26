@@ -131,7 +131,24 @@ try{for(const [key,item] of outbox){if(epoch!==authEpoch||!unlockToken||!online|
 function markDisconnected(){online=false;liveRevision='';updateConnection();}
 
 const motionAllowed=()=>!matchMedia('(prefers-reduced-motion: reduce)').matches;
-function motion(node,cls){if(!node||!motionAllowed()||document.hidden)return;node.classList.remove(cls);void node.offsetWidth;node.classList.add(cls);node.addEventListener('animationend',event=>{if(event.target===node)node.classList.remove(cls);},{once:true});}
+const motionJobs=new WeakMap();
+function motion(node,cls){
+  if(!node||!motionAllowed()||document.hidden)return;
+  let jobs=motionJobs.get(node);if(!jobs){jobs=new Map();motionJobs.set(node,jobs);}
+  clearTimeout(jobs.get(cls));
+  node.classList.remove(cls);void node.offsetWidth;node.classList.add(cls);
+  const timer=setTimeout(()=>{if(jobs.get(cls)===timer){node.classList.remove(cls);jobs.delete(cls);}},420);
+  jobs.set(cls,timer);
+}
+function animateFromComposer(row){
+  if(!row||!row.isConnected||!motionAllowed()||document.hidden||!row.animate)return;
+  const bubble=row.querySelector('.bubble'),composer=$('composer');
+  if(!bubble||composer.hidden)return;
+  const start=composer.getBoundingClientRect(),end=bubble.getBoundingClientRect();
+  if(!end.width||!end.height)return;
+  const dy=Math.max(0,Math.min(48,start.top-end.top));
+  bubble.animate([{transform:'translateY('+dy+'px) scale(.93)',opacity:.55},{transform:'translateY(0) scale(1)',opacity:1}],{duration:240,easing:'cubic-bezier(.2,.8,.2,1)'});
+}
 function haptic(){if(native&&!document.hidden)devicePlugin.haptic().catch(()=>{});}
 function rememberRoom(){if(typeof selected!=='string'||page!=='chat'||!unlockToken)return;const field=$('message'),view=$('messages');if(field.value)drafts.set(selected,{text:field.value,once:viewOnce,burn:burnSeconds});else drafts.delete(selected);if(renderedRoom===selected&&(!mobile.matches||mobileOpen))scrollMemory.set(selected,{top:view.scrollTop,bottom:view.scrollHeight-view.scrollTop-view.clientHeight<100});}
 function restoreDraft(id){const draft=drafts.get(id);$('message').value=draft?.text||'';resetOnce();if(draft?.once)setOnceMode(true);else if(draft?.burn){burnSeconds=draft.burn;$('attachmentMenu').classList.add('once-active');$('message').placeholder='Timed text · '+burnSeconds+'s';}}
@@ -860,12 +877,13 @@ function renderChat() {
   const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
   $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
+  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
     list.replaceChildren();
-    if (!rooms.length && !savedContacts.length) {
+    if (!state.now){const skeleton=el('div','chat-skeleton');skeleton.setAttribute('aria-hidden','true');for(let i=0;i<5;i++){const line=el('div','skeleton-contact');line.append(el('i'),el('span'),el('b'));skeleton.append(line);}list.append(skeleton);}
+    else if (!rooms.length && !savedContacts.length) {
       const box = el('div', 'empty-list');
       box.append(el('p', '', 'No chats'));
       const a = el('a', 'subtle-link', 'New chat');
@@ -982,7 +1000,7 @@ function renderChat() {
     if(!old||!sameRoom||renderedMessages[index]!==ids[index]){
       row=renderMessage(current,message);
       if(old){const before=old.querySelector('.message-reactions')?.textContent;if(before!==row.querySelector('.message-reactions')?.textContent)motion(row.querySelector('.message-reactions'),'motion-reaction');old.replaceWith(row);}
-      else if(sameRoom)motion(row,'motion-message');
+      else if(sameRoom){motion(row,'motion-message');if(message.mine)requestAnimationFrame(()=>animateFromComposer(row));}
     }
     keep.add(row);if(container.children[index]!==row)container.insertBefore(row,container.children[index]||null);
   });
@@ -994,7 +1012,7 @@ function renderChat() {
       const bubble=el('div','bubble'),content=el('div','message-text',safe?'Encrypted message…':'Message hidden'),footer=el('div','message-footer');
       footer.append(el('span','bubble-time',fmtTime(item.at)),el('span','pending-status'));bubble.append(content,footer);row.append(bubble);
       if(safe)QzuCrypto.decrypt(context,item.payload.cipher,true).then(text=>{if(row.isConnected&&epoch===authEpoch&&unlockToken&&selected===current.id&&!privacyMode&&outbox.get(key)===item&&roomKeys.get(current.id)?.context===context)content.textContent=text;}).catch(()=>{});
-      if(sameRoom&&!oldRows.has(row.id))motion(row,'motion-message');
+      if(sameRoom&&!oldRows.has(row.id)){motion(row,'motion-message');requestAnimationFrame(()=>animateFromComposer(row));}
     }
     row.querySelector('.pending-status').textContent=item.failed?'! Failed':item.accepted?'✓ Sent':'◷ Waiting';keep.add(row);if(row.parentNode!==container)container.append(row);
   }
@@ -1268,7 +1286,7 @@ function renderSettings() {
   if (page !== 'settings') return;
   const requested = location.pathname.split('/')[2] || 'main';
   const category = ['support-requests','admin-feedback'].includes(requested) && !state.supportAgent ? 'main' : requested;
-  for (const panel of document.querySelectorAll('[data-settings-category]')) panel.hidden = panel.dataset.settingsCategory !== category;
+  for (const panel of document.querySelectorAll('[data-settings-category]')) {const hidden=panel.dataset.settingsCategory!==category;const entering=panel.hidden&&!hidden;panel.hidden=hidden;if(entering)motion(panel,'motion-settings');}
   $('settingsBack').href = category === 'main' ? '/chat' : '/settings';
   $('resetPin').disabled = !state.pinState || Boolean(state.resetDelivered) || ['new', 'approved'].includes(state.pinState);
   $('resetLabel').textContent = state.resetDelivered ? 'Reset pending': 'Request Reset';
@@ -1991,7 +2009,8 @@ $('copyCode').addEventListener('click', async() => {
   if (!inv || inv.expires <= serverNow()) return;
   try {
     await navigator.clipboard.writeText(inv.code);
-    info('Copied', inv.code);
+    const control=$('copyCode');control.replaceChildren(svg('check'));control.setAttribute('aria-label','Copied');motion(control,'motion-reaction');haptic();
+    setTimeout(()=>{control.replaceChildren(svg('copy'));control.setAttribute('aria-label','Copy code');},1000);
   } catch {
     info('Your code', inv.code);
   }
@@ -2449,7 +2468,8 @@ $('chatOptions').addEventListener('click', () => {
     return;
   }
   if (room.admin&&!room.support) return;
-  const controls = [el('h3','profile-heading',nameFor(room))];
+  const profileMark=svg(room.group?'groupAvatar':'avatar','profile-transition-mark');
+  const controls = [profileMark,el('h3','profile-heading',nameFor(room))];
   if(room.support){show('Chat options',[button('Report support conversation',()=>showReport(room),'secondary-button'),button('Close',closeModal,'secondary-button')]);return;}
   if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
   if (!room.group) {
@@ -2474,7 +2494,9 @@ $('chatOptions').addEventListener('click', () => {
     for (const member of room.members || []) controls.push(button('Block ' + member, () => confirm(member), 'secondary-button'));
   } else controls.push(button('Block contact', () => confirm(null), 'secondary-button danger-button'));
   controls.push(button('Close', closeModal, 'secondary-button'));
+  const origin=$('profileAvatar').getBoundingClientRect();
   show('Contact information', controls);
+  if(motionAllowed()&&profileMark.animate){const target=profileMark.getBoundingClientRect();if(target.width&&origin.width)profileMark.animate([{transform:'translate('+((origin.left+origin.width/2)-(target.left+target.width/2))+'px,'+((origin.top+origin.height/2)-(target.top+target.height/2))+'px) scale('+origin.width/target.width+')',opacity:.6},{transform:'none',opacity:1}],{duration:260,easing:'cubic-bezier(.2,.8,.2,1)'});}
 });
 
 $('blockedContacts').addEventListener('click', async () => {
@@ -2713,6 +2735,7 @@ function choosePhoto(room,camera=false){
 async function recordVoice(room,gesture=null) {
   const once=viewOnce;
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    if(voiceGesture===gesture)voiceGesture=null;
     info('Voice message', 'Recording is unavailable in this browser.');
     return;
   }
@@ -2725,12 +2748,12 @@ async function recordVoice(room,gesture=null) {
   const stopTracks=()=>{microphone?.getTracks().forEach(track=>track.stop());if(context){context.close().catch(()=>{});context=null;}clearInterval(ticker);clearTimeout(timer);};
   const cleanup=()=>{cancelled=true;stopTracks();if(recorder&&recorder.state!=='inactive')recorder.stop();chunks=[];panel.remove();$('composer').classList.remove('voice-recording');if(recordingCleanup===cleanup)recordingCleanup=null;if(voiceGesture===gesture)voiceGesture=null;};
   const cancel=()=>{cleanup();if(!gesture)closeModal();};
-  const stop=(send=false)=>{if(finished||cancelled)return;instant=send;if(recorder&&recorder.state!=='inactive')recorder.stop();};
+  const stop=(send=false)=>{if(finished||cancelled||!recorder||recorder.state==='inactive')return;instant=send;recorder.stop();};
   const pause=button('Pause',()=>{if(recorder?.state==='recording'){recorder.pause();pausedAt=Date.now();pause.textContent='Resume';}else if(recorder?.state==='paused'){recorder.resume();pausedTotal+=Date.now()-pausedAt;pausedAt=0;pause.textContent='Pause';}},'secondary-button');
-  const preview=button('Preview',()=>stop(false),'secondary-button');
-  const sendNow=button('Send',()=>stop(true));
+  const preview=button('Preview',()=>stop(false),'secondary-button');preview.disabled=true;
+  const sendNow=button('Send',()=>stop(true));sendNow.disabled=true;pause.disabled=true;
   const discard=button('Discard',cancel,'secondary-button');
-  const lock=()=>{locked=true;controls.replaceChildren(discard,pause,preview,sendNow);label.textContent='Recording hands-free';};
+  const lock=()=>{locked=true;controls.replaceChildren(discard,pause,preview,sendNow);label.textContent='Recording hands-free';motion(controls,'motion-page');};
   if(gesture)gesture.session={cancel,lock,send:()=>stop(true)};
   // A modal would make the pointer-capture target inert. Keep hold gestures in the composer.
   if(gesture){$('composer').before(panel);$('composer').classList.add('voice-recording');controls.replaceChildren(discard);label.textContent='Hold · Slide left to cancel · Slide up to lock';}
@@ -2754,12 +2777,12 @@ async function recordVoice(room,gesture=null) {
       const blob=new Blob(chunks,{type:mime});chunks=[];
       if(!blob.size){cleanup();if(!gesture)closeModal();return;}
       panel.remove();$('composer').classList.remove('voice-recording');
-      if(instant){try{await sendAttachment(room,'audio',blob,once);}catch(error){if(epoch===authEpoch&&unlockToken&&!document.hidden)showError(error);}return;}
+      if(instant){try{await sendAttachment(room,'audio',blob,once);return;}catch(error){if(epoch!==authEpoch||!unlockToken||document.hidden||selected!==room.id)return;/* Do not auto-retry: delivery may already have succeeded. */showError(error);return;}}
       const player=el('audio','temporary-media');player.controls=true;
       const send=button(once?'Send once':'Send recording',async()=>{send.disabled=true;try{await sendAttachment(room,'audio',blob,once);}catch(error){send.disabled=false;modalError(error);}});
       show('Voice message',[player,send,button('Discard',closeModal,'secondary-button')]);mediaRoom=room.id;mediaUrl=URL.createObjectURL(blob);player.src=mediaUrl;
     };
-    recorder.start();started=Date.now();if(gesture?.action==='locked')lock();
+    recorder.start();started=Date.now();pause.disabled=false;preview.disabled=false;sendNow.disabled=false;if(gesture?.action==='locked')lock();
     try{const AudioCtx=window.AudioContext||window.webkitAudioContext;if(AudioCtx){context=new AudioCtx();source=context.createMediaStreamSource(microphone);analyser=context.createAnalyser();analyser.fftSize=256;source.connect(analyser);}}catch{}
     ticker=setInterval(()=>{
       if(!active()){cancel();return;}
