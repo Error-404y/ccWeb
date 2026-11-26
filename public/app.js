@@ -194,6 +194,7 @@ function show(title, content, locked = false) {
   modalLocked = locked;
   $('modalClose').hidden = locked;
   $('modalTitle').textContent = title;
+  modal.classList.toggle('pin-screen', native && content.some(node => node.classList?.contains('pin-screen-form')));
   body.replaceChildren(...content);
   if (!modal.open) modal.showModal();
   if (native) $('modalTitle').focus({ preventScroll: true });
@@ -228,7 +229,10 @@ function dialogError(error) {
   let p = body.querySelector('.modal-error');
   if (!p) {
     p = el('p', 'modal-error');
-    body.append(p);
+    p.setAttribute('role', 'alert');
+    const form = body.querySelector('.pin-screen-form');
+    if (form) form.querySelector('.pin-fields').append(p);
+    else body.append(p);
   }
   p.textContent = errorMessage(error);
 }
@@ -299,7 +303,7 @@ function revokeToken(token) {
 }
 
 function pinField(label, placeholder = '6-digit PIN') {
-  const wrap = el('label', '', label), input = el('input', 'pin-input');
+  const wrap = el(native ? 'div' : 'label', native ? 'pin-field' : '', label), input = el('input', 'pin-input');
   input.type = 'password';
   input.inputMode = native ? 'none' : 'numeric';
   input.readOnly = native;
@@ -324,36 +328,63 @@ function pinKeypad(inputs) {
   const pad = el('div', 'pin-keypad');
   pad.setAttribute('role', 'group');
   pad.setAttribute('aria-label', 'PIN keypad');
+  const displays = new Map();
   let active = inputs[0];
-  function select(input) {
-    active = input;
-    for (const field of inputs) field.classList.toggle('pin-selected', field === input);
+
+  function update(field) {
+    const display = displays.get(field);
+    const count = field.value.length;
+    display.setAttribute('aria-label', (field.getAttribute('aria-label') || 'PIN') + ', ' + count + ' of 6 digits entered');
+    display.classList.toggle('pin-selected', field === active);
+    display.setAttribute('aria-pressed', String(field === active));
+    Array.from(display.children).forEach((dot, index) => dot.classList.toggle('filled', index < count));
   }
+
+  function select(field) {
+    active = field;
+    inputs.forEach(update);
+  }
+
   function enter(key) {
     if (!active.isConnected || active.disabled) return;
-    if (key === 'clear') active.value = '';
-    else if (key === 'back') active.value = active.value.slice(0, -1);
-    else if (active.value.length < 6) active.value += key;
-    active.dispatchEvent(new Event('input', { bubbles: true }));
-    if (/^\d$/.test(key) && active.value.length === 6) {
-      const next = inputs[inputs.indexOf(active) + 1];
+    const field = active;
+    if (key === 'clear') field.value = '';
+    else if (key === 'back') field.value = field.value.slice(0, -1);
+    else if (field.value.length < 6) field.value += key;
+    else return;
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    if (/^\d$/.test(key) && field.value.length === 6) {
+      const next = inputs[inputs.indexOf(field) + 1];
       if (next) select(next);
     }
   }
+
+  function hardware(event) {
+    if (!/^\d$/.test(event.key) && !['Backspace', 'Delete'].includes(event.key)) return;
+    event.preventDefault();
+    enter(event.key === 'Backspace' ? 'back' : event.key === 'Delete' ? 'clear' : event.key);
+  }
+
   for (const field of inputs) {
-    field.addEventListener('click', () => select(field));
-    field.addEventListener('focus', () => select(field));
-    field.addEventListener('keydown', event => {
-      if (/^\d$/.test(event.key) || event.key === 'Backspace' || event.key === 'Delete') {
-        event.preventDefault();
-        enter(event.key === 'Backspace' ? 'back' : event.key === 'Delete' ? 'clear' : event.key);
-      }
-    });
+    const display = button('', () => select(field), 'pin-dots');
+    for (let index = 0; index < 6; index++) {
+      const dot = el('span', 'pin-dot');
+      dot.setAttribute('aria-hidden', 'true');
+      display.append(dot);
+    }
+    field.hidden = true;
+    field.tabIndex = -1;
+    displays.set(field, display);
+    field.after(display);
+    field.addEventListener('input', () => update(field));
+    display.addEventListener('focus', () => select(field));
+    display.addEventListener('keydown', hardware);
   }
   for (const key of ['1','2','3','4','5','6','7','8','9','clear','0','back']) {
-    const control = button(key === 'clear' ? 'Clear' : key === 'back' ? '⌫' : key, () => enter(key), 'pin-key');
+    const control = button(key === 'clear' ? 'Clear' : key === 'back' ? '←' : key, () => enter(key), 'pin-key');
     if (key === 'back') control.setAttribute('aria-label', 'Delete last digit');
     if (key === 'clear') control.setAttribute('aria-label', 'Clear PIN');
+    control.addEventListener('keydown', hardware);
     pad.append(control);
   }
   select(active);
@@ -365,14 +396,24 @@ function pinDialog(title, fields, submitLabel, onSubmit, {
   note = '',
   auth = false
 } = {}) {
-  const form = el('form', 'auth-form'), items = fields.map(label => pinField(label));
-  if (note) form.append(el('p', '', note));
-  for (const item of items) form.append(item.wrap);
+  const fullScreen = native && auth;
+  const autoUnlock = fullScreen && fields.length === 1;
+  const form = el('form', 'auth-form' + (fullScreen ? ' pin-screen-form' : '')), items = fields.map(label => pinField(label));
+  const fieldGroup = el('div', 'pin-fields');
+  if (note) fieldGroup.append(el('p', '', note));
+  for (const item of items) fieldGroup.append(item.wrap);
+  form.append(fieldGroup);
   const keypad = pinKeypad(items.map(item => item.input));
   if (keypad) form.append(keypad);
   const submit = el('button', 'primary-button', submitLabel);
   submit.type = 'submit';
   form.append(submit);
+  if (autoUnlock) {
+    submit.hidden = true;
+    items[0].input.addEventListener('input', () => {
+      if (items[0].input.value.length === 6 && !submit.disabled) form.requestSubmit();
+    });
+  }
   if (!locked) form.append(button('Cancel', closeModal, 'secondary-button'));
   const epoch = authEpoch;
   form.addEventListener('submit', async e => {
@@ -384,12 +425,18 @@ function pinDialog(title, fields, submitLabel, onSubmit, {
       return;
     }
     submit.disabled = true;
+    if (native) items.forEach(item => { item.input.disabled = true; });
     try {
       await onSubmit(values);
     } catch (err) {
       if (epoch === authEpoch && body.contains(form)) {
         dialogError(err);
         submit.disabled = false;
+        if (native) items.forEach(item => {
+          item.input.disabled = false;
+          item.input.value = '';
+          item.input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
       }
     }
     finally {
@@ -398,7 +445,8 @@ function pinDialog(title, fields, submitLabel, onSubmit, {
   });
   const brand = el('div', 'auth-brand');
   brand.append(svg('logo', 'wordmark'));
-  show(title, auth ? [brand, form]: [form], locked);
+  if (fullScreen) form.prepend(brand);
+  show(fullScreen && autoUnlock ? 'Enter your PIN' : title, auth && !fullScreen ? [brand, form] : [form], locked);
 }
 
 function showLogin() {
@@ -438,7 +486,8 @@ function showLogin() {
     const emergency = button('emg', showLockedEmergency, 'secondary-button login-emg');
     emergency.prepend(svg('terminal'));
     const form = body.querySelector('.auth-form');
-    form.append(divider, emergency);
+    if (native) form.insertBefore(emergency, form.querySelector('.pin-keypad'));
+    else form.append(divider, emergency);
   }
 }
 
@@ -498,6 +547,7 @@ function showLockedEmergency() {
     } catch (error) {
       if (epoch !== authEpoch || !body.contains(form)) return;
       input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
       check.checked = false;
       cancel.disabled = false;
       updateButton();
@@ -1476,6 +1526,7 @@ $('emergency').addEventListener('click', () => {
     }
     catch (e) {
       pin.value = '';
+      pin.dispatchEvent(new Event('input', { bubbles: true }));
       modalError(e);
       execute.disabled = true;
       if (!native) pin.focus();
