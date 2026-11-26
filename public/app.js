@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.11.2';
+const installedVersion = window.QZU_APP_VERSION || '0.12.0';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -121,9 +121,15 @@ function routeName(path) {
   return path === '/settings' || path.startsWith('/settings/') ? 'settings': path === '/connect' ? 'connect': 'chat';
 }
 
+const drafts=new Map(), scrollMemory=new Map();
+const motionAllowed=()=>!matchMedia('(prefers-reduced-motion: reduce)').matches;
+function motion(node,cls){if(!node||!motionAllowed()||document.hidden)return;node.classList.remove(cls);void node.offsetWidth;node.classList.add(cls);}
+function haptic(){if(native&&!document.hidden)devicePlugin.haptic().catch(()=>{});}
+function rememberRoom(){if(typeof selected!=='string'||page!=='chat'||!unlockToken)return;const field=$('message'),view=$('messages');if(field.value)drafts.set(selected,field.value);else drafts.delete(selected);if(renderedRoom===selected&&(!mobile.matches||mobileOpen))scrollMemory.set(selected,{top:view.scrollTop,bottom:view.scrollHeight-view.scrollTop-view.clientHeight<100});}
+function restoreDraft(id){$('message').value=drafts.get(id)||'';}
 function updatePages() {
   updateNavigation();
-  for (const name of ['chat', 'settings', 'connect']) $(name + 'Page').hidden = !unlockToken || accessDue || termsPending || suspendedAccount || name !== page;
+  for (const name of ['chat', 'settings', 'connect']) {const node=$(name+'Page'),hidden=!unlockToken||accessDue||termsPending||suspendedAccount||name!==page;if(node.hidden&&!hidden)motion(node,'motion-page');node.hidden=hidden;}
   $('loading').hidden = Boolean(unlockToken);
   $('loading').classList.toggle('locked', !unlockToken);
 }
@@ -132,6 +138,7 @@ function navigate(path, push = true) {
   if (push) history.pushState(null, '', path);
   const nextPage = routeName(location.pathname);
   if (page !== nextPage) {
+    rememberRoom();
     resetOnce();
     closeModal();
     stopTyping();
@@ -154,7 +161,7 @@ document.addEventListener('click', e => {
   const url = new URL(a.href);
   if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/'].includes(url.pathname)) return;
   e.preventDefault();
-  if (unlockToken) {if(a.dataset.tab==='chat'){mobileOpen=false;selected=null;renderedRoom=null;}navigate(url.pathname);}
+  if (unlockToken) {if(a.dataset.tab==='chat'){rememberRoom();mobileOpen=false;selected=null;renderedRoom=null;$('message').value='';}navigate(url.pathname);}
 });
 window.addEventListener('popstate', () => navigate(location.pathname, false));
 const fmtTime = ms => new Intl.DateTimeFormat(undefined, {
@@ -619,6 +626,7 @@ function lock(reopen = true) {
   }
   stopCheckout();
   accessDue = false;termsPending=false;suspendedAccount=false;
+  drafts.clear();scrollMemory.clear();
   authEpoch++;
   sequence++;
   const old = unlockToken;
@@ -755,18 +763,19 @@ if (native) {
 
 function selectRoom(id, open = true) {
   if (selected !== id) {
+    rememberRoom();
     if (mediaRoom) closeModal();
     resetOnce();
     stopTyping();
     clearReply();
     revealedMessages.clear();
-    $('message').value = '';
+    restoreDraft(id);
     $('send').disabled = true;
   }
   selected = id;
   mobileOpen = open;
   renderedRoom = null;
-  renderChat();updateNavigation();void acknowledgeMessages();
+  renderChat();if(open&&mobile.matches)motion($('thread'),'motion-thread');updateNavigation();void acknowledgeMessages();
 }
 
 function identityChanged(room) {
@@ -952,16 +961,23 @@ function renderChat() {
   const appendOnly = sameRoom && renderedMessages.length <= ids.length &&
     renderedMessages.every((id, index) => ids[index] === id);
 
-  const follow = !sameRoom || container.scrollHeight - container.scrollTop - container.clientHeight < 100 ||
-    (ids.length > renderedMessages.length && current.messages.at(-1)?.mine);
+  const previousTop=container.scrollTop, remembered=scrollMemory.get(current.id);
+  const follow = (!sameRoom&&(!remembered||remembered.bottom)) || (sameRoom&&container.scrollHeight - container.scrollTop - container.clientHeight < 100 ||
+    (ids.length > renderedMessages.length && current.messages.at(-1)?.mine));
 
-  if (!appendOnly) container.replaceChildren();
-
-  const first = appendOnly ? renderedMessages.length : 0;
-
-  for (const message of current.messages.slice(first)) {
-    container.append(renderMessage(current, message));
-  }
+  if (!sameRoom) container.replaceChildren();
+  const oldRows=new Map([...container.children].map(node=>[node.id,node]));
+  const keep=new Set();
+  current.messages.forEach((message,index)=>{
+    const id='message-'+message.id, old=oldRows.get(id);let row=old;
+    if(!old||!sameRoom||renderedMessages[index]!==ids[index]){
+      row=renderMessage(current,message);
+      if(old){const before=old.querySelector('.message-reactions')?.textContent;if(before!==row.querySelector('.message-reactions')?.textContent)motion(row.querySelector('.message-reactions'),'motion-reaction');old.replaceWith(row);}
+      else if(sameRoom)motion(row,'motion-message');
+    }
+    keep.add(row);if(container.children[index]!==row)container.insertBefore(row,container.children[index]||null);
+  });
+  for(const node of [...container.children])if(!keep.has(node))node.remove();
 
   for (const message of current.messages) {
     if (!message.mine) continue;
@@ -972,7 +988,7 @@ function renderChat() {
 
   renderedRoom = current.id;
   renderedMessages = ids;
-  if (follow) container.scrollTop = container.scrollHeight;
+  if (follow) container.scrollTop = container.scrollHeight;else container.scrollTop=sameRoom?previousTop:remembered?.top||0;
 }
 
 function updateExpiry(room) {
@@ -986,10 +1002,11 @@ function updateExpiry(room) {
 }
 
 function updateStatus(node, status) {
+  const changed=Boolean(node.dataset.status&&node.dataset.status!==status);
   node.dataset.status = status;
   node.title = status === 'read' ? 'Read' : status === 'delivered' ? 'Delivered' : 'Sent';
   node.setAttribute('aria-label', node.title);
-  node.replaceChildren(svg(status === 'sent' ? 'check' : 'doubleCheck'));
+  node.replaceChildren(svg(status === 'sent' ? 'check' : 'doubleCheck'));if(changed)motion(node,'motion-tick');
 }
 
 function attachMessageGesture(bubble,reply,actions){
@@ -1193,11 +1210,13 @@ async function acknowledgeMessages() {
 
 }
 
+let inviteMotionKey='',inviteMotionDuration=1;
+function updateInviteMotion(inv,now=serverNow()){const key=inv?.code+':'+inv?.expires;if(key!==inviteMotionKey){inviteMotionKey=key;inviteMotionDuration=Math.max(1,(inv?.expires||now)-now);}const remaining=inv?Math.max(0,inv.expires-now):0;$('inviteProgress').max=inviteMotionDuration;$('inviteProgress').value=remaining;$('inviteTimer').textContent=inv?clock(remaining):'Generating code…';}
 function renderConnect() {
   if (page !== 'connect' || !unlockToken) return;
   const inv = state.invite && state.invite.expires > serverNow() ? state.invite: null;
   $('inviteCode').textContent = inv?.code || '– – – – – –';
-  $('inviteTimer').textContent = inv ? clock(inv.expires - serverNow()) : 'Generating code…';
+  updateInviteMotion(inv);
   $('copyCode').disabled = !inv;
   const key = inv ? inv.code + ':' + inv.expires: '';
   if (key !== qrKey && key !== qrPending) {
@@ -1217,7 +1236,7 @@ function renderConnect() {
       qrKey = key;
       $('qrImage').src = image;
       $('qrImage').hidden = false;
-      $('qrPlaceholder').setAttribute('hidden', '');
+      $('qrPlaceholder').setAttribute('hidden', '');motion($('qrBox'),'motion-qr');
     }).catch(() => {}).finally(() => {
       if (qrPending === key) qrPending = '';
     });
@@ -1281,14 +1300,14 @@ function purgeExpired() {
     $('chatTimer').textContent = supportClock(room,now);
     updateExpiry(room);
   }
-  if (page === 'connect' && state.invite) $('inviteTimer').textContent = clock(state.invite.expires - now);
+  if (page === 'connect' && state.invite) updateInviteMotion(state.invite,now);
 }
 
 function scrubRemovedRooms(previous,next,clearKeys=true){
   const retained=new Map(next.map(room=>[room.id,room]));
   for(const room of previous){
     const current=retained.get(room.id);
-    if(!current&&clearKeys){roomKeys.delete(room.id);roomKeyJobs.delete(room.id);if(native)roomVault('remove',room.id).catch(()=>{});if(mediaRoom===room.id)closeModal();}
+    if(!current&&clearKeys){drafts.delete(room.id);scrollMemory.delete(room.id);roomKeys.delete(room.id);roomKeyJobs.delete(room.id);if(native)roomVault('remove',room.id).catch(()=>{});if(mediaRoom===room.id)closeModal();}
     const messages=new Map((current?.messages||[]).map(message=>[message.id,message]));
     for(const message of room.messages){
       if(!messages.has(message.id)||messages.get(message.id).deleted){message.text='';message.cipher=null;message.reply=null;message.replyCipher=null;message.encryptedReactions=[];message.reactions=[];message.decrypted=false;revealedMessages.delete(message.id);acknowledgedDelivery.delete(message.id);acknowledgedRead.delete(message.id);}
@@ -1297,6 +1316,7 @@ function scrubRemovedRooms(previous,next,clearKeys=true){
   }
 }
 function clearVolatile() {
+  drafts.clear();scrollMemory.clear();
   scrubRemovedRooms(state.rooms,[]);
   liveRevision='';
   roomKeys.clear();roomKeyJobs.clear();if(native)clearPrivateKeys().catch(()=>{});
@@ -1716,6 +1736,7 @@ $('qzuInfoOpen').addEventListener('click', () => {
 });
 $('qzuInfoBack').addEventListener('click', () => $('backToChats').click());
 $('backToChats').addEventListener('click', () => {
+  rememberRoom();
   resetOnce();
   stopTyping();
   clearReply();
@@ -1725,7 +1746,7 @@ $('backToChats').addEventListener('click', () => {
   renderedRoom = null;
   $('message').value = '';
   $('send').disabled = true;
-  renderChat();
+  renderChat();motion($('chatPage').querySelector('.sidebar'),'motion-page');
 });
 mobile.addEventListener('change', () => {
   if (!mobile.matches) mobileOpen = false;
@@ -1797,7 +1818,7 @@ async function sendMessage() {
     if (epoch !== authEpoch) return;
 
     if (selected === id && $('message').value.trim() === text) {
-      $('message').value = '';
+      $('message').value = '';drafts.delete(id);
       resetOnce();
       clearReply();
       stopTyping();
@@ -1815,7 +1836,7 @@ async function sendMessage() {
 }
 
 $('message').addEventListener('input', () => {
-  updateSendButton();
+  rememberRoom();updateSendButton();
   reportTyping();
 });
 $('cancelReply').addEventListener('click', clearReply);
@@ -1913,7 +1934,7 @@ $('newCode').addEventListener('click', async() => {
   $('newCode').disabled = true;
   try {
     await api('invite', {minutes:Number($('inviteLifetime').value)});
-    await refresh();
+    haptic();await refresh();
   } catch (e) {
     showError(e);
   } finally {
@@ -2049,7 +2070,7 @@ $('scanCode').addEventListener('click', async() => {
             if (code) {
               closeModal();
               $('enterCode').value = code;
-              $('enterCode').focus();
+              haptic();motion($('enterCode'),'motion-tick');$('enterCode').focus();
               return;
             }
           }
@@ -2271,7 +2292,7 @@ $('connectionRequests').addEventListener('click', () => {
 async function reactTo(room, message, emoji) {
   try {
     if(room.encryption){if(!state.capabilities?.encryptedExtras||!encryptionReady(room))throw Error('Encryption unavailable.');const epoch=authEpoch;const value=message.reactions?.some(r=>r.mine&&r.emoji===emoji)?'-':emoji;const cipher=await QzuCrypto.encryptReaction(roomKeys.get(room.id).context,message.id,value);if(epoch!==authEpoch||!unlockToken||document.hidden)throw Error('Locked.');await api('encryption/reaction',{id:room.id,messageId:message.id,cipher});}else await api('message/react', { id: room.id, messageId: message.id, emoji });
-    closeModal();
+    haptic();closeModal();
     await refresh();
   } catch (error) { showError(error); }
 }

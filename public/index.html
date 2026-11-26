@@ -142,9 +142,9 @@
         <div class="page-content">
           <div class="panel connect-panel">
             <h1>Connect</h1>
-            <div id="qrBox" class="qr-box"><img id="qrImage" alt="Your invite QR code" hidden><svg id="qrPlaceholder"><use href="#qr"/></svg></div>
+            <div class="qr-stage"><div class="qr-orbit" aria-hidden="true"></div><div id="qrBox" class="qr-box"><img id="qrImage" alt="Your invite QR code" hidden><svg id="qrPlaceholder"><use href="#qr"/></svg></div><div class="qr-corners" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
             <div class="code-line"><span id="inviteCode">– – – – – –</span><button id="copyCode" class="icon-button" aria-label="Copy code" disabled><svg><use href="#copy"/></svg></button></div>
-            <div id="inviteTimer" class="invite-timer">No active code</div>
+            <progress id="inviteProgress" class="invite-progress" max="1" value="0" aria-label="Remaining connection code lifetime"></progress><div id="inviteTimer" class="invite-timer">No active code</div>
             <div class="invite-actions"><select id="inviteLifetime" aria-label="New code lifetime"><option value="5">5 min</option><option value="10" selected>10 min</option><option value="15">15 min</option></select><button id="newCode" class="primary-button">New code</button></div>
             <div class="separator"></div>
             <form id="connectForm" class="connect-form">
@@ -245,7 +245,7 @@
       </section>
       <nav id="bottomNav" class="bottom-nav" aria-label="Main navigation" hidden><a href="/chat" data-tab="chat"><span class="nav-icon"><svg><use href="#chat"/></svg><span id="navUnread" class="unread-badge" hidden></span></span><span>Chats</span></a><a href="/connect" data-tab="connect"><svg><use href="#qr"/></svg><span>Connect</span></a><a href="/settings" data-tab="settings"><svg><use href="#settings"/></svg><span>Settings</span></a></nav><div id="activityBanner" class="activity-banner" role="status" hidden></div><div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
     </main>
-    <div id="bootSplash" aria-hidden="true"><div class="boot-grid"></div><div class="boot-center"><i></i><i></i><i></i><svg viewBox="0 0 172 110"><path class="boot-chevron" fill="#bd0000" d="M5 5 85 44 85 64 5 105 5 80 55 54 5 30Z"/><rect class="boot-cursor" x="87" y="86" width="80" height="19" fill="#bd0000"/></svg></div><div class="boot-scan"></div><div class="boot-progress"></div></div>
+    <div id="bootSplash" aria-hidden="true"><div class="boot-glow"></div><div class="boot-grid"></div><div class="boot-center"><i></i><i></i><i></i><i class="boot-outer"></i><svg viewBox="0 0 172 110"><path class="boot-chevron" fill="#bd0000" d="M5 5 85 44 85 64 5 105 5 80 55 54 5 30Z"/><rect class="boot-cursor" x="87" y="86" width="80" height="19" fill="#bd0000"/></svg></div><div class="boot-scan"></div><div class="boot-progress"></div></div>
     <dialog id="modal" aria-labelledby="modalTitle">
       <div class="modal-head"><h2 id="modalTitle" tabindex="-1"></h2><button id="modalClose" class="icon-button" aria-label="Close"><svg><use href="#close"/></svg></button></div>
       <div id="modalBody" class="modal-body"></div>

@@ -2355,3 +2355,45 @@ html.booting #bootSplash{display:block}
 html.booting dialog{visibility:hidden}
 .background-pin-note{font-size:12px;color:var(--muted);padding:0 14px 10px;line-height:1.45}
 .composer .media-shortcut{flex:none;width:34px;height:40px;display:grid;place-items:center;color:var(--muted)}.composer .media-shortcut svg{width:22px;height:22px}.composer #voiceShortcut{color:var(--accent)}.media-tile{display:flex;align-items:center;gap:10px;min-height:45px;padding:8px 12px;border-radius:14px;background:var(--hover)}.media-tile svg{width:22px;height:22px}.photo-preview{max-height:38dvh;background:var(--sub)}.media-status{text-align:center;color:var(--muted);font-size:12px}.recording-indicator{color:var(--danger);font-weight:650;font-variant-numeric:tabular-nums}.recording-indicator::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-right:8px;animation:recordPulse 1s infinite alternate}@keyframes recordPulse{to{opacity:.35}}.bubble{animation:messageIn .16s ease-out}@keyframes messageIn{from{opacity:.6;translate:0 3px}to{opacity:1;translate:0 0}}@media(prefers-reduced-motion:reduce){.bubble,.recording-indicator::before{animation:none}}
+
+/* v0.12 Motion: transforms and opacity, no animation on polling */
+:root{--motion-ease:cubic-bezier(.2,.8,.2,1)}
+.motion-page{animation:qzuPage .18s var(--motion-ease) both}
+.motion-thread{animation:qzuThread .28s var(--motion-ease) both}
+.motion-message{animation:qzuMessage .23s var(--motion-ease) both}
+.motion-tick,.motion-reaction{animation:qzuPop .23s var(--motion-ease) both}
+.motion-qr{animation:qzuQr .38s var(--motion-ease) both}
+@keyframes qzuPage{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes qzuThread{from{opacity:.5;transform:translateX(28px)}to{opacity:1;transform:none}}
+@keyframes qzuMessage{from{opacity:0;transform:translateY(9px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes qzuPop{from{opacity:.5;transform:scale(.82)}to{opacity:1;transform:none}}
+@keyframes qzuQr{from{opacity:.35;transform:scale(.94)}to{opacity:1;transform:none}}
+.send-button,.contact,.icon-button,.primary-button,.secondary-button,.reaction-chip{transition:background-color .15s,color .15s,transform .15s var(--motion-ease)}
+.send-button:active:not(:disabled),.icon-button:active:not(:disabled),.reaction-chip:active,.primary-button:active:not(:disabled),.secondary-button:active:not(:disabled){transform:scale(.96)}
+.qr-stage{position:relative;display:grid;place-items:center;justify-self:center;padding:16px;margin:4px auto}
+.qr-stage .qr-box{position:relative;z-index:1;margin:0}
+.qr-orbit{position:absolute;inset:1px;border:1px dashed var(--accent);border-radius:50%;opacity:.35;animation:qzuOrbit 22s linear infinite;pointer-events:none}
+.qr-corners{position:absolute;inset:6px;pointer-events:none}
+.qr-corners i{position:absolute;width:18px;height:18px;border-color:var(--accent);border-style:solid;border-width:0}
+.qr-corners i:nth-child(1){top:0;left:0;border-top-width:2px;border-left-width:2px}
+.qr-corners i:nth-child(2){top:0;right:0;border-top-width:2px;border-right-width:2px}
+.qr-corners i:nth-child(3){bottom:0;left:0;border-bottom-width:2px;border-left-width:2px}
+.qr-corners i:nth-child(4){bottom:0;right:0;border-bottom-width:2px;border-right-width:2px}
+@keyframes qzuOrbit{to{transform:rotate(360deg)}}
+.invite-progress{width:100%;height:3px;appearance:none;border:0;border-radius:3px;overflow:hidden;background:var(--line);accent-color:var(--accent)}
+.invite-progress::-webkit-progress-bar{background:var(--line)}
+.invite-progress::-webkit-progress-value{background:var(--accent);transition:width .25s linear}
+.invite-progress::-moz-progress-bar{background:var(--accent)}
+#bootSplash.boot-running{animation:bootExit .36s 1.55s both}
+.boot-glow{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 46%,#b5000038,transparent 50%);opacity:0}
+.boot-running .boot-glow{animation:ignitionGlow 1.55s both}
+.boot-center .boot-outer{inset:-13px;border:1px solid #b6000035;animation:ignitionOuter 1.4s both}
+.boot-running .boot-center svg{animation:ignitionLogo .85s .16s both}
+.boot-running .boot-center i:nth-child(2),.boot-running .boot-center i:nth-child(3){animation-duration:1.4s}
+.boot-running .boot-progress{animation-duration:1.48s}
+.boot-running .boot-scan{animation-duration:1.2s}
+#bootSplash:not(.boot-running) *{animation-play-state:paused}
+@keyframes ignitionGlow{0%{opacity:0}50%{opacity:1}100%{opacity:.6}}
+@keyframes ignitionOuter{from{opacity:0;transform:scale(.5)}50%{opacity:1}to{opacity:.5;transform:scale(1.08)}}
+@keyframes ignitionLogo{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.motion-page,.motion-thread,.motion-message,.motion-tick,.motion-reaction,.motion-qr,.qr-orbit{animation:none!important}.send-button,.contact,.icon-button,.primary-button,.secondary-button,.reaction-chip{transition:none!important}}
