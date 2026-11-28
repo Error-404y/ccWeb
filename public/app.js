@@ -2009,8 +2009,8 @@ $('deleteChat').addEventListener('click', () => {
   if (!room || room.readOnly) return;
   const leave = room.group && !room.canInvite;
   const requestDeletion = (room.mobileSupport && !room.supportAgent)||(room.peerRole==='admin'&&!state.supportAgent);
-  if (requestDeletion && room.deletionRequested && !room.contact) return info('Deletion requested','Support has received your request.');
-  const confirm = button(requestDeletion ? 'Request deletion' : leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
+  
+  const confirm = button(requestDeletion ? (room.deletionRequested?'Deletion already requested':'Request deletion') : leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
     confirm.disabled = true;
     try {
       const result=await api('chat/delete', {id});
@@ -2023,7 +2023,7 @@ $('deleteChat').addEventListener('click', () => {
       modalError(e);
     }
   }, 'primary-button danger-button');
-  show(requestDeletion ? 'Request deletion?' : leave ? 'Leave group?' : 'Delete chat?', [el('p', '', requestDeletion ? 'Ask support to delete this conversation for both participants.' : leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, ...(room.contact?[button('Delete Contact',()=>showContactManagement(room.contact),'secondary-button')]:[]), button('Cancel', closeModal, 'secondary-button')]);
+  show(requestDeletion ? 'Request deletion?' : leave ? 'Leave group?' : 'Delete chat?', [el('p', '', requestDeletion ? 'Ask support to delete this conversation for both participants.' : leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, ...(room.contact?[button('Delete Contact',()=>showContactManagement(room.contact),'secondary-button')]:room.mobileSupport?[button('Delete Contact',()=>show('Delete contact?',[el('p','',room.supportAgent?'Delete the Support contact and all associated chats for both sides.':'Request removal of the Support contact and associated chats.'),button(room.supportAgent?'Delete Contact':'Request deletion',async()=>{try{const result=await api('support/contact/delete',{id,confirmed:true});closeModal();await refresh();if(result.requested)info('Deletion requested','Support has received your contact deletion request.');}catch(e){modalError(e);}},'primary-button danger-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button')]:[]), button('Cancel', closeModal, 'secondary-button')]);
 });
 try {
   privacyMode = localStorage.getItem('qzu-privacy') === '1';
