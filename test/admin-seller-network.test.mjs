@@ -194,7 +194,7 @@ test('mobile chat header includes the authoritative admin and seller verificatio
  const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8'),app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),css=readFileSync(new URL('../public/style.css',import.meta.url),'utf8');
  assert.match(html,/<div class="thread-name-line"><button id="profileName"[^>]*><span id="threadName">Chat<\/span><\/button><svg id="threadBadge"[^>]*hidden>/);
  assert.equal((html.match(/id="threadBadge"/g)||[]).length,1);
- assert.ok(app.includes("current?.peerRole==='admin'||current?.peerRole==='verified-seller'"));
+ assert.ok(app.includes("$('threadBadge').toggleAttribute('hidden',!(current?.peerRole==='admin'||current?.peerRole==='verified-seller'"));assert.ok(!app.includes("$('threadBadge').hidden ="));
  assert.ok(css.includes('#threadBadge:not([hidden])'));assert.ok(css.includes('#threadBadge[hidden]'));
 });
 test('desktop saved contacts use authenticated role and name without relying on editable nicknames',()=>{
@@ -215,5 +215,5 @@ test('desktop saved contacts use authenticated role and name without relying on 
 test('desktop messenger retains encrypted send and view-once routes with contact search, add and chat header',()=>{
  const js=readFileSync(new URL('../public/desktop-messenger.js',import.meta.url),'utf8'),css=readFileSync(new URL('../public/control.css',import.meta.url),'utf8');
  for(const feature of ["Search contacts","+ Add contact","Saved contacts","Connection request","cc-chat-verified","scrollPositions","cc-chat-composer","QzuCrypto.encrypt(context,text)","api('chats/once/send'","api('chats/confirm'","Contact identity changed"])assert.ok(js.includes(feature),feature);
- assert.ok(css.includes('.cc-chat-verified.seller'));assert.ok(css.includes('.cc-chat-composer'));
+ assert.doesNotThrow(()=>new Function(js));assert.ok(css.includes('.cc-chat-verified.seller'));assert.ok(css.includes('.cc-chat-composer'));
 });
