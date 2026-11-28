@@ -78,7 +78,7 @@ test('new desktop routes sit behind admin auth; mobile ticket UI is integrated',
  const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8'),app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
  const gate=server.indexOf("app.use('/api/control',(req,res,next)=>");
  for(const path of ['/api/control/sellers','/api/control/chats','/api/control/tickets','/api/control/announcements'])assert.ok(server.indexOf("app.get('"+path+"'")>gate);
- assert.ok(html.includes('data-tab="tickets"'));assert.ok(app.includes('QZU-SELLER-'));assert.ok(app.includes('deletedRevision'));
+ assert.ok(html.includes('data-tab="tickets"'));assert.ok(app.includes('QZU-SELLER-'));assert.ok(app.includes('const postsToShow=feed.posts;'));assert.ok(!app.includes('officialHistory'));;
 });
 
 test('multiple sellers, transfer, immediate removal and permanent archive',()=>{
