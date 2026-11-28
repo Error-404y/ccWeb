@@ -104,7 +104,7 @@ const openingOnce = new Set();
 let mediaRoom = null;
 let mediaMessage = null;
 let invisibleSaving = false;
-let mediaUrl = null;
+let mediaUrl = null,controlCleanup=null;
 let recordingCleanup = null;
 const reactions = ['👍', '❤️', '😂', '🔥', '😮', '👎'];
 let privacyMode = false;
@@ -2623,7 +2623,6 @@ $('accentSettings').addEventListener('click', () => {
   show('Accent color', [picker, button('Close', closeModal)]);
 });
 
-let controlCleanup=null;
 function clearMedia() {
   if(controlCleanup){const cleanup=controlCleanup;controlCleanup=null;cleanup();}
   if (recordingCleanup) {
