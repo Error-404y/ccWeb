@@ -426,8 +426,8 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Account deletion, reporting, terms and Google Play distribution controls.',
-  changes: ['GLITCH.exe startup with readiness-gated PIN','Native-style settings and animated attachment grid','Balanced transitions and microphone recording gestures','Eight reusable admin key slots with explicit logout','Encrypted view-once messages and default private notifications'],
+  notes: 'qzu. Control Update: access plans, cryptocurrency checkout, admin dashboard and account recovery.',
+  changes: ['Original startup animation and compact QR Connect page','Four access plans and LTC, BTC and SOL checkout','Mobile and paired desktop Control Center','Verified recovery codes and audited key management','Report snapshots, collaborative moderation and inline attachment menu'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
