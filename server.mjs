@@ -16,6 +16,8 @@ import { contactStore } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
 import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey } from './lib/access.mjs';
+import {initControl,createControlSessions,issueRecovery,recoverAccount,controlOverview,controlAccounts,accountAction,controlPayments,controlAudit} from './lib/control.mjs';
+import {listAccessKeys,generatePlanKeys,replaceUnusedKey,revokeAccessKey} from './lib/access.mjs';
 import {initPayments,COINS,createCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice} from './lib/crypto-payments.mjs';
 import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
@@ -27,7 +29,7 @@ import {complianceStore,TERMS_VERSION} from './lib/compliance.mjs';
 process.umask(0o077);
 const root = dirname(fileURLToPath(import.meta.url));
 const app = express(), db = openAccounts();
-initAccess(db);initPayments(db);
+initAccess(db);initPayments(db);initControl(db);
 initDevices(db);
 initActivity(db);
 pruneActivity(db);
@@ -44,6 +46,7 @@ let liveTotal=0;
 const contacts = contactStore(db);
 chats.contacts = contacts;
 const unlocks = new Unlocks(), sendingResets = new Map();
+const controlSessions=createControlSessions(db);
 const production = process.env.NODE_ENV === 'production';
 if (production && !process.env.PUBLIC_ORIGIN) throw new Error('Set PUBLIC_ORIGIN to your HTTPS origin.');
 const publicOrigin = process.env.PUBLIC_ORIGIN;
@@ -120,6 +123,7 @@ app.use('/api', (req, res, next) => {
     if (!req.deviceId) return res.status(401).json({ error: 'Device verification failed.' });
     req.account = findDeviceAccount(db, req.deviceId);
   } else {
+    if (req.path==='/control'||req.path.startsWith('/control/')) { next(); return; }
     if (mobileOnly) return res.status(403).json({ error: 'Use the qzu. mobile app.' });
     req.account = findAccount(db, readToken(req));
     if (req.account?.device_id) return res.status(403).json({ error: 'Use your registered device.' });
@@ -187,6 +191,46 @@ app.post('/api/access/renew', paymentRate('renewal', 10), (req, res) => {
   res.json(applyRenewal(db, req.body?.key, req.account.id));
 });
 
+const controlCookie=production?'__Host-qzu-control':'qzu-control';
+const readControl=req=>req.headers.cookie?.split(';').map(x=>x.trim()).find(x=>x.startsWith(controlCookie+'='))?.slice(controlCookie.length+1);
+const controlCookieOptions={httpOnly:true,secure:production,sameSite:'strict',path:'/'};
+const controlRate=(req,res,next)=>rate('control:'+req.ip,120,60000)?next():res.status(429).json({error:'Try again shortly.'});
+app.post('/api/control/exchange',controlRate,(req,res)=>{
+ if(req.deviceId||!rate('pair:'+req.ip,8,60000))return res.status(403).json({error:'Pairing unavailable.'});
+ const result=controlSessions.exchange(req.body?.code);
+ res.cookie(controlCookie,result.token,{...controlCookieOptions,maxAge:8*3600000});res.json({ok:true});
+});
+app.use('/api/control',(req,res,next)=>{
+ if(req.deviceId){
+  const a=req.account;if(!a||a.access_plan!=='admin'||a.pin_state==='retired'||!accessStatus(a).active||(a.suspended&&(!a.suspended_until||a.suspended_until>Date.now()))||!unlocks.check(a.id,req.get('x-qzu-unlock')))return res.status(403).json({error:'Admin unlock required.'});
+ }else{req.account=controlSessions.check(readControl(req));if(!req.account)return res.status(401).json({error:'Pair this browser using your admin phone.'});}
+ if(!rate('control-admin:'+req.account.id,120,60000))return res.status(429).json({error:'Try again shortly.'});
+ next();
+});
+app.post('/api/control/pair',controlRate,(req,res)=>{if(!req.deviceId)return res.sendStatus(403);res.json(controlSessions.issue(req.account.id,req.deviceId,req.body?.pin));});
+app.post('/api/control/logout',(req,res)=>{if(req.deviceId)controlSessions.revokeAccount(req.account.id);else controlSessions.revoke(readControl(req));res.clearCookie(controlCookie,controlCookieOptions);res.json({ok:true});});
+app.get('/api/control/overview',(req,res)=>res.json(controlOverview(db)));
+app.get('/api/control/accounts',(req,res)=>res.json({items:controlAccounts(db,req.query.q||'',req.query.after||'')}));
+app.get('/api/control/keys',(req,res)=>res.json({items:listAccessKeys(db,req.query.q||'')}));
+app.post('/api/control/keys/generate',(req,res)=>res.json(generatePlanKeys(db,req.body?.plan,req.body?.count,req.account.id)));
+app.post('/api/control/keys/replace',(req,res)=>res.json(replaceUnusedKey(db,req.body?.id,req.account.id)));
+app.post('/api/control/keys/revoke',(req,res)=>res.json(revokeAccessKey(db,req.body?.id,req.account.id,req.body?.reason)));
+app.post('/api/control/accounts/action',(req,res)=>{const b=req.body||{},result=accountAction(db,b.id,req.account.id,b.action,b.reason,b.plan);if(b.action==='revoke'){unlocks.revokeAll(b.id);push.remove(b.id);chats.hidePresence(b.id);}res.json(result);});
+app.get('/api/control/payments',(req,res)=>res.json({items:controlPayments(db)}));
+app.get('/api/control/audit',(req,res)=>res.json({items:controlAudit(db)}));
+app.get('/api/control/reports',(req,res)=>res.json({items:compliance.list(true)}));
+app.get('/api/control/reports/media/:id',(req,res)=>{const m=compliance.media(req.params.id);if(!m)return res.sendStatus(404);res.set('Cache-Control','no-store').type(m.mime).send(Buffer.from(m.body));});
+app.post('/api/control/reports/collaborate',(req,res)=>{const b=req.body||{},result=compliance.collaborate(b.id,req.account.id,b.status,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
+app.post('/api/control/reports/resolve',(req,res)=>{const b=req.body||{},result=compliance.resolve(b.id,b.action,req.account.id,b.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
+app.get('/api/control/feedback',(req,res)=>res.json({items:feedback.list(true,req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before))}));
+app.post('/api/control/feedback/status',(req,res)=>{const b=req.body||{},result=feedback.status(true,b.id,b.status,req.account.id,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
+app.use('/api/control',(req,res)=>res.status(404).json({error:'Unknown control endpoint.'}));
+app.post('/api/access/recover',paymentRate('recover',5),(req,res)=>{
+ if(!req.deviceId||req.account||req.body?.confirmed!==true)return res.status(403).json({error:'Unregistered mobile device and confirmation required.'});
+ const result=recoverAccount(db,req.body?.code,req.body?.pin,req.deviceId);
+ unlocks.revokeAll(result.id);push.remove(result.id);prekeys.remove(result.id);chats.erase(result.id);chats.hidePresence(result.id);
+ res.json({ok:true,needsSetup:false});
+});
 app.post('/api/session', (req, res) => {
   if (!req.account) {
     if(compliance.suspended(req.deviceId))return res.status(403).json({error:'Device access suspended.'});
@@ -271,7 +315,7 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
   res.json({ ok: true });
 });
 
-function deleteAccount(id){
+function deleteAccount(id){controlSessions.revokeAccount(id);
   chats.erase(id);prekeys.remove(id);compliance.purge(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
 }
 app.use('/api',(req,res,next)=>{
@@ -289,8 +333,9 @@ app.post('/api/admin/logout',guard('admin-logout',5,60000),(req,res)=>{
   db.prepare('DELETE FROM blocks WHERE owner=? OR target=?').run(a.id,a.id);
   db.prepare('DELETE FROM security_activity WHERE owner=?').run(a.id);
   db.prepare('UPDATE accounts SET deletion_hash=NULL,terms_version=0 WHERE id=?').run(a.id);
-  res.json(releaseSupportKey(db,a.id));
+  controlSessions.revokeAccount(a.id);res.json(releaseSupportKey(db,a.id));
 });
+app.post('/api/account/recovery-code',guard('recovery-code',5,60000),(req,res)=>res.json(issueRecovery(db,req.account.id,req.body?.pin)));
 app.post('/api/account/deletion-code',guard('deletion-code',5,60000),(req,res)=>res.json({code:compliance.deletionCode(req.account.id)}));
 app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(req,res)=>{
   if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});
@@ -675,6 +720,8 @@ app.get('/downloads/' + apkName, (req, res) => {
   if (!existsSync(apkPath)) return res.sendStatus(404);
   res.download(apkPath, apkName);
 });
+app.get('/control',(req,res)=>res.sendFile(resolve(root,'public/control.html')));
+app.get(['/control.js','/control.css'],(req,res)=>res.sendFile(resolve(root,'public',req.path.slice(1))));
 app.use((req, res, next) => {
   if (!mobileOnly) return next();
   if (req.path === '/') return res.type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu.</title><h1>qzu.</h1><p>Mobile app only.</p></html>');
