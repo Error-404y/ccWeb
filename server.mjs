@@ -458,8 +458,8 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'qzu. Control Update: access plans, cryptocurrency checkout, admin dashboard and account recovery.',
-  changes: ['Original startup animation and compact QR Connect page','Four access plans and LTC, BTC and SOL checkout','Mobile and paired desktop Control Center','Verified recovery codes and audited key management','Report snapshots, collaborative moderation and inline attachment menu'],
+  notes: 'qzu. Fluid Update: compact checkout, persistent payment tickets and smoother keyboard transitions.',
+  changes: ['Compact checkout and native-network payment quotes','Persistent payment-support tickets and proof uploads','Admin ticket review, completion and rejection','Verified activation-key delivery','Keyboard viewport anchoring and smoother chat layout'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
