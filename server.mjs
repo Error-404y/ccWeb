@@ -56,7 +56,7 @@ const unlocks = new Unlocks(), sendingResets = new Map();
 const controlSessions=createControlSessions(db),auditLedger=adminAudit(db);
 const sellers=sellerStore(db);chats.sellerInvites=sellers;chats.profileRole=id=>sellers.role(id);sellers.sync(chats);
 const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN support_keys k ON k.account=a.id WHERE a.id=? AND a.access_plan='admin' AND a.access_revoked=0 AND (a.suspended=0 OR a.suspended_until<=?) AND k.expires>?").get(id,Date.now(),Date.now()));
-const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
+const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.adminAccount=id=>desktopChats.role(id)==='admin'?desktopChats.principal(id).admin:chats.profileRole(id)==='admin'?id:null;chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
 const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id),name:id=>sellers.name(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
 const notifyHelp=(id,actor)=>push.notify(helpTickets.recipients(id).filter(x=>x!==actor));
 const production = process.env.NODE_ENV === 'production';
@@ -495,9 +495,10 @@ const supportAccount=(user=null)=>{
   return agents.sort((a,b)=>load(a.id)-load(b.id)||a.id.localeCompare(b.id))[0];
 };
 app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
+  const existing=contacts.list(req.account.id).find(c=>chats.profileRole(contacts.peer(req.account.id,c.id))==='admin');if(existing)return res.json({id:chats.openContact(req.account.id,existing.id)});
   const agent=supportAccount(req.account.id);
   if(!agent||agent.id===req.account.id)return res.status(404).json({error:'Support unavailable.'});
-  res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
+  const before=chats.supportConversation(req.account.id,agent.id);const id=chats.openMobileSupport(req.account.id,agent.id);if(!before)push.notify([agent.id]);res.json({id});
 });
 app.post('/api/support/delete',guard('support-delete',20,60000),(req,res)=>{if(req.account.access_plan!=='admin'||req.body?.confirmed!==true)return res.status(403).json({error:'Confirmed support admin required.'});const result=approveDeletion(req.account.id,req.body.id);auditLedger.record(req.account.id,'mobile','support/delete','support',req.body.id);res.json(result);});
 app.post('/api/support/respond', guard('support-respond', 40, 60000), (req,res) => {
@@ -592,7 +593,7 @@ function stateData(a) {
     supportDeletions:a.access_plan==='admin'?deletionInbox(a.id):[],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
     rooms: chats.snapshot(a.id),
-    contacts: contacts.list(a.id).map(c=>({...c,peerRole:chats.profileRole(contacts.peer(a.id,c.id)),peerName:chats.profileName(contacts.peer(a.id,c.id))})),
+    contacts: contacts.list(a.id).map(c=>({...c,peerRole:chats.profileRole(contacts.peer(a.id,c.id)),peerAdmin:chats.adminAccount(contacts.peer(a.id,c.id)),peerName:chats.profileName(contacts.peer(a.id,c.id))})),
     requests: chats.connectionRequests(a.id),
     invite: chats.ensureInvite(a.id),
     pinState: a.pin_state,
