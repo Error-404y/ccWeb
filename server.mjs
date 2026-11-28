@@ -569,7 +569,7 @@ function stateData(a) {
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
     rooms: chats.snapshot(a.id),
-    contacts: contacts.list(a.id),
+    contacts: contacts.list(a.id).map(c=>({...c,peerRole:chats.profileRole(contacts.peer(a.id,c.id))})),
     requests: chats.connectionRequests(a.id),
     invite: chats.ensureInvite(a.id),
     pinState: a.pin_state,
