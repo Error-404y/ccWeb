@@ -11,8 +11,8 @@ const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
 const updateReminders = new Map();
-let officialDeleteRevision=null,ticketEpoch=0,ticketSelected=null,ticketMode='list',ticketBusy=false,ticketPolling=false,ticketLast='',ticketDraft='',ticketPending=null;
-let officialReadJob=null,officialRenderKey='',liveRevision='',officialHistory=[],manualRefreshes=0,pushRegistration=null,pushEpoch=-1;
+let ticketEpoch=0,ticketSelected=null,ticketMode='list',ticketBusy=false,ticketPolling=false,ticketLast='',ticketDraft='',ticketPending=null;
+let officialReadJob=null,officialRenderKey='',liveRevision='',manualRefreshes=0,pushRegistration=null,pushEpoch=-1;
 
 async function transport(path, options = {}) {
   if (!native) return fetch(path, options);
@@ -662,7 +662,7 @@ function lock(reopen = true) {
   authEpoch++;
   sequence++;
   const old = unlockToken;
-  clearUserTicketUI();officialDeleteRevision=null;
+  clearUserTicketUI();
   unlockToken = null;roomKeys.clear();roomKeyJobs.clear();keyPruneSignature='';nextCryptoRetry=0;nextPrekeyAttempt=0;lastBadge=-1;clearTimeout(activityTimer);$('activityBanner').hidden=true;
   pendingUpdate = null;
   nextUpdateCheck = 0;
@@ -691,7 +691,7 @@ function lock(reopen = true) {
   $('extensionNotice').hidden = true;
   $('supportOpen').hidden = true;
   $('qzuInfoChannel').hidden = true;
-  $('officialUnread').hidden=true;$('officialPosts').replaceChildren();$('officialMessage').value='';$('officialSend').disabled=true;$('officialComposer').hidden=true;officialRenderKey='';officialHistory=[];$('officialOlder').hidden=true;liveRevision='';pushRegistration=null;pushEpoch=-1;
+  $('officialUnread').hidden=true;$('officialPosts').replaceChildren();$('officialMessage').value='';$('officialSend').disabled=true;$('officialComposer').hidden=true;officialRenderKey='';liveRevision='';pushRegistration=null;pushEpoch=-1;
   $('qzuInfoOpen').classList.remove('active');
   $('qzuInfoOpen').setAttribute('aria-pressed', 'false');
   $('groupInvite').hidden = true;
@@ -863,7 +863,7 @@ let lastBadge=-1,activityTimer=null;
 function syncBadge(count){if(pushOptedOut())count=0;if(!native||window.Capacitor.getPlatform()!=='ios'||lastBadge===count)return;lastBadge=count;devicePlugin.setBadge({count}).catch(()=>{lastBadge=-1;});}
 function showActivityBanner(message='New message'){if(pushOptedOut()&&message==='New message')return;const banner=$('activityBanner');banner.textContent=message;banner.hidden=false;clearTimeout(activityTimer);activityTimer=setTimeout(()=>{banner.hidden=true;},2400);}
 function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m.unread===true).length;}
-function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+(state.official?.unread?1:0);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
+function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+QzuSimplicity.unreadCount(state.official);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
   $('supportOpen').hidden=!state.supportAvailable || state.rooms.some(room=>(room.peerRole==='admin'||room.mobileSupport&&!room.supportAgent)&&room.expires>serverNow())||(state.contacts||[]).some(c=>c.peerRole==='admin'&&c.deleteAt>serverNow());
@@ -1334,7 +1334,6 @@ function renderConnect() {
 }
 
 $('sellerProfileSettings').addEventListener('click',()=>{if(!state.seller)return;const field=el('input','nickname-input');field.value=state.sellerName||'Seller';field.maxLength=40;field.setAttribute('aria-label','Seller display name');const save=button('Save',async()=>{save.disabled=true;try{await api('sellers/profile',{name:field.value.trim()});closeModal();await refresh();}catch(e){modalError(e);save.disabled=false;}});show('Seller profile',[el('p','',state.sellerVerified?'Verified seller':'Unverified seller'),field,save,button('Close',closeModal,'secondary-button')]);});
-$('sellerDirectorySettings').addEventListener('click',async()=>{if(!state.seller)return;try{const result=await api('sellers/directory');const list=el('div','request-list');for(const p of result.items){const row=el('div','request-item'),name=el('strong','',p.name);if(p.verified)name.append(svg('sellerBadge','admin-badge'));const connect=button('Connect',async()=>{connect.disabled=true;try{const r=await api('sellers/connect',{id:p.id});closeModal();await refresh();navigate('/chat');if(r.id)selectRoom(r.id);else info('Request sent','Awaiting approval.');}catch(e){modalError(e);connect.disabled=false;}},'secondary-button');row.append(name,connect);list.append(row);}if(!result.items.length)list.append(el('p','','No other active sellers.'));show('Seller directory',[list,button('Close',closeModal,'secondary-button')]);}catch(e){showError(e);}});
 $('adminControlCenter').addEventListener('click',()=>{
  if(!native||!unlockToken||!state.supportAgent||!window.QzuControl)return;
  const epoch=authEpoch,root=el('div','cc-native-panel');
@@ -1359,9 +1358,10 @@ function renderSettings() {
   $('privateNotifications').disabled=!unlockToken||Boolean(pushRemovalJob||pushRegisterJob);
   $('pushStatus').textContent=pushOptedOut()?'Message notifications are off.':state.push?.registered?'Message notifications are enabled.':native&&window.Capacitor.getPlatform()==='ios'?'In-app alerts enabled. Remote delivery depends on Apple push configuration.':'Allow notifications in your device settings if prompted.';
   $('writeSupport').disabled = !unlockToken;
+  updateAccessDisplay();
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('recoverySettings').hidden=Boolean(state.supportAgent)||!native;
-  $('sellerProfileSettings').hidden=!state.seller;$('sellerDirectorySettings').hidden=!state.seller;$('sellerProfileStatus').textContent=state.sellerVerified?'Verified':'Unverified';
+  $('sellerProfileSettings').hidden=!state.seller;$('sellerProfileStatus').textContent=state.sellerVerified?'Verified':'Unverified';
   $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
   $('userInterfaceHeading').hidden=!state.supportAgent;
   $('adminInboxCount').textContent=state.supportAgent?String(new Set([...(state.supportRequests||[]),...(state.supportDeletions||[])].map(r=>r.id)).size):'';
@@ -1407,6 +1407,7 @@ function purgeExpired() {
     updateExpiry(room);
   }
   if (page === 'connect' && state.invite) updateInviteMotion(state.invite,now);
+  if(page==='settings'||$('accessRemaining'))updateAccessDisplay();
 }
 
 function scrubRemovedRooms(previous,next,clearKeys=true){
@@ -1695,7 +1696,6 @@ function showDeletionCode(){
 }
 $('logout').addEventListener('click',showDeleteAccount);
 $('deleteAccount').addEventListener('click',showDeleteAccount);
-$('externalDeletion').addEventListener('click',showDeletionCode);
 $('termsPolicy').addEventListener('click',()=>openLegal('/terms'));
 $('changeLogin').addEventListener('click', () => {
   pinDialog('Change login PIN', ['Current PIN', 'New PIN', 'Confirm PIN'], 'Save', async values => {
@@ -1814,15 +1814,14 @@ async function confirmSupport() {
 }
 $('supportOpen').addEventListener('click',confirmSupport);
 $('writeSupport').addEventListener('click',confirmSupport);
+function renderOfficialUnread(feed){const n=QzuSimplicity.unreadCount(feed),badge=$('officialUnread');badge.hidden=!n;badge.textContent=n>99?'99+':String(n);badge.setAttribute('aria-label',n+' unread announcements');}
 function renderOfficial(open){
   const feed=state.official||{posts:[],latest:0,seen:0,unread:false};
-  if(officialDeleteRevision!==null&&feed.deletedRevision!==officialDeleteRevision)officialHistory=[];officialDeleteRevision=feed.deletedRevision??null;
-  $('officialUnread').hidden=!feed.unread;
+  renderOfficialUnread(feed);
   $('officialComposer').hidden=!state.supportAgent;
   $('officialReadOnly').hidden=Boolean(state.supportAgent);
   if(!open)return;
-  const postsToShow=[...new Map([...officialHistory,...feed.posts].map(post=>[post.id,post])).values()].sort((a,b)=>a.id-b.id);
-  $('officialOlder').hidden=!(postsToShow[0]?.id>1);
+  const postsToShow=feed.posts;
   const key=JSON.stringify(postsToShow);
   if(key!==officialRenderKey){
     officialRenderKey=key;
@@ -1830,27 +1829,20 @@ function renderOfficial(open){
     for(const post of postsToShow){
       const article=el('article','official-post');
       const head=el('div','official-post-title');
-      head.append(svg('supportAvatar','ticket-admin-avatar'),el('strong','','qzu-Support'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));if(state.supportAgent)head.append(button('⋯',()=>show('Announcement',[button('Delete for everyone',async()=>{try{await api('official/delete',{id:post.id});officialHistory=officialHistory.filter(p=>p.id!==post.id);closeModal();await refresh();}catch(e){showError(e);}},'danger-button primary-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
+      head.append(svg('supportAvatar','ticket-admin-avatar'),el('strong','','qzu-Support'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));if(state.supportAgent)head.append(button('⋯',()=>show('Announcement',[button('Delete for everyone',async()=>{try{await api('official/delete',{id:post.id});closeModal();await refresh();}catch(e){showError(e);}},'danger-button primary-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
       article.append(head,el('p','official-text',post.text));posts.append(article);
     }
   }
-  if(feed.unread&&canReadCurrent()&&!officialReadJob){
+  if(QzuSimplicity.unreadCount(feed)&&canReadCurrent()&&!officialReadJob){
     const epoch=authEpoch,latest=feed.latest;
     officialReadJob=api('official/read',{id:latest},true).then(()=>{
       if(epoch!==authEpoch||!state.official)return;
       state.official.seen=Math.max(state.official.seen,latest);
       state.official.unread=state.official.latest>state.official.seen;
-      $('officialUnread').hidden=!state.official.unread;
+      state.official.unreadCount=QzuSimplicity.unreadCount(state.official);renderOfficialUnread(state.official);updateNavigation();
     }).catch(()=>{}).finally(()=>{officialReadJob=null;});
   }
 }
-$('officialOlder').addEventListener('click',async()=>{
-  const older=$('officialOlder'),first=Math.min(...[...officialHistory,...(state.official?.posts||[])].map(post=>post.id));
-  if(!Number.isFinite(first)||first<=1)return;
-  older.disabled=true;const epoch=authEpoch;
-  try{const result=await api('official/history?before='+first);if(epoch!==authEpoch||!unlockToken||result.deletedRevision!==undefined&&result.deletedRevision!==officialDeleteRevision)return;officialHistory=[...result.posts,...officialHistory];renderOfficial(selected===officialChannel);if(!result.posts.length)older.hidden=true;}
-  catch(error){if(epoch===authEpoch)showError(error);}finally{older.disabled=false;}
-});
 $('officialMessage').addEventListener('input',()=>{$('officialSend').disabled=!$('officialMessage').value.trim();});
 $('officialComposer').addEventListener('submit',event=>{
   event.preventDefault();
@@ -1880,8 +1872,9 @@ $('backToChats').addEventListener('click', () => {
   renderedRoom = null;
   $('message').value = '';
   $('send').disabled = true;
-  updateConnection();renderChat();motion($('chatPage').querySelector('.sidebar'),'motion-page');
+  updateConnection();renderChat();motion($('chatPage').querySelector('.sidebar'),'motion-page');updateNavigation();
 });
+QzuSimplicity.attachEdgeBack($('thread'),{current:()=>unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!modal.open&&!document.hidden&&page==='chat'&&mobile.matches&&mobileOpen&&selected?selected:null,close:()=>$('backToChats').click()});
 mobile.addEventListener('change', () => {
   if (!mobile.matches) mobileOpen = false;
   renderChat();
@@ -3458,15 +3451,17 @@ function showPaymentTicket(secret,renewal,fresh=false){
  notice.addEventListener('click',tick);resumeCheckout=tick;tick();
 }
 
+function updateAccessDisplay(){
+ const v=QzuSimplicity.accessSummary(state.access,serverNow()),row=$('accessSettingsSummary');
+ const text=v.plan==='Unavailable'?'':v.plan;if(row.textContent!==text)row.textContent=text;
+ const remaining=$('accessRemaining'),status=$('accessStatusLabel');if(remaining&&remaining.textContent!==v.remaining)remaining.textContent=v.remaining;if(status&&status.textContent!==v.status){status.textContent=v.status;status.dataset.state=v.status;}
+}
 $('accessSettings').addEventListener('click', () => {
-  const access = state.access;
-  if (!access || !['monthly','week','month','year'].includes(access.plan)) {
-    info('qzu-Access', 'Lifetime or existing account access.');
-    return;
-  }
-  if(playBuild){info('qzu-Access','Existing access until '+new Date(access.paidUntil).toLocaleDateString()+'.');return;}
-  const date = new Date(access.paidUntil).toLocaleDateString();
-  show('qzu-Access', [el('p', '', 'Paid through ' + date), el('p', '', 'Renew with any of the four USD access plans or a valid renewal key.'), button('Renew access', showRenewal), button('Close', closeModal, 'secondary-button')]);
+ const v=QzuSimplicity.accessSummary(state.access,serverNow()),panel=el('div','access-summary-panel'),remaining=el('strong','access-summary-value',v.remaining),status=el('span','access-summary-status',v.status);
+ remaining.id='accessRemaining';status.id='accessStatusLabel';status.dataset.state=v.status;
+ panel.append(el('span','access-summary-caption','Current access plan'),el('strong','access-summary-plan',v.plan),el('span','access-summary-caption','Remaining access'),remaining,el('span','access-summary-caption','Status'),status);
+ const controls=[panel];if(v.timed&&Number.isFinite(state.access?.paidUntil))controls.push(el('p','','Paid through '+new Date(state.access.paidUntil).toLocaleDateString()));
+ if(v.timed&&!playBuild)controls.push(button('Renew access',showRenewal));controls.push(button('Close',closeModal,'secondary-button'));show('qzu-Access',controls);
 });
 
 function clearUserTicketUI(){ticketEpoch++;ticketSelected=null;ticketMode='list';ticketBusy=false;ticketPolling=false;ticketLast='';ticketDraft='';ticketPending=null;$('userTicketContent').replaceChildren();}
