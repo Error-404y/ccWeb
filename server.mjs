@@ -18,7 +18,7 @@ import { openAccounts, createAccount, findAccount, issuePin, usePin, requestRese
 import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey } from './lib/access.mjs';
 import {initControl,createControlSessions,issueRecovery,recoverAccount,controlOverview,controlAccounts,accountAction,controlPayments,controlAudit} from './lib/control.mjs';
 import {listAccessKeys,generatePlanKeys,replaceUnusedKey,revokeAccessKey} from './lib/access.mjs';
-import {initPayments,COINS,createCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice,verifyNetwork} from './lib/crypto-payments.mjs';
+import {initPayments,COINS,createCryptoInvoice,existingCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice,verifyNetwork} from './lib/crypto-payments.mjs';
 import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
@@ -153,11 +153,11 @@ setInterval(paymentLoop, 15_000).unref();
 async function checkoutQR(invoice,row){
  if(invoice.state!=='pending')return null;
  if(row.coin)return QRCode.toDataURL(paymentURI(row),{width:320,margin:3});
- return QRCode.toDataURL('litecoin:'+invoice.address,{width:320,margin:3});
+ return null;
 }
 app.get('/api/access/methods',paymentRate('methods',30),(req,res)=>res.json({coins:Object.keys(COINS).map(coin=>({coin,name:COINS[coin].name,available:rpcConfigured(coin)}))}));
 app.post('/api/access/invoice',paymentRate('invoice',5),async(req,res)=>{
- const {plan,coin,renewal,accepted}=req.body||{};
+ const {plan,coin,renewal,accepted,requestKey}=req.body||{};
  if(accepted!==true)return res.status(400).json({error:'Accept the displayed payment terms first.'});
  let account=null;
  if(renewal===true||plan==='renewal'){
@@ -166,12 +166,15 @@ app.post('/api/access/invoice',paymentRate('invoice',5),async(req,res)=>{
  }
  let invoice;
  if(coin){
-  if(!Object.hasOwn(COINS,coin)||!rpcConfigured(coin))return res.status(503).json({error:'Payment network not configured. No payment has been requested.'});
-  const [,price]=await Promise.all([verifyNetwork(coin),quotePrice(coin)]);invoice=createCryptoInvoice(db,plan,coin,price,account);
+  if(!Object.hasOwn(COINS,coin))return res.status(400).json({error:'Choose a payment network.'});
+  if(requestKey)invoice=existingCryptoInvoice(db,requestKey,plan,coin,account);
+  if(!invoice){
+    if(!rpcConfigured(coin))return res.status(503).json({error:'Payment network not configured. No payment has been requested.'});
+    const [,price]=await Promise.all([verifyNetwork(coin),quotePrice(coin)]);
+    invoice=createCryptoInvoice(db,plan,coin,price,account,Date.now(),requestKey||null);
+  }
  }else{
-  if(plan!=='monthly'&&plan!=='renewal')return res.status(400).json({error:'Choose a payment network.'});
-  if(plan==='renewal'&&req.account?.access_plan!=='monthly')return res.status(403).json({error:'Legacy monthly renewal only.'});
-  invoice=createInvoice(db,plan,account);
+  return res.status(426).json({error:'Update qzu. to create a new USD-priced order. Existing orders can still be recovered.'});
  }
  res.json({...invoice,qr:await checkoutQR(invoice,invoiceRow(db,invoice.orderKey))});
 });
