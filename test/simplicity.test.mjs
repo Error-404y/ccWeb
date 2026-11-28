@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {DatabaseSync} from 'node:sqlite';
 import {officialStore} from '../lib/official.mjs';
+import {playAssets} from '../scripts/play-assets.mjs';
 const source=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
 const window={};runInNewContext(source('public/ui-simplicity.js'),{window});
 const {accessSummary,unreadCount,attachEdgeBack}=window.QzuSimplicity;
@@ -64,4 +65,14 @@ test('removed settings do not leave DOM listeners behind; recovery and renew pat
  assert.ok(app.includes("api('account/deletion-code',{})"));assert.ok(app.includes("button('External deletion code',showDeletionCode"));assert.ok(app.includes("button('Renew access',showRenewal)"));
  assert.ok(server.includes('/api/official/history'));assert.ok(app.includes("close:()=>$('backToChats').click()"));assert.ok(desktop.includes('close:()=>choose(null)'));
  for(const s of [app,control,desktop])assert.doesNotThrow(()=>new Function(s));
+});
+
+test('Google Play retains shared access summary, ticket screens and gesture handlers without external checkout',()=>{
+ const app=playAssets(source('public/app.js'));
+ assert.ok(app.includes('function updateAccessDisplay()'));
+ assert.ok(app.includes('function renderNewUserTicket('));
+ assert.ok(app.includes('QzuSimplicity.attachEdgeBack'));
+ assert.ok(app.includes("if(v.timed&&!playBuild)"));
+ assert.ok(!/access\/invoice|access\/submit|access\/renew|release\.downloads/.test(app));
+ assert.doesNotThrow(()=>new Function(app));
 });
