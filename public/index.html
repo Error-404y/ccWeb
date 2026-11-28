@@ -8,10 +8,11 @@
     <title>qzu.</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/media.css">
     <link rel="stylesheet" href="/control.css">
     <script src="/e2ee.js" defer></script>
     <script src="/metadata.js" defer></script>
-    <script src="/control.js" defer></script><script src="/ui-simplicity.js" defer></script><script src="/app.js" defer></script>
+    <script src="/control.js" defer></script><script src="/ui-simplicity.js" defer></script><script src="/media.js" defer></script><script src="/app.js" defer></script>
   </head>
   <body>
     <svg class="sprite" xmlns="http://www.w3.org/2000/svg">
@@ -53,6 +54,7 @@
       <symbol id="sendIcon" viewBox="0 0 24 24"><path d="m3 3 18 9-18 9 3-9-3-9Zm3 9h15"/></symbol>
       <symbol id="chat" viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8.5 8L4 21l1.5-4A8 8 0 1 1 20 11.5Z"/></symbol>
       <symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="pinIcon" viewBox="0 0 24 24"><path d="M8 4h8l-1 6 3 4H6l3-4-1-6ZM12 14v6"/></symbol>
       <symbol id="copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
       <symbol id="qr" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M4 12h16"/></symbol>
       <symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
@@ -74,7 +76,11 @@
             <a class="brand" href="/chat" aria-label="qzu."><svg class="wordmark"><use href="#logo"/></svg></a>
             <a class="icon-button accent" href="/connect" aria-label="Add contact" title="Add contact"><svg><use href="#plus"/></svg></a>
           </header>
-          <div class="list-head"><h1>Contacts</h1><span id="chatCount"></span></div>
+          <div class="list-head"><h1>Chats</h1><span id="chatCount"></span></div>
+          <div class="chat-list-tools" id="chatListTools" hidden>
+            <input id="chatSearch" type="search" aria-label="Search chats and contacts" placeholder="Search chats" maxlength="80" autocomplete="off">
+            <button id="unreadFilter" type="button" class="secondary-button" aria-pressed="false">Unread</button>
+          </div>
           <button id="connectionRequests" class="request-link" hidden>Connection requests</button>
           <div class="official-channel-entry">
             <button id="qzuInfoOpen" type="button" class="contact official-contact" aria-label="qzu. official information" aria-pressed="false">
@@ -98,7 +104,7 @@
             <div class="thread-title">
               <div class="thread-name-wrap"><div class="thread-name-line"><span class="profile-name" id="threadName">Chat</span><svg id="threadBadge" class="admin-badge" role="img" aria-label="Verified Admin" hidden><use href="#adminBadge"/></svg></div><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span><button id="encryptionStatus" class="encryption-status" type="button" hidden></button></div>
             </div>
-            <div class="expiry" title="Chat expires"><svg><use href="#clock"/></svg><span id="chatTimer">30:00</span></div>
+            <button class="expiry" id="expiryDetails" type="button" aria-label="Chat expiry information"><svg aria-hidden="true"><use href="#clock"/></svg><span id="chatTimer"></span></button>
             <button id="groupInvite" class="icon-button" aria-label="Group invite" title="Group invite" hidden><svg><use href="#plus"/></svg></button>
             <button id="chatOptions" class="icon-button" aria-label="Chat options" title="Chat options" hidden>⋯</button>
           </header>
@@ -122,20 +128,29 @@
           </section>
           <div class="connection-strip"><div id="connectionState" role="status" hidden></div><button id="manageOutbox" class="secondary-button" type="button" hidden>Outgoing messages</button></div>
           <button id="extensionNotice" class="request-link" type="button" hidden></button>
-          <div id="messages" class="messages" aria-label="Messages" hidden></div>
+          <div id="messageFeed" class="message-feed" hidden>
+            <div id="messages" class="messages" aria-label="Messages" tabindex="0"></div>
+            <button id="newMessages" class="new-messages secondary-button" type="button" hidden><span id="newMessagesLabel"></span><svg aria-hidden="true"><use href="#chevron"/></svg></button>
+          </div>
           <div id="typingIndicator" class="typing-indicator" hidden><span class="typing-dots"><i></i><i></i><i></i></span><span id="typingLabel"></span></div>
           <div id="replyComposer" class="reply-composer" hidden>
             <div class="reply-content"><strong id="replyName"></strong><span id="replyText"></span></div>
             <button id="cancelReply" type="button" class="icon-button" aria-label="Cancel reply"><svg><use href="#close"/></svg></button>
           </div>
           <button id="encryptionNotice" class="encryption-notice" type="button" hidden><svg aria-hidden="true"><use href="#lock"/></svg><span id="encryptionNoticeText"></span><svg aria-hidden="true"><use href="#chevron"/></svg></button>
+          <div id="viewOnceHint" class="view-once-hint" hidden>
+            <span>View Once · Opens once for the recipient</span>
+            <button id="previewOnceText" type="button">Preview</button>
+          </div>
           <form id="composer" class="composer" hidden>
             <button id="attachmentMenu" class="icon-button" type="button" aria-label="Message options" title="Message options"><svg><use href="#plus"/></svg></button>
             <textarea id="message" aria-label="Message" placeholder="Message" rows="1" maxlength="2000" autocomplete="off"></textarea>
             <button id="onceShortcut" class="icon-button once-toggle" type="button" aria-label="Enable view once" aria-pressed="false" title="View once" hidden><svg aria-hidden="true"><use href="#viewOnceIcon"/></svg></button>
-            <button id="cameraShortcut" class="icon-button media-shortcut" type="button" aria-label="Camera"><svg><use href="#camera"/></svg></button>
-            <button id="voiceShortcut" class="icon-button media-shortcut" type="button" aria-label="Hold to record voice message; swipe left to cancel or up to lock"><svg><use href="#mic"/></svg></button>
-            <button id="send" class="send-button" type="button" aria-label="Send" disabled><svg><use href="#sendIcon"/></svg></button>
+            <div class="composer-actions" id="composerActions">
+              <button id="cameraShortcut" class="icon-button media-shortcut" type="button" aria-label="Camera"><svg><use href="#camera"/></svg></button>
+              <button id="voiceShortcut" class="icon-button media-shortcut" type="button" aria-label="Hold to record a voice message. Release to preview, swipe left to cancel, or swipe up to lock"><svg><use href="#mic"/></svg></button>
+              <button id="send" class="send-button" type="button" aria-label="Send" disabled><svg><use href="#sendIcon"/></svg></button>
+            </div>
           </form>
           <section id="inlineAttachments" class="inline-attachments" aria-label="Message attachments" hidden></section>
           <div id="adminComposer" class="admin-composer" hidden>
@@ -152,16 +167,23 @@
           <div class="panel connect-panel">
             <h1>Connect</h1><p class="connect-subtitle">Scan or share your private code</p>
             <div class="qr-stage"><div class="qr-orbit" aria-hidden="true"></div><div id="qrBox" class="qr-box"><img id="qrImage" alt="Your invite QR code" hidden><svg id="qrPlaceholder"><use href="#qr"/></svg></div><div class="qr-corners" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
-            <div class="code-line"><span id="inviteCode">– – – – – –</span><button id="copyCode" class="icon-button" aria-label="Copy code" disabled><svg><use href="#copy"/></svg></button></div>
+            <button id="retryInviteQR" class="secondary-button" type="button" hidden>Retry QR code</button>
+            <div class="code-line"><span id="inviteCode">– – – – – –</span></div>
             <progress id="inviteProgress" class="invite-progress" max="1" value="0" aria-label="Remaining connection code lifetime"></progress><div id="inviteTimer" class="invite-timer">No active code</div>
-            <div class="invite-actions"><select id="inviteLifetime" aria-label="New code lifetime"><option value="5">5 min</option><option value="10" selected>10 min</option><option value="15">15 min</option></select><button id="newCode" class="primary-button">New code</button></div>
+            <div class="connect-secondary">
+              <button id="copyCode" class="secondary-button" type="button" disabled><svg aria-hidden="true"><use href="#copy"/></svg><span>Copy code</span></button>
+              <button id="scanCode" class="secondary-button" type="button"><svg aria-hidden="true"><use href="#qr"/></svg>Scan QR</button>
+            </div>
             <div class="separator"></div>
             <form id="connectForm" class="connect-form">
               <input id="enterCode" aria-label="Enter code" placeholder="Enter code" maxlength="6" autocapitalize="characters" autocomplete="off" spellcheck="false">
               <button class="primary-button" type="submit">Add</button>
             </form>
-            <div class="connect-secondary"><button id="scanCode" class="secondary-button"><svg><use href="#qr"/></svg>Scan QR</button>
-            <button id="createGroup" class="secondary-button"><svg><use href="#plus"/></svg>Create group</button></div>
+            <details id="connectOptions" class="connect-options">
+              <summary>More connection options</summary>
+              <div class="invite-actions"><select id="inviteLifetime" aria-label="New code lifetime"><option value="5">5 min</option><option value="10" selected>10 min</option><option value="15">15 min</option></select><button id="newCode" class="secondary-button" type="button">New code</button></div>
+              <button id="createGroup" class="secondary-button" type="button"><svg aria-hidden="true"><use href="#plus"/></svg>Create group</button>
+            </details>
           </div>
         </div>
       </section>
@@ -191,6 +213,7 @@
           </div>
           <div class="panel settings-panel" data-settings-category="account" hidden>
             <h1>Account</h1>
+            <button class="settings-row" id="supportReference" type="button"><svg aria-hidden="true"><use href="#info"/></svg><span>Support reference</span><svg aria-hidden="true" class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row logout-row" id="deleteAccount" type="button"><svg><use href="#key"/></svg><span>Delete account</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="sellerProfileSettings" type="button" hidden><svg><use href="#avatar"/></svg><span>Seller profile</span><strong id="sellerProfileStatus"></strong><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="recoverySettings" type="button"><svg><use href="#key"/></svg><span>Account recovery</span><svg class="chevron"><use href="#chevron"/></svg></button>
@@ -224,6 +247,8 @@
           <div class="panel settings-panel" data-settings-category="appearance" hidden>
             <h1>Appearance</h1>
             <div class="settings-row"><svg><use href="#moon"/></svg><span>Appearance</span><select id="theme" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+            <button class="settings-row" id="appearancePresets" type="button"><svg><use href="#moon"/></svg><span>Theme presets</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row" id="chatTextSize" type="button"><svg><use href="#chat"/></svg><span>Message text size</span><strong id="chatTextSizeLabel"></strong></button>
             <button class="settings-row" id="chatBackground"><svg><use href="#chat"/></svg><span>Chat background</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="accentSettings"><svg><use href="#moon"/></svg><span>Accent color</span><span id="accentSample" class="accent-sample"></span></button>
 
@@ -255,7 +280,7 @@
           </div>
         </div>
       </section>
-      <nav id="bottomNav" class="bottom-nav" aria-label="Main navigation" hidden><a href="/chat" data-tab="chat"><span class="nav-icon"><svg><use href="#chat"/></svg><span id="navUnread" class="unread-badge" hidden></span></span><span>Chats</span></a><a href="/connect" data-tab="connect"><svg><use href="#qr"/></svg><span>Connect</span></a><a href="/tickets" data-tab="tickets"><svg><use href="#ticketIcon"/></svg><span>Tickets</span></a><a href="/settings" data-tab="settings"><svg><use href="#settings"/></svg><span>Settings</span></a></nav><div id="activityBanner" class="activity-banner" role="status" hidden></div><div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
+      <nav id="bottomNav" class="bottom-nav" aria-label="Main navigation" hidden><a href="/chat" data-tab="chat"><span class="nav-icon"><svg><use href="#chat"/></svg><span id="navUnread" class="unread-badge" hidden></span></span><span>Chats</span></a><a href="/connect" data-tab="connect"><svg><use href="#qr"/></svg><span>Connect</span></a><a href="/tickets" data-tab="tickets"><span class="nav-icon"><svg><use href="#ticketIcon"/></svg><span id="navTicketUnread" class="unread-badge ticket-unread-dot" role="img" aria-label="Unread ticket reply" hidden></span></span><span>Tickets</span></a><a href="/settings" data-tab="settings"><svg><use href="#settings"/></svg><span>Settings</span></a></nav><div id="activityBanner" class="activity-banner" role="status" hidden></div><div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
     </main>
     <div id="bootSplash" aria-hidden="true"><div class="boot-grid"></div><div class="boot-center"><i></i><i></i><i></i><svg viewBox="0 0 172 110"><path class="boot-chevron" fill="#bd0000" d="M5 5 85 44 85 64 5 105 5 80 55 54 5 30Z"/><rect class="boot-cursor" x="87" y="86" width="80" height="19" fill="#bd0000"/></svg></div><div class="boot-scan"></div><div class="boot-progress"></div></div>
     <dialog id="modal" aria-labelledby="modalTitle">

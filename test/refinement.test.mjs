@@ -85,17 +85,17 @@ test('voice gestures distinguish a deliberate left or up swipe from normal hold'
   assert.equal(swipe(80,100),'locked');
 });
 
-test('pointer interruption cancels rather than sends; locked recording is retained',()=>{
+test('pointer interruption cancels, release opens preview, and locked recording is retained',()=>{
   const start=app.indexOf('function endVoiceGesture(');
   const end=app.indexOf('\nvoiceControl.addEventListener',start);
   const events=[];
   const ctx={voiceGesture:null};
   const finish=runInNewContext(app.slice(start,end)+'\nendVoiceGesture',ctx);
-  const session={cancel:()=>events.push('cancel'),send:()=>events.push('send')};
+  const session={cancel:()=>events.push('cancel'),finish:()=>events.push('preview')};
   ctx.voiceGesture={id:1,action:'hold',session};finish({pointerId:1},true);
   ctx.voiceGesture={id:2,action:'hold',session};finish({pointerId:2},false);
   ctx.voiceGesture={id:3,action:'locked',session};finish({pointerId:3},false);
   ctx.voiceGesture={id:4,action:'hold',session};finish({pointerId:9},false);
-  assert.deepEqual(events,['cancel','send']);
+  assert.deepEqual(events,['cancel','preview']);
   assert.equal(ctx.voiceGesture.id,4);
 });

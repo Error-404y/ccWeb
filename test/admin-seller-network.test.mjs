@@ -287,7 +287,7 @@ test('customer deletion requests for admin contacts are scoped, idempotent, pers
 });
 test('ticket creation defaults to centered form and desktop supports distinct contact deletion',()=>{
  const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),css=readFileSync(new URL('../public/style.css',import.meta.url),'utf8'),desktop=readFileSync(new URL('../public/desktop-messenger.js',import.meta.url),'utf8');
- assert.ok(app.includes("if(!state.supportAgent&&!items.length){ticketLast='[]';renderNewUserTicket(true);return;}"));
+ assert.ok(app.includes('if(!active.length)renderNewUserTicket(true)'));
  assert.ok(css.includes('.user-ticket-content>.user-ticket-form{margin-block:auto'));
  assert.ok(desktop.includes("api('chats/contact/delete',{id,confirmed:true})"));
  assert.doesNotThrow(()=>new Function(desktop));

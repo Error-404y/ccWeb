@@ -90,6 +90,7 @@ let authBusy = false;
 let sessionReady = false;
 let needsSetup = false;
 let qrPending = '';
+let qrFailed = '';
 let pendingInvite = '';
 let sendingMessage = false;
 let accessDue = false;
@@ -103,8 +104,11 @@ let mediaRoom = null;
 let mediaMessage = null;
 let invisibleSaving = false;
 let mediaUrl = null;
+let mediaDispose = null;
+let mediaOpenSequence = 0;
 let recordingCleanup = null;
 const reactions = ['👍', '❤️', '😂', '🔥', '😮', '👎'];
+const reactionLabels = ['Like','Love','Laugh','Fire','Surprised','Dislike'];
 let privacyMode = false;
 let backgroundPin=true,backgroundPinSaving=false,bootPending=native&&!matchMedia('(prefers-reduced-motion: reduce)').matches;
 try{backgroundPin=localStorage.getItem('qzu-background-pin')!=='off';}catch{}
@@ -112,6 +116,8 @@ let replyTarget = null;
 let lastTypingAt = 0;
 let typingRoom = null;
 let receiptsInFlight = false;
+let unreadOnly = false;
+let jumpFrame = 0;
 const revealedMessages = new Set();
 const acknowledgedDelivery = new Set();
 const acknowledgedRead = new Set();
@@ -125,8 +131,58 @@ let flushingOutbox=false, nextOutboxAttempt=0, reconnectDelay=500;
 function updateConnection(){const node=$('connectionState');const queued=[...outbox.values()].filter(x=>x.room===selected&&!x.accepted),failed=queued.filter(x=>x.failed),syncing=[...outbox.values()].some(x=>x.room===selected&&x.accepted);node.hidden=online&&!queued.length&&!syncing;node.textContent=(!online?'Reconnecting securely…':'')+(queued.length?((!online?' · ':'')+queued.length+' encrypted '+(queued.length===1?'message':'messages')+' waiting'+(failed.length?' · '+failed.length+' failed':'')):syncing?(online?'Syncing messages…':' · Syncing messages…'):'');$('manageOutbox').hidden=!queued.length;}
 function discardRoomQueue(id){for(const [key,item] of outbox)if(item.room===id)outbox.delete(key);}
 function reconcileOutbox(){for(const [key,item] of outbox){const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()||room.messages.some(m=>m.requestId===key))outbox.delete(key);}updateConnection();}
-async function flushOutbox(){if(![...outbox.values()].some(item=>!item.accepted&&!item.failed&&!item.sending)||flushingOutbox||!online||!unlockToken||document.hidden||accessDue||termsPending||suspendedAccount||Date.now()<nextOutboxAttempt||!state.capabilities?.queuedSends)return;flushingOutbox=true;const epoch=authEpoch;
-try{for(const [key,item] of outbox){if(epoch!==authEpoch||!unlockToken||!online||document.hidden||accessDue||termsPending||suspendedAccount)break;if(item.failed||item.sending||item.accepted)continue;const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()){outbox.delete(key);continue;}if(!encryptionReady(room))continue;if(roomKeys.get(room.id)?.context?.code!==item.binding){item.failed=true;item.error='Conversation key changed. Discard this message.';continue;}item.sending=true;try{await api('encryption/message',item.payload);if(epoch!==authEpoch)break;item.accepted=true;}catch(error){if(epoch!==authEpoch)break;if(error.status>=400&&error.status<500&&![408,429].includes(error.status)){item.failed=true;item.error=errorMessage(error);}else{nextOutboxAttempt=Date.now()+3000;break;}}finally{item.sending=false;}}}finally{flushingOutbox=false;updateConnection();if(unlockToken&&page==='chat'&&!document.hidden)renderChat();}}
+function canSendOutgoing() {
+  return online&&unlockToken&&!document.hidden&&!accessDue&&!termsPending&&!suspendedAccount;
+}
+async function flushOutbox(){
+  if(flushingOutbox||!canSendOutgoing()||Date.now()<nextOutboxAttempt||!state.capabilities?.queuedSends)return;
+  if(![...outbox.values()].some(item=>!item.accepted&&!item.failed&&!item.sending))return;
+  flushingOutbox=true;
+  const epoch=authEpoch;
+  try{
+    for(const [key,item] of outbox){
+      if(epoch!==authEpoch||!canSendOutgoing())break;
+      if(item.failed||item.sending||item.accepted)continue;
+      const room=state.rooms.find(room=>room.id===item.room);
+      if(!room||room.expires<=serverNow()){outbox.delete(key);continue;}
+      if(!encryptionReady(room))continue;
+      if(roomKeys.get(room.id)?.context?.code!==item.binding){
+        item.failed=true;
+        item.retryable=false;
+        item.error='Conversation key changed. Discard this message.';
+        continue;
+      }
+      item.sending=true;
+      try{
+        await api('encryption/message',item.payload);
+        if(epoch!==authEpoch)break;
+        item.accepted=true;
+      }catch(error){
+        if(epoch!==authEpoch)break;
+        const retryable=!(error.status>=400&&error.status<500&&![408,429].includes(error.status));
+        item.retryable=retryable;
+        item.attempts=(item.attempts||0)+1;
+        item.failed=!retryable||item.attempts>=3;
+        item.error=errorMessage(error);
+        if(retryable){nextOutboxAttempt=Date.now()+3000;break;}
+      }finally{item.sending=false;}
+    }
+  }finally{
+    flushingOutbox=false;
+    updateConnection();
+    if(unlockToken&&page==='chat'&&!document.hidden)renderChat();
+  }
+}
+function retryOutgoing(key) {
+  const pending=outbox.get(key);
+  if(!pending?.failed||!pending.retryable||pending.sending)return;
+  pending.failed=false;
+  pending.attempts=0;
+  nextOutboxAttempt=0;
+  updateConnection();
+  renderChat();
+  void flushOutbox();
+}
 function markDisconnected(){online=false;liveRevision='';updateConnection();}
 
 const motionAllowed=()=>!matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -699,6 +755,7 @@ function lock(reopen = true) {
   pinPrompt = false;
   qrKey = '';
   qrPending = '';
+  qrFailed = '';
   scrubRemovedRooms(state.rooms,[],false);
   state = {
     rooms: [],
@@ -712,6 +769,10 @@ function lock(reopen = true) {
   contactKey = '';
   renderedRoom = null;
   renderedMessages = [];
+  $('chatSearch').value = '';
+  unreadOnly = false;
+  $('unreadFilter').setAttribute('aria-pressed', 'false');
+  $('newMessages').hidden = true;
   $('contacts').replaceChildren();
   $('supportRequestsList').replaceChildren();
   $('adminInterface').hidden=true;$('adminLogout').hidden=true;$('userInterfaceHeading').hidden=true;clearAdminFeedback();
@@ -814,19 +875,18 @@ function identityChanged(room) {
   return Boolean(room?.contact?.peerIdentity && room.encryption?.peer?.identity && room.contact.peerIdentity!==room.encryption.peer.identity);
 }
 function addContactMarks(node,contact,room=null) {
-  if(!contact)return;
-  if(contact.favorite){const mark=el('span','contact-mark','★');mark.title='Favorite';node.append(mark);}
+  if(contact?.favorite){const mark=svg('pinIcon','contact-mark');mark.setAttribute('aria-label','Pinned contact');mark.setAttribute('role','img');mark.removeAttribute('aria-hidden');node.append(mark);}
   if(identityChanged(room)){const mark=el('span','contact-warning','!');mark.title='Identity changed';node.append(mark);}
-  else if(contact.trusted){const mark=svg('lock','contact-trusted');mark.setAttribute('aria-label','Trusted contact');mark.setAttribute('role','img');mark.removeAttribute('aria-hidden');node.append(mark);}
-  if(contact.muted)node.append(el('span','contact-muted','Muted'));
+  else if(contact?.trusted){const mark=svg('lock','contact-trusted');mark.setAttribute('aria-label','Trusted contact');mark.setAttribute('role','img');mark.removeAttribute('aria-hidden');node.append(mark);}
+  if(contact?.muted || room?.mutedUntil > serverNow())node.append(el('span','contact-muted','Muted'));
 }
 function showContactManagement(contact) {
   const field=el('input','nickname-input');
   field.type='text';field.value=contact.peerRole==='admin'?'qzu-Support':contact.nickname;field.disabled=contact.peerRole==='admin';field.maxLength=40;field.setAttribute('aria-label','Nickname');
   const favorite=el('input');favorite.type='checkbox';favorite.checked=contact.favorite;
   const muted=el('input');muted.type='checkbox';muted.checked=contact.muted;
-  const favoriteLabel=el('label','contact-setting');favoriteLabel.append(el('span','','Favorite'),favorite);
-  const mutedLabel=el('label','contact-setting');mutedLabel.append(el('span','','Mute message previews'),muted);
+  const favoriteLabel=el('label','contact-setting');favoriteLabel.append(el('span','','Pin contact'),favorite);
+  const mutedLabel=el('label','contact-setting');mutedLabel.append(el('span','','Mute contact and hide previews'),muted);
   const save=button('Save',async()=>{
     save.disabled=true;
     try{await api('contacts/update',{id:contact.id,nickname:field.value.trim(),favorite:favorite.checked,muted:muted.checked});closeModal();await refresh();}
@@ -851,9 +911,63 @@ $('manageContacts').addEventListener('click',()=>{
 });
 let lastBadge=-1,activityTimer=null;
 function syncBadge(count){if(pushOptedOut())count=0;if(!native||window.Capacitor.getPlatform()!=='ios'||lastBadge===count)return;lastBadge=count;devicePlugin.setBadge({count}).catch(()=>{lastBadge=-1;});}
-function showActivityBanner(message='New message'){if(pushOptedOut()&&message==='New message')return;const banner=$('activityBanner');banner.textContent=message;banner.hidden=false;clearTimeout(activityTimer);activityTimer=setTimeout(()=>{banner.hidden=true;},2400);}
+function showActivityBanner(message='New message', open=null){
+  if(pushOptedOut()&&message==='New message')return;
+  const banner=$('activityBanner');
+  if(open)banner.replaceChildren(button(message,()=>{banner.hidden=true;open();},'activity-link'));
+  else banner.textContent=message;
+  banner.classList.toggle('interactive',Boolean(open));
+  banner.hidden=false;
+  clearTimeout(activityTimer);
+  activityTimer=setTimeout(()=>{banner.hidden=true;},open?7000:2400);
+}
 function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m.unread===true).length;}
-function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+QzuSimplicity.unreadCount(state.official);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
+function matchesChatSearch(query, ...names) {
+  return !query || names.some(name => name?.toLocaleLowerCase().includes(query));
+}
+function nextUnread(room) {
+  if (!room || !canReadCurrent()) return [];
+  const view = $('messages'), bottom = view.getBoundingClientRect().bottom;
+  if (view.scrollHeight - view.clientHeight - view.scrollTop < 100) return [];
+  return room.messages.filter(message => !message.mine && !message.deleted && message.unread
+    && $('message-' + message.id)?.getBoundingClientRect().top >= bottom);
+}
+function updateMessageJump(room = state.rooms.find(item => item.id === selected)) {
+  const count = nextUnread(room).length;
+  $('newMessages').hidden = !count;
+  if (count) $('newMessagesLabel').textContent = count === 1 ? '1 new message' : count + ' new messages';
+}
+$('chatSearch').addEventListener('input', renderChat);
+$('unreadFilter').addEventListener('click', () => {
+  unreadOnly = !unreadOnly;
+  $('unreadFilter').setAttribute('aria-pressed', String(unreadOnly));
+  renderChat();
+});
+$('newMessages').addEventListener('click', () => {
+  const room = state.rooms.find(item => item.id === selected);
+  const message = nextUnread(room)[0];
+  if (!message) return;
+  const row = $('message-' + message.id);
+  row?.focus({preventScroll:true});
+  row?.scrollIntoView({behavior:motionAllowed()?'smooth':'auto',block:'start'});
+});
+function updateNavigation(){
+  const nav=$('bottomNav'),enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));
+  nav.hidden=!enabled;
+  $('app').classList.toggle('with-nav',enabled);
+  for(const link of nav.querySelectorAll('[data-tab]')){
+    const active=link.dataset.tab===page;
+    link.classList.toggle('active',active);
+    if(active)link.setAttribute('aria-current','page');
+    else link.removeAttribute('aria-current');
+  }
+  const n=state.rooms.filter(room=>room.expires>serverNow()).reduce((sum,room)=>sum+unreadCount(room),0)+QzuSimplicity.unreadCount(state.official);
+  $('navUnread').hidden=!n;
+  $('navUnread').textContent=n>99?'99+':String(n);
+  const ticketUnread=Boolean(state.ticketUpdate);
+  $('navTicketUnread').hidden=!ticketUnread;
+  if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n+Number(ticketUnread));
+}
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
   $('supportOpen').hidden = !state.now || state.supportAgent
@@ -881,28 +995,44 @@ function renderChat() {
   renderOfficial(infoOpen);
   $('chatPage').classList.toggle('thread-open', Boolean((current || infoOpen) && mobileOpen));
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  // Keep old histories available, but group only devices belonging to the same verified admin account.
+  const activeContacts = new Set(rooms.map(room => room.contact?.id).filter(Boolean));
+  const firstAdminContacts = new Map();
+  for (const contact of savedContacts) if (contact.peerAdmin && !firstAdminContacts.has(contact.peerAdmin)) firstAdminContacts.set(contact.peerAdmin,contact.id);
   const adminGroups=new Map();for(const r of rooms){if(r.peerRole==='admin'&&r.peerAdmin){const group=adminGroups.get(r.peerAdmin)||[];group.push(r);adminGroups.set(r.peerAdmin,group);}}
-  const visibleRooms=rooms.filter(r=>!r.peerAdmin||r.peerRole!=='admin'||(adminGroups.get(r.peerAdmin).find(x=>x.encryption&&!x.support)||adminGroups.get(r.peerAdmin)[0])===r);
-  const visibleSaved=savedContacts.filter(c=>!rooms.some(r=>r.contact?.id===c.id)&&!(c.peerRole==='admin'&&c.peerAdmin&&(adminGroups.has(c.peerAdmin)||savedContacts.find(x=>x.peerAdmin===c.peerAdmin)?.id!==c.id)));
-  const total=visibleRooms.length+visibleSaved.length;$('chatCount').textContent=total?String(total):'';
-  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole,c.peerName,c.peerAdmin]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.peerName, r.peerAdmin, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
+  const roomList=rooms.filter(r=>!r.peerAdmin||r.peerRole!=='admin'||(adminGroups.get(r.peerAdmin).find(x=>x.encryption&&!x.support)||adminGroups.get(r.peerAdmin)[0])===r);
+  const savedList=savedContacts.filter(c=>!activeContacts.has(c.id)&&!(c.peerRole==='admin'&&c.peerAdmin&&(adminGroups.has(c.peerAdmin)||firstAdminContacts.get(c.peerAdmin)!==c.id)));
+  const query=$('chatSearch').value.trim().toLocaleLowerCase();
+  const total=roomList.length+savedList.length, filtered=Boolean(query||unreadOnly);
+  $('chatListTools').hidden = !filtered && !total;
+  $('qzuInfoOpen').parentElement.hidden = !matchesChatSearch(query, 'qzu. official information', 'Announcements') || unreadOnly && !QzuSimplicity.unreadCount(state.official);
+  if(filtered) $('supportOpen').hidden = true;
+  const visibleRooms=roomList.filter(room=>matchesChatSearch(query,nameFor(room),room.contact?.nickname)
+    && (!unreadOnly||(adminGroups.get(room.peerAdmin)||[room]).some(unreadCount)));
+  const visibleSaved=unreadOnly?[]:savedList.filter(contact=>matchesChatSearch(query,contact.peerName,contact.nickname));
+  const count=filtered?visibleRooms.length+visibleSaved.length:total;
+  $('chatCount').textContent=count?String(count):'';
+  const key = JSON.stringify([Boolean(state.now),privacyMode,query,unreadOnly,savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole,c.peerName,c.peerAdmin]),rooms.map(r=>[r.id,r.contact?.nickname,r.contact?.warning,r.contact?.trusted,r.contact?.favorite,r.contact?.muted,r.peerRole,r.peerName,r.peerAdmin,r.encryption?.peer?.identity,r.contact?.peerIdentity,r.memberCount,r.activeCount,r.messages.at(-1)?.id,r.messages.at(-1)?.text,r.messages.at(-1)?.opened,r.messages.at(-1)?.deleted,r.deletionRequested,unreadCount(r),r.id===selected,r.mutedUntil>now,r.expires-now<=3600000?Math.ceil((r.expires-now)/60000):null,drafts.has(r.id)])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
     list.replaceChildren();
     if (!state.now){const skeleton=el('div','chat-skeleton');skeleton.setAttribute('aria-hidden','true');for(let i=0;i<5;i++){const line=el('div','skeleton-contact');line.append(el('i'),el('span'),el('b'));skeleton.append(line);}list.append(skeleton);}
-    else if (!rooms.length && !savedContacts.length) {
+    else if (!visibleRooms.length && !visibleSaved.length) {
       const box = el('div', 'empty-list');
-      box.append(el('p', '', 'No chats'));
-      const a = el('a', 'subtle-link', 'New chat');
-      a.href = '/connect';
-      box.append(a);
+      box.append(el('p', '', filtered ? unreadOnly && !query ? 'No unread chats' : 'No matching chats' : 'No chats yet'));
+      if (!filtered) {
+        const a = el('a', 'subtle-link', 'Add a contact');
+        a.href = '/connect';
+        box.append(a);
+      }
       list.append(box);
     }
     for (const r of visibleRooms) {
-      const histories=r.peerAdmin?adminGroups.get(r.peerAdmin)||[r]:[r];const alternateContacts=r.peerAdmin?savedContacts.filter(c=>c.peerAdmin===r.peerAdmin&&!rooms.some(x=>x.contact?.id===c.id)):[];
-      const last = histories.flatMap(x=>x.messages).sort((a,b)=>b.at-a.at)[0];
+      const histories=r.peerAdmin?adminGroups.get(r.peerAdmin)||[r]:[r];const alternateContacts=r.peerAdmin?savedContacts.filter(c=>c.peerAdmin===r.peerAdmin&&!activeContacts.has(c.id)):[];
+      const last = histories.reduce((newest,history)=>{
+        const message=history.messages.at(-1);
+        return message && (!newest || message.at > newest.at) ? message : newest;
+      }, null);
       const classes = 'contact' + (r.admin ? ' admin-contact' : '') + (r.id === selected ? ' active' : '');
       const b = el('button', classes);
       b.type = 'button';
@@ -918,9 +1048,11 @@ function renderChat() {
         name.append(badge);
       }
 
-      const preview = r.deletionRequested ? 'Deletion requested' : identityChanged(r) ? 'Contact identity changed' : r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode || r.contact?.muted ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
+      const preview = r.deletionRequested ? 'Deletion requested' : identityChanged(r) ? 'Contact identity changed' : r.contact?.warning ? 'Contact deletion incoming'
+        : drafts.has(r.id) ? 'Draft' : last ? (privacyMode || r.contact?.muted ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
       content.append(name, el('span', 'contact-preview' + (r.contact?.warning || identityChanged(r) ? ' contact-warning' : ''), preview));
+      if (!r.persistent && r.expires-now<=3600000) content.append(el('span','contact-expiry','Expires in '+Math.ceil((r.expires-now)/60000)+' min'));
       b.append(svg(r.peerRole==='admin'||r.support&&!r.supportAgent ? 'supportAvatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       const count=histories.reduce((n,x)=>n+unreadCount(x),0);if(count){const badge=el('span','unread-badge',count>99?'99+':String(count));badge.setAttribute('aria-label',count+' unread messages');b.append(badge);}
       b.addEventListener('click', () => selectRoom(r.id));
@@ -951,7 +1083,7 @@ function renderChat() {
     list.scrollTop = top;
   }
   $('emptyThread').hidden = Boolean(current || infoOpen);
-  for (const id of ['threadHeader', 'messages']) $(id).hidden = !current;
+  for (const id of ['threadHeader', 'messageFeed']) $(id).hidden = !current;
 
   const isAdmin = Boolean(current?.admin);
   const readOnly = Boolean(current?.readOnly);
@@ -963,7 +1095,8 @@ function renderChat() {
   const encryptionStatus = $('encryptionStatus');
   const showDirectSecurity = encryptionRequired(current) && directRoom(current);
   encryptionStatus.hidden = !showDirectSecurity;
-  encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? '🔒 Encrypted' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : 'Connecting securely';
+  encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? (current.contact?.identityVerified?'Contact verified':'Encrypted')
+    : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : 'Connecting securely';
   $('threadBadge').toggleAttribute('hidden',!(current?.peerRole==='admin'||current?.peerRole==='verified-seller'||(isAdmin&&!current?.supportAgent)));$('threadBadge').querySelector('use').setAttribute('href',current?.peerRole==='verified-seller'?'#sellerBadge':'#adminBadge');$('threadBadge').setAttribute('aria-label',current?.peerRole==='verified-seller'?'Verified Seller':'Verified Admin');
   $('threadAvatar').setAttribute('href', current?.peerRole==='admin'||current?.support&&!current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
@@ -985,6 +1118,7 @@ function renderChat() {
   $('thread').classList.toggle('admin-thread', isAdmin);
   updateSendButton();
   if (!current) {
+    updateMessageJump(null);
     $('messages').replaceChildren();
     renderedRoom = null;
     renderedMessages = [];
@@ -1002,6 +1136,9 @@ function renderChat() {
   const follow = (!sameRoom&&(!remembered||remembered.bottom)) || (sameRoom&&container.scrollHeight - container.scrollTop - container.clientHeight < 100 ||
     (ids.length > renderedMessages.length && current.messages.at(-1)?.mine));
 
+  const viewportTop=container.getBoundingClientRect().top;
+  const anchor=sameRoom&&!follow?[...container.children].find(row=>row.getBoundingClientRect().bottom>viewportTop):null;
+  const anchorTop=anchor?.getBoundingClientRect().top;
   if (!sameRoom) container.replaceChildren();
   const oldRows=new Map([...container.children].map(node=>[node.id,node]));
   const keep=new Set();
@@ -1024,7 +1161,15 @@ function renderChat() {
       if(safe)QzuCrypto.decrypt(context,item.payload.cipher,true).then(text=>{if(row.isConnected&&epoch===authEpoch&&unlockToken&&selected===current.id&&!privacyMode&&outbox.get(key)===item&&roomKeys.get(current.id)?.context===context)content.textContent=text;}).catch(()=>{});
       if(sameRoom&&!oldRows.has(row.id)){motion(row,'motion-message');requestAnimationFrame(()=>animateFromComposer(row));}
     }
-    row.querySelector('.pending-status').textContent=item.failed?'! Failed':item.accepted?'✓ Sent':'◷ Waiting';keep.add(row);if(row.parentNode!==container)container.append(row);
+    const status = row.querySelector('.pending-status'), retry = row.querySelector('.pending-retry');
+    status.textContent=item.failed?'Failed':item.accepted?'Sent':item.sending?'Sending…':'Waiting to send';
+    status.title=item.failed?item.error||'Message failed':'';
+    if (item.failed && item.retryable && !retry) {
+      const action = button('Retry', () => retryOutgoing(key), 'pending-retry');
+      action.title=item.error;
+      status.after(action);
+    } else if (!item.failed || !item.retryable) retry?.remove();
+    keep.add(row);if(row.parentNode!==container)container.append(row);
   }
   for(const node of [...container.children])if(!keep.has(node))node.remove();
 
@@ -1037,7 +1182,12 @@ function renderChat() {
 
   renderedRoom = current.id;
   renderedMessages = ids;
-  if (follow) container.scrollTop = container.scrollHeight;else container.scrollTop=sameRoom?previousTop:remembered?.top||0;
+  if (follow) container.scrollTop = container.scrollHeight;
+  else {
+    const restored=anchor && $(anchor.id);
+    container.scrollTop=sameRoom?(restored?previousTop+restored.getBoundingClientRect().top-anchorTop:previousTop):remembered?.top||0;
+  }
+  updateMessageJump(current);
 }
 
 function updateExpiry(room) {
@@ -1048,6 +1198,41 @@ function updateExpiry(room) {
   bar.value = remaining;
   bar.classList.toggle('expiring', remaining <= 5 * 60_000);
   bar.classList.toggle('critical', remaining <= 60_000);
+}
+
+$('expiryDetails').addEventListener('click', () => {
+  const room = state.rooms.find(item => item.id === selected && item.expires > serverNow());
+  if (!room) return;
+  const end = room.persistent ? 'This support conversation stays open until it is deleted.'
+    : 'This chat ends on ' + new Date(room.expires).toLocaleString() + '.';
+  const content = [el('p','',end), el('p','','When the chat ends, its messages and attachments are removed.')];
+  if (!room.support && !room.readOnly) content.push(el('p','','A server restart also ends this conversation.'));
+  if (!room.admin && !room.group && !room.support && !room.extended) {
+    content.push(button(room.extension?.incoming?'Review extension request':room.extension?'Check extension status':'Request 30 more minutes', () => showExtension(room)));
+  }
+  content.push(button('Close',closeModal,'secondary-button'));
+  show('Chat expiry',content);
+  mediaRoom=room.id;
+});
+
+function showRoomMute(room) {
+  const actions = [
+    ['Mute for 1 hour','hour'],
+    ...(room.persistent?[]:[['Mute until this chat expires','expiry']]),
+    ...(room.mutedUntil>serverNow()?[['Unmute','off']]:[])
+  ];
+  const options = actions.map(([label,mode])=>button(label,async()=>{
+    try{
+      const result=await api('chat/mute',{id:room.id,mode});
+      if(!unlockToken)return;
+      room.mutedUntil=result.mutedUntil;
+      closeModal();
+      haptic();
+      renderChat();
+      await refresh();
+    }catch(error){modalError(error);}
+  }, 'secondary-button'));
+  show('Chat notifications',[el('p','','Muting pauses notifications. New messages still count as unread.'),...options,button('Close',closeModal,'secondary-button')]);
 }
 
 function updateStatus(node, status) {
@@ -1090,8 +1275,6 @@ function attachMessageGesture(bubble,reply,actions){
     if(accepted){haptic();reply();}
   });
   bubble.addEventListener('pointercancel',e=>{if(owns(e)){if(gesture.swipe)suppress=true;clear();}});
-  // Touch starts with implicit capture on the child. Transferring capture to
-  // the bubble emits a bubbling lostpointercapture from that child, not a cancellation.
   bubble.addEventListener('lostpointercapture',e=>{if(owns(e)&&e.target===bubble&&!bubble.hasPointerCapture(e.pointerId)){if(gesture.swipe)suppress=true;clear();}});
   bubble.addEventListener('pointerleave',e=>{if(owns(e)&&e.target===bubble&&!gesture.swipe)clear();});
   bubble.addEventListener('click',e=>{if(suppress&&e.detail!==0){suppress=false;e.preventDefault();e.stopPropagation();}},true);
@@ -1108,6 +1291,7 @@ function beginReply(room,message){
 function renderMessage(room, message) {
   const row = el('div', 'message-row' + (message.mine ? ' mine' : ''));
   row.id = 'message-' + message.id;
+  row.tabIndex = -1;
   const bubble = el('div', 'bubble');
   const content = el('div', 'message-content');
   const masked = privacyMode && !revealedMessages.has(message.id) && !message.once && !message.deleted && !(message.burnSeconds && !message.burnAt && !message.mine);
@@ -1127,11 +1311,14 @@ function renderMessage(room, message) {
       try { await api('message/burn-open', { id: room.id, messageId: message.id }); await refresh(); } catch (error) { showError(error); }
     }, 'media-message'));
   } else if (message.once) {
-    const label = onceLabel(message);
-    const open = button(label, () => openOnceMessage(room, message), 'once-message'+(message.opened?' once-opened':''));
+    const open = button('', () => openOnceMessage(room, message), 'once-message'+(message.opened?' once-opened':''));
     open.prepend(svg(message.opened?'viewOnceOpened':'viewOnceIcon'));
+    const caption = el('span', 'qzu-once-caption');
+    const kind = message.kind === 'image' ? 'Photo' : message.kind === 'audio' ? 'Voice message' : 'Message';
+    caption.append(el('span', '', kind), el('small', '', message.opened ? 'Opened' : message.mine ? 'Unopened' : 'Unopened · View once'));
+    open.append(caption);
     open.disabled = message.mine || message.opened || (room.encryption&&(!state.capabilities?.encryptedOnce||!encryptionReady(room)));
-    open.setAttribute('aria-label',message.opened?'Opened view-once content':message.mine?'Sent view-once '+label:'Open '+label.toLowerCase()+' once');
+    open.setAttribute('aria-label',message.opened?kind+', opened':message.mine?kind+', unopened':'Open '+kind.toLowerCase()+' once');
     content.append(open);
   } else if (message.kind === 'image' || message.kind === 'audio') {
     const open = button('', () => openMedia(room, message), 'media-message media-tile');open.setAttribute('aria-label',message.kind==='image'?'View photo':'Play voice message');open.append(svg(message.kind==='image'?'camera':'mic'),el('span','',message.kind==='image'?'Photo':'Voice message'));
@@ -1176,17 +1363,28 @@ function renderMessage(room, message) {
   if (!room.readOnly && !message.deleted) {
     const canReply=!message.once&&!message.burnSeconds&&(!room.encryption||(state.capabilities?.encryptedExtras&&encryptionReady(room)));
     attachMessageGesture(bubble,canReply?()=>beginReply(room,message):null,()=>messageActions(room,message));
-    if(message.reactions?.length){const bar=el('div','message-reactions');for(const reaction of message.reactions)bar.append(button(reaction.emoji+' '+reaction.count,()=>reactTo(room,message,reaction.emoji),'reaction-chip'+(reaction.mine?' chosen':'')));bubble.append(bar);}
+    if (message.reactions?.length) {
+      const bar=el('div','message-reactions');
+      for (const reaction of message.reactions) {
+        const chip=button(reaction.emoji+' '+reaction.count,()=>reactTo(room,message,reaction.emoji),'reaction-chip'+(reaction.mine?' chosen':''));
+        chip.setAttribute('aria-label',(reactionLabels[reactions.indexOf(reaction.emoji)]||'Reaction')+', '+reaction.count);
+        chip.setAttribute('aria-pressed',String(reaction.mine));
+        bar.append(chip);
+      }
+      bubble.append(bar);
+    }
   }
   row.append(bubble);
   return row;
 }
 
 function clearReply() {
+  const view=$('messages'), atBottom=view.scrollHeight-view.clientHeight-view.scrollTop<100;
   replyTarget = null;
   $('replyComposer').hidden = true;
   $('replyName').textContent = '';
   $('replyText').textContent = '';
+  if (atBottom) view.scrollTop=view.scrollHeight;
 }
 
 function renderReply() {
@@ -1195,7 +1393,11 @@ function renderReply() {
     return;
   }
 
-  $('replyComposer').hidden = false;
+  if ($('replyComposer').hidden) {
+    const view=$('messages'), atBottom=view.scrollHeight-view.clientHeight-view.scrollTop<100;
+    $('replyComposer').hidden = false;
+    if (atBottom) view.scrollTop=view.scrollHeight;
+  }
   $('replyName').textContent = 'Reply to ' + replyTarget.sender;
   $('replyText').textContent = privacyMode && !revealedMessages.has(replyTarget.id) ? 'Message hidden' : replyTarget.text;
 }
@@ -1228,19 +1430,23 @@ async function acknowledgeMessages() {
   if (receiptsInFlight || !online || !unlockToken || document.hidden) return;
   const epoch = authEpoch;
   const entries = [];
+  const bounds = canReadCurrent() && !modal.open ? $('messages').getBoundingClientRect() : null;
   for (const room of state.rooms) {
     const delivered = [];
     const read = [],seen=[];
+    const visibleRoom = room.id===selected && bounds?.height>0;
     for (const message of room.messages) {
       if (message.mine || message.deleted) continue;
       if(room.encryption&&!message.once&&!message.decrypted&&message.kind==='text')continue;
       if (!acknowledgedDelivery.has(message.id)) delivered.push(message.id);
-      const node = document.getElementById('message-' + message.id);
-      const view = $('messages').getBoundingClientRect();
-      const rect = node?.getBoundingClientRect();
-      const visible = rect && rect.bottom > view.top && rect.top < view.bottom;
-      if(message.unread===true&&room.id===selected&&canReadCurrent()&&visible&&(!privacyMode||revealedMessages.has(message.id)))seen.push(message.id);
-      if (!state.invisible && room.id === selected && canReadCurrent() && visible && (!privacyMode || revealedMessages.has(message.id)) && !message.once && (!message.burnSeconds || message.burnAt) && !acknowledgedRead.has(message.id)) read.push(message.id);
+      if (!visibleRoom || privacyMode && !revealedMessages.has(message.id)) continue;
+      const shouldSee = message.unread===true;
+      const shouldRead = !state.invisible && !message.once && (!message.burnSeconds || message.burnAt) && !acknowledgedRead.has(message.id);
+      if (!shouldSee && !shouldRead) continue;
+      const rect = $('message-' + message.id)?.getBoundingClientRect();
+      if (!rect || rect.bottom<=bounds.top || rect.top>=bounds.bottom) continue;
+      if (shouldSee) seen.push(message.id);
+      if (shouldRead) read.push(message.id);
     }
     if (delivered.length || read.length || seen.length) entries.push({ id: room.id, delivered, read, seen });
   }
@@ -1278,7 +1484,15 @@ async function acknowledgeMessages() {
 }
 
 let inviteMotionKey='',inviteMotionDuration=1;
-function updateInviteMotion(inv,now=serverNow()){const key=inv?.code+':'+inv?.expires;if(key!==inviteMotionKey){inviteMotionKey=key;inviteMotionDuration=Math.max(1,(inv?.expires||now)-now);}const remaining=inv?Math.max(0,inv.expires-now):0;$('inviteProgress').max=inviteMotionDuration;$('inviteProgress').value=remaining;$('inviteTimer').textContent=inv?(state.seller?Math.ceil(remaining/86400000)+' days until code rotation':clock(remaining)):'Generating code…';}
+function updateInviteMotion(inv,now=serverNow()){
+  const key=inv?.code+':'+inv?.expires;
+  if(key!==inviteMotionKey){inviteMotionKey=key;inviteMotionDuration=Math.max(1,(inv?.expires||now)-now);}
+  const remaining=inv?Math.max(0,inv.expires-now):0;
+  $('inviteProgress').max=inviteMotionDuration;
+  $('inviteProgress').value=remaining;
+  const label=inv?(state.seller?Math.ceil(remaining/86400000)+' days until code rotation':clock(remaining)):'Generating code…';
+  if($('inviteTimer').textContent!==label)$('inviteTimer').textContent=label;
+}
 function fitConnectPage(){
   const content=$('connectPage').querySelector('.page-content'),panel=content.querySelector('.connect-panel');
   if(!content.clientHeight)return;
@@ -1299,7 +1513,8 @@ function renderConnect() {
   updateInviteMotion(inv);
   $('copyCode').disabled = !inv;
   const key = inv ? inv.code + ':' + inv.expires: '';
-  if (key !== qrKey && key !== qrPending) {
+  $('retryInviteQR').hidden = !key || key !== qrFailed;
+  if (key !== qrKey && key !== qrPending && key !== qrFailed) {
     $('qrImage').hidden = true;
     $('qrImage').removeAttribute('src');
     $('qrPlaceholder').removeAttribute('hidden');
@@ -1317,11 +1532,19 @@ function renderConnect() {
       $('qrImage').src = image;
       $('qrImage').hidden = false;
       $('qrPlaceholder').setAttribute('hidden', '');motion($('qrBox'),'motion-qr');
-    }).catch(() => {}).finally(() => {
+    }).catch(() => {
+      if (qrPending!==key) return;
+      qrFailed=key;
+      $('retryInviteQR').hidden=false;
+    }).finally(() => {
       if (qrPending === key) qrPending = '';
     });
   }
 }
+$('retryInviteQR').addEventListener('click',()=>{
+  qrFailed='';
+  renderConnect();
+});
 
 $('sellerProfileSettings').addEventListener('click',()=>{if(!state.seller)return;const field=el('input','nickname-input');field.value=state.sellerName||'Seller';field.maxLength=40;field.setAttribute('aria-label','Seller display name');const save=button('Save',async()=>{save.disabled=true;try{await api('sellers/profile',{name:field.value.trim()});closeModal();await refresh();}catch(e){modalError(e);save.disabled=false;}});show('Seller profile',[el('p','',state.sellerVerified?'Verified seller':'Unverified seller'),field,save,button('Close',closeModal,'secondary-button')]);});
 function openControlCenter(initialTab) {
@@ -1420,6 +1643,9 @@ function scrubRemovedRooms(previous,next,clearKeys=true){
 }
 function clearVolatile() {
   clearUserTicketUI();  drafts.clear();scrollMemory.clear();outbox.clear();nextOutboxAttempt=0;updateConnection();
+  $('chatSearch').value='';
+  unreadOnly=false;
+  $('unreadFilter').setAttribute('aria-pressed','false');
   scrubRemovedRooms(state.rooms,[]);
   liveRevision='';
   roomKeys.clear();roomKeyJobs.clear();if(native)clearPrivateKeys().catch(()=>{});
@@ -1576,12 +1802,14 @@ async function showEncryption(room) {
   if(!local?.context||!room.encryption.peer){info('Connecting securely',room.peerRole==='admin'||state.supportAgent?'qzu. is establishing an encrypted connection. No safety code is needed. If this takes longer, keep the app open while Support connects.':'Waiting for your contact’s encryption keys. They may need to unlock qzu. once. Messages stay protected and will not be sent unencrypted.');return;}
   if(room.peerRole==='admin'||state.supportAgent){info(encryptionReady(room)?'End-to-end encrypted':'Connecting securely',encryptionReady(room)?'This conversation is encrypted using registered device keys. No manual code comparison is required.':'Your encryption keys are ready. Waiting for the other device to finish connecting.');return;}
   const code = local.context.code;
-  const content = [
-    el('p', '', 'Compare the entire safety code in person or through a separate trusted channel. Do not confirm unless every character matches.'),
-    el('div', 'fingerprint-code', code.match(/.{1,4}/g).join(' ')),
-    el('p','','Comparing the safety code is optional. Automatic encryption authenticates registered device keys, not the person.'),
-  ];
-  if (!room.contact?.identityVerified) content.push(button('Codes match — verify', async () => {
+  const verified=Boolean(room.contact?.identityVerified);
+  const details=el('details','encryption-details');
+  details.append(
+    el('summary','','Safety code'),
+    el('p','','Compare every character in person or through another trusted channel.'),
+    el('div','fingerprint-code',code.match(/.{1,4}/g).join(' '))
+  );
+  if (!verified) details.append(button('Codes match — verify', async () => {
     try {
       if (roomKeys.get(room.id) !== local || local.context?.code !== code || !unlockToken) throw Error('Encryption key changed.');
       await api('encryption/confirm', { id: room.id, code, automatic:false });
@@ -1590,9 +1818,11 @@ async function showEncryption(room) {
       await refresh();
     } catch (error) { modalError(error); }
   }));
-  else content.push(el('p', '', room.encryption.peerConfirmed ? 'Both devices have confirmed.' : 'Waiting for your contact to confirm.'));
-  content.push(button('Close', closeModal, 'secondary-button'));
-  show('Encryption information', content);
+  show(verified?'Contact verified':encryptionReady(room)?'Encrypted':'Connecting securely', [
+    el('p','',verified?'The contact’s device identity has been verified.':'Messages are encrypted with device keys. Compare the safety code to verify who you are chatting with.'),
+    details,
+    button('Close', closeModal, 'secondary-button')
+  ]);
 }
 $('encryptionStatus').addEventListener('click', () => {
   const room = state.rooms.find(item => item.id === selected);
@@ -1614,8 +1844,9 @@ async function refresh(live=false, {restoreAccess = false} = {}) {
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   if (restoreAccess && data.access?.active !== true) throw Error('Access is still inactive.');
   scrubRemovedRooms(state.rooms,data.rooms);
-  const previouslyKnown=new Set(state.rooms.flatMap(r=>r.messages.map(m=>m.id)));const newActivity=Boolean(state.now)&&data.rooms.some(r=>!r.contact?.muted&&(r.id!==selected||!canReadCurrent())&&r.messages.some(m=>m.unread&&!previouslyKnown.has(m.id)));state = data;reconcileOutbox();
+  const previouslyKnown=new Set(state.rooms.flatMap(r=>r.messages.map(m=>m.id)));const newActivity=Boolean(state.now)&&data.rooms.some(r=>!r.contact?.muted&&!(r.mutedUntil>serverNow())&&(r.id!==selected||!canReadCurrent())&&r.messages.some(m=>m.unread&&!previouslyKnown.has(m.id)));state = data;reconcileOutbox();
   if(newActivity&&!document.hidden)showActivityBanner();
+  showTicketReply(data.ticketUpdate);
   liveRevision=data.revision||'';
   const keep=state.rooms.filter(directRoom).map(r=>r.id).sort();const sig=JSON.stringify(keep);if(native&&sig!==keyPruneSignature){keyPruneSignature=sig;roomVault('prune','',{rooms:keep}).catch(()=>{if(keyPruneSignature===sig)keyPruneSignature='';});}
   if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && (!mediaMessage || room.messages.some(message => message.id === mediaMessage && !message.deleted)))) closeModal();
@@ -2054,7 +2285,12 @@ function updateSendButton() {
   const needsSetup = encryptionRequired(room) && !encryptionReady(room);
   const send = $('send');
   const mediaReady=Boolean(room&&!room.admin&&!room.readOnly&&!needsSetup&&unlockToken&&!sendingMessage&&room.expires>serverNow());
-  const hasText=Boolean($('message').value.trim());$('cameraShortcut').hidden=!mediaReady||hasText;$('voiceShortcut').hidden=!mediaReady||hasText;send.hidden=mediaReady&&!hasText;
+  const hasText=Boolean($('message').value.trim());
+  $('composerActions').classList.toggle('has-media',Boolean(room&&!room.admin&&!room.readOnly&&!needsSetup));
+  $('cameraShortcut').hidden=!mediaReady||hasText;
+  $('voiceShortcut').hidden=!mediaReady||hasText;
+  send.hidden=mediaReady&&!hasText;
+  $('viewOnceHint').hidden = !viewOnce || !hasText || !onceAllowed(room);
   $('onceShortcut').hidden=!unlockToken||!onceAllowed(room)||(!hasText&&!viewOnce);
   $('onceShortcut').disabled=sendingMessage;
   send.disabled = !unlockToken || sendingMessage || !room || room.readOnly ||
@@ -2130,13 +2366,20 @@ async function sendMessage() {
   }
 }
 
-$('manageOutbox').addEventListener('click',()=>{const entries=[...outbox.entries()].filter(([,item])=>item.room===selected&&!item.accepted);const controls=[el('p','','Encrypted outgoing messages are kept in memory until sent, locked or expired. Cancelling an already accepted message does not delete it from the chat.')];for(const [key,item] of entries){const row=el('div','request-item');row.append(el('span','',item.failed?item.error:'Waiting to send'));if(item.failed)row.append(button('Retry',()=>{item.failed=false;nextOutboxAttempt=0;closeModal();void flushOutbox();},'secondary-button'));const cancel=button('Discard',()=>{if(item.sending||item.accepted)return;outbox.delete(key);closeModal();updateConnection();renderChat();},'secondary-button');cancel.disabled=item.sending||item.accepted;row.append(cancel);controls.push(row);}controls.push(button('Close',closeModal,'secondary-button'));show('Outgoing messages',controls);});
+$('manageOutbox').addEventListener('click',()=>{const entries=[...outbox.entries()].filter(([,item])=>item.room===selected&&!item.accepted);const controls=[el('p','','Encrypted outgoing messages are kept in memory until sent, locked or expired. Cancelling an already accepted message does not delete it from the chat.')];for(const [key,item] of entries){const row=el('div','request-item');row.append(el('span','',item.failed?item.error:'Waiting to send'));if(item.failed&&item.retryable)row.append(button('Retry',()=>{closeModal();retryOutgoing(key);},'secondary-button'));const cancel=button('Discard',()=>{if(item.sending||item.accepted)return;outbox.delete(key);closeModal();updateConnection();renderChat();},'secondary-button');cancel.disabled=item.sending||item.accepted;row.append(cancel);controls.push(row);}controls.push(button('Close',closeModal,'secondary-button'));show('Outgoing messages',controls);});
 $('message').addEventListener('input', () => {
   rememberRoom();updateSendButton();
   reportTyping();
 });
 $('cancelReply').addEventListener('click', clearReply);
-$('messages').addEventListener('scroll', acknowledgeMessages, { passive: true });
+$('messages').addEventListener('scroll', () => {
+  if(jumpFrame)return;
+  jumpFrame=requestAnimationFrame(()=>{
+    jumpFrame=0;
+    updateMessageJump();
+    void acknowledgeMessages();
+  });
+}, { passive: true });
 $('send').addEventListener('click', sendMessage);
 
 $('message').addEventListener('keydown', event => {
@@ -2249,6 +2492,7 @@ $('newCode').addEventListener('click', async() => {
   $('newCode').disabled = true;
   try {
     await api('invite', {minutes:Number($('inviteLifetime').value)});
+    $('connectOptions').open=false;
     haptic();await refresh();
   } catch (e) {
     showError(e);
@@ -2261,8 +2505,11 @@ $('copyCode').addEventListener('click', async() => {
   if (!inv || inv.expires <= serverNow()) return;
   try {
     await navigator.clipboard.writeText(inv.code);
-    const control=$('copyCode');control.replaceChildren(svg('check'));control.setAttribute('aria-label','Copied');motion(control,'motion-reaction');haptic();
-    setTimeout(()=>{control.replaceChildren(svg('copy'));control.setAttribute('aria-label','Copy code');},1000);
+    const control=$('copyCode');
+    control.replaceChildren(svg('check'),el('span','','Copied'));
+    motion(control,'motion-reaction');
+    haptic();
+    setTimeout(()=>control.replaceChildren(svg('copy'),el('span','','Copy code')),1000);
   } catch {
     info('Your code', inv.code);
   }
@@ -2597,6 +2844,16 @@ $('onceShortcut').addEventListener('click',()=>{
   if(!unlockToken||sendingMessage||!onceAllowed(room))return;
   setOnceMode(!viewOnce);rememberRoom();haptic();
 });
+$('previewOnceText').addEventListener('click',()=>{
+  const room=state.rooms.find(item=>item.id===selected);
+  if(!viewOnce||!onceAllowed(room))return;
+  const sample=el('div','once-text-preview');
+  const example=el('div','once-message');
+  example.append(svg('viewOnceIcon'),el('span','','Message'));
+  sample.append(example,el('p','','The recipient can open this message once. It then shows as Opened.'));
+  show('Recipient preview',[sample,button('Done',closeModal,'secondary-button')]);
+  mediaRoom=room.id;
+});
 
 function renderRequests() {
   const requests = state.requests || [];
@@ -2618,7 +2875,7 @@ $('connectionRequests').addEventListener('click', () => {
             const result=await api('connection/respond',{id:request.id,accept,nickname});
             closeModal();
             await refresh();
-            if(result.id)selectRoom(result.id);
+            if(result.id){selectRoom(result.id);haptic();motion($('threadName'),'motion-reaction');}
           };
           if(accept&&!request.group&&request.peerRole!=='admin'&&!state.supportAgent){askNickname(respond,'Accept');return;}
           try{await respond(undefined);}catch(error){modalError(error);}
@@ -2683,7 +2940,15 @@ $('recoverySettings').addEventListener('click',()=>{
 });
 function messageActions(room, message) {
   const picker = el('div', 'reaction-picker');
-  for (const emoji of reactions) picker.append(button(emoji, () => reactTo(room, message, emoji), 'reaction-choice'));
+  picker.setAttribute('aria-label','Reactions');
+  picker.setAttribute('role','group');
+  reactions.forEach((emoji,index)=>{
+    const mine=message.reactions?.some(reaction=>reaction.emoji===emoji&&reaction.mine)===true;
+    const choice=button(emoji,()=>reactTo(room,message,emoji),'reaction-choice');
+    choice.setAttribute('aria-label',reactionLabels[index]);
+    choice.setAttribute('aria-pressed',String(mine));
+    picker.append(choice);
+  });
   const extras=!room.encryption||(state.capabilities?.encryptedExtras&&encryptionReady(room));
   const controls = message.once || message.burnSeconds || !extras ? [] : [picker];
   if(!message.once&&!message.burnSeconds&&extras)controls.push(button('Reply',()=>{closeModal();beginReply(room,message);},'secondary-button'));
@@ -2752,6 +3017,15 @@ $('chatOptions').addEventListener('click', () => {
   }
   if (room.admin&&!room.support) return;
   const controls = [];
+  controls.push(button(room.mutedUntil>serverNow()?'Notifications muted':'Mute notifications',()=>showRoomMute(room),'secondary-button'));
+  if(room.contact)controls.push(button(room.contact.favorite?'Unpin contact':'Pin contact',async()=>{
+    try{
+      await api('contacts/update',{id:room.contact.id,favorite:!room.contact.favorite});
+      closeModal();
+      haptic();
+      await refresh();
+    }catch(error){modalError(error);}
+  },'secondary-button'));
   const removeLabel = room.mobileSupport || room.peerRole === 'admin' && !state.supportAgent ? 'Request chat deletion'
     : room.group && !room.canInvite ? 'Leave group' : 'Delete chat';
   if (room.support) {
@@ -2762,9 +3036,6 @@ $('chatOptions').addEventListener('click', () => {
     return;
   }
   if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
-  if (!room.group) {
-    if (!room.extended) controls.push(button('Extend chat', () => showExtension(room), 'secondary-button'));
-  }
   const confirm = member => {
     show('Block contact?', [
       el('p', '', 'This prevents new connections with this account and separates you from shared chats.'),
@@ -2824,32 +3095,56 @@ $('accentSettings').addEventListener('click', () => {
 });
 
 function clearMedia() {
+  mediaOpenSequence++;
   if (recordingCleanup) {
     const cleanup = recordingCleanup;
     recordingCleanup = null;
     cleanup();
   }
+  if (mediaDispose) mediaDispose();
+  mediaDispose = null;
   if (mediaUrl) URL.revokeObjectURL(mediaUrl);
   mediaUrl = null;
   mediaRoom = null;
   mediaMessage = null;
 }
 
-function showMedia(room, kind, source, messageId) {
-  const node = el(kind === 'image' ? 'img' : 'audio', 'temporary-media');
-  if (kind === 'image') node.alt = 'Temporary photo';
-  else node.controls = true;
-  show(kind === 'image' ? 'Photo' : 'Voice message', [node, button('Close', closeModal)]);
+function mediaOnceLabel(text) {
+  const label = el('p', 'qzu-once-label');
+  label.append(svg('viewOnceIcon'), el('span', '', text));
+  return label;
+}
+
+function mediaOncePreview(kind) {
+  const panel = el('div', 'qzu-once-preview');
+  panel.append(mediaOnceLabel('Recipient preview · View once'),
+    el('p', '', 'The recipient sees “' + kind + '” and “Unopened” until they open it.'));
+  return panel;
+}
+
+function showMedia(room, kind, source, messageId, once = false) {
+  const title = kind === 'image' ? 'Photo' : 'Voice message';
+  const contents = once ? [mediaOnceLabel('View once · Closing ends this view')] : [];
+  const player = kind === 'audio' ? QzuMedia.voicePlayer(source) : null;
+  const image = kind === 'image' ? el('img', 'temporary-media') : null;
+  if (image) image.alt = 'Temporary photo';
+  contents.push(player?.element || image, button('Close', closeModal));
+  show(title, contents);
   mediaRoom = room.id;
   mediaMessage = messageId;
-  if (source instanceof Blob) {
-    mediaUrl = URL.createObjectURL(source);
-    node.src = mediaUrl;
-  } else node.src = source;
+  if (player) mediaDispose = player.dispose;
+  if (image) {
+    if (source instanceof Blob) mediaUrl = URL.createObjectURL(source);
+    image.src = mediaUrl || source;
+  }
 }
 
 async function openMedia(room, message) {
   const epoch = authEpoch;
+  const request = ++mediaOpenSequence;
+  const active = () => request === mediaOpenSequence && epoch === authEpoch && Boolean(unlockToken) && !document.hidden
+    && selected === room.id && state.rooms.some(item => item.id === room.id && item.expires > serverNow()
+      && item.messages.some(m => m.id === message.id && !m.deleted));
   try {
     if (room.encryption || (native && directRoom(room))) {
       if (!encryptionReady(room) || !message.encryptedMedia) throw Error('Verify encryption before opening attachments.');
@@ -2858,7 +3153,7 @@ async function openMedia(room, message) {
       const context = roomKeys.get(room.id)?.context;
       if (!context) throw Error('Encryption key unavailable.');
       const blob = await QzuCrypto.decryptMedia(context, message.kind, result.cipher, message.mine);
-      if (epoch !== authEpoch || document.hidden || selected !== room.id || !state.rooms.some(item => item.id === room.id && item.messages.some(m => m.id === message.id && !m.deleted))) return;
+      if (!active()) return;
       showMedia(room, message.kind, blob, message.id);
       return;
     }
@@ -2867,10 +3162,9 @@ async function openMedia(room, message) {
     });
     if (!response.ok) throw new Error('Attachment unavailable.');
     const blob = await response.blob();
-    if (epoch !== authEpoch || document.hidden || selected !== room.id) return;
-    if (!state.rooms.some(item => item.id === room.id && item.messages.some(m => m.id === message.id && !m.deleted))) return;
+    if (!active()) return;
     showMedia(room, message.kind, blob, message.id);
-  } catch (error) { if (epoch === authEpoch) showError(error); }
+  } catch (error) { if (active()) showError(error); }
 }
 
 async function openOnceMessage(room, message) {
@@ -2899,8 +3193,8 @@ async function openOnceMessage(room, message) {
       else source=await QzuCrypto.decryptMedia(context,result.kind,result.cipher,false);
     }else if(result.media)source='data:'+result.media.mime+';base64,'+result.media.data;
     if(!active())return;
-    if(source)showMedia(room,result.kind,source,message.id);
-    else {show('View once',[el('p','once-content',text),button('Close',closeModal)]);mediaRoom=room.id;mediaMessage=message.id;}
+    if(source)showMedia(room,result.kind,source,message.id,true);
+    else {show('View once',[el('p','once-content',text),el('p','media-status','Closing ends this view.'),button('Close',closeModal)]);mediaRoom=room.id;mediaMessage=message.id;}
     haptic();
   }catch(error){if(active())modalError(error);}
   finally{openingOnce.delete(message.id);if(epoch===authEpoch&&unlockToken)refresh().catch(()=>{});}
@@ -2929,7 +3223,7 @@ function endVoiceGesture(event, cancelled=false){
   const g=voiceGesture;if(!g||g.id!==event.pointerId)return;
   voiceGesture=null;
   if(cancelled&&g.action!=='locked'){g.action='cancel';g.session?.cancel();return;}
-  if(g.action==='hold'){g.action='send';g.session?.send();}
+  if(g.action==='hold'){g.action='preview';g.session?.finish();}
 }
 voiceControl.addEventListener('pointerup',event=>endVoiceGesture(event));
 voiceControl.addEventListener('pointercancel',event=>endVoiceGesture(event,true));
@@ -2942,7 +3236,7 @@ function closeInlineAttachments(focus=false){
   toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-label','Message options');toggle.replaceChildren(svg('plus'));
   if(focus)$('message').focus({preventScroll:true});
 }
-function showAttachmentGrid(title,options){
+function showAttachmentGrid(options){
   const panel=$('inlineAttachments'),toggle=$('attachmentMenu');
   $('message').blur();panel.replaceChildren();
   for(const control of options){
@@ -2964,7 +3258,7 @@ $('attachmentMenu').addEventListener('click', () => {
     if (!encryptionReady(room)) { showEncryption(room); return; }
     const options=[button('Gallery', () => choosePhoto(room), 'secondary-button'),button('Camera',()=>choosePhoto(room,true),'secondary-button'),button('Voice message',()=>recordVoice(room),'secondary-button')];
     if(state.capabilities?.encryptedOnce)options.unshift(button(viewOnce?'Disable view once':'Enable view once',()=>{setOnceMode(!viewOnce);rememberRoom();closeModal();},'secondary-button'));
-    showAttachmentGrid('Encrypted attachments',options);
+    showAttachmentGrid(options);
     return;
   }
   const items = burnSeconds ? [] : [button('Gallery', () => choosePhoto(room), 'secondary-button'), button('Camera',()=>choosePhoto(room,true),'secondary-button'), button('Voice message', () => recordVoice(room), 'secondary-button')];
@@ -2982,7 +3276,7 @@ $('attachmentMenu').addEventListener('click', () => {
       closeModal();
     }, 'secondary-button'))]);
   }, 'secondary-button'));
-  showAttachmentGrid('Message options',items);
+  showAttachmentGrid(items);
 });
 
 function blobData(blob) {
@@ -2996,6 +3290,7 @@ function blobData(blob) {
 
 async function sendAttachment(room, kind, blob, once, cleaned=false) {
   const startEpoch=authEpoch;
+  const request=mediaOpenSequence;
   if(kind==='image'&&!cleaned)blob=await QzuMetadata.cleanImage(blob);
   if(startEpoch!==authEpoch||!unlockToken||selected!==room.id||document.hidden||room.expires<=serverNow())throw Error('Chat unavailable.');
   if (blob.size > 2 * 1024 * 1024 || !blob.size) throw new Error('Attachment must be under 2 MB.');
@@ -3011,31 +3306,154 @@ async function sendAttachment(room, kind, blob, once, cleaned=false) {
     if (epoch !== authEpoch || !unlockToken || selected !== room.id || document.hidden) throw new Error('Chat unavailable.');
     await api('message', { id: room.id, kind, mime: blob.type.split(';')[0], data, once });
   }
-  if(!$('message').value.trim())resetOnce();
-  closeModal();
+  if(request===mediaOpenSequence&&selected===room.id){
+    if(!$('message').value.trim())resetOnce();
+    closeModal();
+  }
   await refresh();
 }
 
-function choosePhoto(room,camera=false){
-  const input=el('input','photo-file');input.type='file';input.accept='image/jpeg,image/png,image/webp';if(camera)input.setAttribute('capture','environment');
-  const preview=el('img','temporary-media photo-preview');preview.alt='Photo preview';preview.hidden=true;
-  const status=el('p','media-status','Choose a photo');
-  const epoch=authEpoch;let once=viewOnce&&onceAllowed(room),prepared=null,selection=0,sending=false;
-  const toggle=button('',()=>{if(sending||!onceAllowed(room))return;once=!once;syncPhotoMode();haptic();},'icon-button once-toggle photo-once-toggle');
-  toggle.append(svg('viewOnceIcon'));toggle.hidden=!onceAllowed(room);
-  const mode=el('span','photo-once-label','');
-  const send=button('Send photo',async()=>{if(!prepared||sending)return;sending=true;send.disabled=true;toggle.disabled=true;input.disabled=true;status.textContent='Sending…';try{await sendAttachment(room,'image',prepared,once,true);}catch(error){sending=false;send.disabled=false;toggle.disabled=false;input.disabled=false;status.textContent='';modalError(error);}});send.disabled=true;
-  function syncPhotoMode(){syncOnceToggle(toggle,once);mode.textContent=once?'View once enabled':'View once';send.textContent=once?'Send once':'Send photo';}
+function choosePhoto(room, camera = false) {
+  const input = el('input', 'photo-file');
+  input.type = 'file';
+  input.accept = 'image/jpeg,image/png,image/webp';
+  input.setAttribute('aria-label', camera ? 'Capture photo' : 'Choose photo');
+  if (camera) input.setAttribute('capture', 'environment');
+  const preview = el('img', 'temporary-media photo-preview');
+  preview.alt = 'Photo preview';
+  preview.hidden = true;
+  const status = el('p', 'media-status', 'Choose a photo');
+  status.setAttribute('role', 'status');
+  const epoch = authEpoch;
+  const canViewOnce = onceAllowed(room);
+  let once = viewOnce && canViewOnce;
+  let source, prepared, rotation = 0, sequence = 0, sending = false;
+  const active = () => epoch === authEpoch && Boolean(unlockToken) && selected === room.id && !document.hidden && input.isConnected;
+  const editor = el('div', 'qzu-photo-editor');
+  const cropLabel = el('label', '', 'Crop');
+  const crop = el('select', 'qzu-photo-crop');
+  for (const [value, name] of [['', 'Original'], ['1', 'Square'], [4/5, 'Portrait'], [4/3, 'Landscape']]) {
+    const option = el('option', '', name);
+    option.value = value;
+    crop.append(option);
+  }
+  cropLabel.append(crop);
+  const rotate = button('Rotate right', () => {
+    rotation = (rotation + 90) % 360;
+    prepareEdit();
+  }, 'secondary-button');
+  crop.addEventListener('change', prepareEdit);
+  editor.append(cropLabel, rotate);
+  editor.hidden = true;
+  const recipient = el('div');
+  const toggle = button('', () => {
+    if (sending || !onceAllowed(room)) return;
+    once = !once;
+    syncPhotoMode();
+    haptic();
+  }, 'icon-button once-toggle photo-once-toggle');
+  toggle.append(svg('viewOnceIcon'));
+  toggle.hidden = !canViewOnce;
+  const mode = el('span', 'photo-once-label', 'View once');
+  const onceRow = el('div', 'photo-once-row');
+  onceRow.hidden = !canViewOnce;
+  onceRow.append(mode, toggle);
+  const send = button('Send photo', async () => {
+    if (!active() || !prepared || sending) return;
+    sending = true;
+    toggle.disabled = input.disabled = crop.disabled = rotate.disabled = send.disabled = true;
+    status.textContent = 'Sending…';
+    try {
+      await sendAttachment(room, 'image', prepared, once, true);
+    } catch (error) {
+      if (!active()) return;
+      sending = false;
+      toggle.disabled = input.disabled = crop.disabled = rotate.disabled = send.disabled = false;
+      status.textContent = '';
+      modalError(error);
+    }
+  });
+  send.disabled = true;
+
+  function syncPhotoMode() {
+    syncOnceToggle(toggle, once);
+    mode.textContent = once ? 'View once enabled' : 'View once';
+    send.textContent = once ? 'Send once' : 'Send photo';
+    recipient.replaceChildren();
+    recipient.hidden = !once;
+    if (once) recipient.append(mediaOncePreview('Photo'));
+  }
+
+  function setPreview(blob) {
+    if (mediaUrl) URL.revokeObjectURL(mediaUrl);
+    prepared = blob;
+    mediaUrl = URL.createObjectURL(blob);
+    preview.src = mediaUrl;
+    preview.hidden = false;
+    status.textContent = Math.max(1, Math.round(blob.size / 1024)) + ' KB';
+    send.disabled = false;
+  }
+
+  async function prepareEdit() {
+    if (!source || sending) return;
+    const request = ++sequence;
+    prepared = null;
+    send.disabled = true;
+    status.textContent = 'Updating preview…';
+    try {
+      const ratio = crop.value ? Number(crop.value) : null;
+      const result = rotation || ratio ? await QzuMetadata.cleanImage(source, {rotation, ratio}) : source;
+      if (request === sequence && active()) setPreview(result);
+    } catch (error) {
+      if (request === sequence && active()) {
+        status.textContent = 'Change the crop or choose another photo.';
+        dialogError(error);
+      }
+    }
+  }
+
+  input.addEventListener('change', async () => {
+    const request = ++sequence;
+    const file = input.files?.[0];
+    input.value = '';
+    source = prepared = null;
+    rotation = 0;
+    crop.value = '';
+    send.disabled = true;
+    editor.hidden = preview.hidden = true;
+    preview.removeAttribute('src');
+    if (mediaUrl) URL.revokeObjectURL(mediaUrl);
+    mediaUrl = null;
+    if (!file) return;
+    status.textContent = 'Preparing photo…';
+    try {
+      const clean = await QzuMetadata.cleanImage(file);
+      if (request !== sequence || !active()) return;
+      source = clean;
+      setPreview(clean);
+      editor.hidden = false;
+    } catch (error) {
+      if (request === sequence && active()) {
+        status.textContent = 'Choose another photo.';
+        dialogError(error);
+      }
+    }
+  });
+
   syncPhotoMode();
-  const onceRow=el('div','photo-once-row');onceRow.hidden=toggle.hidden;onceRow.append(mode,toggle);
-  input.addEventListener('change',async()=>{const n=++selection,file=input.files?.[0];prepared=null;send.disabled=true;preview.hidden=true;if(mediaUrl){URL.revokeObjectURL(mediaUrl);mediaUrl=null;}if(!file)return;status.textContent='Preparing photo…';try{const blob=await QzuMetadata.cleanImage(file);if(epoch!==authEpoch||n!==selection||!body.contains(input)||document.hidden)return;prepared=blob;mediaUrl=URL.createObjectURL(blob);preview.src=mediaUrl;preview.hidden=false;status.textContent=Math.round(blob.size/1024)+' KB';send.disabled=false;}catch(error){status.textContent='';dialogError(error);}});
-  show(camera?'Camera':'Gallery',[input,preview,status,onceRow,send,button('Cancel',closeModal,'secondary-button')]);mediaRoom=room.id;
-  // File chooser must be opened synchronously from the user's tap.
+  const actions = el('div', 'qzu-media-actions');
+  actions.append(send, button('Cancel', closeModal, 'secondary-button'));
+  show(camera ? 'Camera' : 'Photo', [input, preview, editor, status, onceRow, recipient, actions]);
+  mediaRoom = room.id;
+  mediaDispose = () => {
+    source = prepared = null;
+    preview.removeAttribute('src');
+  };
   input.click();
 }
 
 async function recordVoice(room,gesture=null) {
-  const once=viewOnce;
+  const once=viewOnce&&onceAllowed(room);
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     if(voiceGesture===gesture)voiceGesture=null;
     info('Voice message', 'Recording is unavailable in this browser.');
@@ -3045,56 +3463,65 @@ async function recordVoice(room,gesture=null) {
   const panel=el('div','voice-gesture-panel'), controls=el('div','voice-gesture-controls');
   const wave=el('canvas','voice-wave');wave.width=320;wave.height=38;
   panel.append(label,wave,controls);
-  let microphone,recorder,context,source,analyser,ticker,timer,chunks=[],cancelled=false,instant=false,locked=!gesture,pausedAt=0,pausedTotal=0,started=0,finished=false;
+  let microphone,recorder,context,analyser,ticker,deadline,chunks=[],cancelled=false,locked=!gesture,pausedAt=0,pausedTotal=0,started=0,finished=false;
+  const waveform=new Uint8Array(128);
   const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&selected===room.id&&page==='chat'&&(!mobile.matches||mobileOpen)&&!document.hidden&&room.expires>serverNow()&&panel.isConnected;
-  const stopTracks=()=>{microphone?.getTracks().forEach(track=>track.stop());if(context){context.close().catch(()=>{});context=null;}clearInterval(ticker);clearTimeout(timer);};
+  const stopTracks=()=>{microphone?.getTracks().forEach(track=>track.stop());if(context){context.close().catch(()=>{});context=null;}clearInterval(ticker);clearTimeout(deadline);};
   const cleanup=()=>{cancelled=true;stopTracks();if(recorder&&recorder.state!=='inactive')recorder.stop();chunks=[];panel.remove();$('composer').classList.remove('voice-recording');if(recordingCleanup===cleanup)recordingCleanup=null;if(voiceGesture===gesture)voiceGesture=null;};
   const cancel=()=>{cleanup();if(!gesture)closeModal();};
-  const stop=(send=false)=>{if(finished||cancelled||!recorder||recorder.state==='inactive')return;instant=send;recorder.stop();};
+  const stop=()=>{if(finished||cancelled||!recorder||recorder.state==='inactive')return;recorder.stop();};
+  const elapsed=()=>started?Math.max(0,((pausedAt||Date.now())-started-pausedTotal)/1000):0;
   const pause=button('Pause',()=>{if(recorder?.state==='recording'){recorder.pause();pausedAt=Date.now();pause.textContent='Resume';}else if(recorder?.state==='paused'){recorder.resume();pausedTotal+=Date.now()-pausedAt;pausedAt=0;pause.textContent='Pause';}},'secondary-button');
-  const preview=button('Preview',()=>stop(false),'secondary-button');preview.disabled=true;
-  const sendNow=button('Send',()=>stop(true));sendNow.disabled=true;pause.disabled=true;
+  const preview=button('Preview',stop);preview.disabled=true;
+  pause.disabled=true;
   const discard=button('Discard',cancel,'secondary-button');
-  const lock=()=>{locked=true;controls.replaceChildren(discard,pause,preview,sendNow);label.textContent='Recording hands-free';motion(controls,'motion-page');};
-  if(gesture)gesture.session={cancel,lock,send:()=>stop(true)};
-  // A modal would make the pointer-capture target inert. Keep hold gestures in the composer.
-  if(gesture){$('composer').before(panel);$('composer').classList.add('voice-recording');controls.replaceChildren(discard);label.textContent='Hold · Slide left to cancel · Slide up to lock';}
+  const lock=()=>{locked=true;controls.replaceChildren(discard,pause,preview);label.textContent='Recording hands-free';motion(controls,'motion-page');};
+  if(gesture)gesture.session={cancel,lock,finish:stop};
+  if(gesture){$('composer').before(panel);$('composer').classList.add('voice-recording');controls.replaceChildren(discard);label.textContent='Release to preview · Slide left to discard · Slide up to lock';}
   else{show('Voice message',[panel]);lock();}
   mediaRoom=room.id;
   recordingCleanup=cleanup;
   try{
     microphone=await navigator.mediaDevices.getUserMedia({audio:true});
     if(cancelled||!active()||gesture?.action==='cancel'){cleanup();return;}
-    if(gesture?.action==='send'){cleanup();return;}
+    if(gesture?.action==='preview'){cleanup();return;}
     const mime=['audio/mp4','audio/webm','audio/ogg'].find(type=>MediaRecorder.isTypeSupported(type));
     if(!mime)throw Error('No supported recording format.');
     recorder=new MediaRecorder(microphone,{mimeType:mime,audioBitsPerSecond:64000});
     recorder.ondataavailable=event=>{if(!cancelled&&event.data.size)chunks.push(event.data);};
     recorder.onerror=()=>{const visible=active();cleanup();if(visible)showError(Error('Recording interrupted.'));};
     for(const track of microphone.getTracks())track.addEventListener('ended',()=>{if(!finished&&!cancelled)cancel();},{once:true});
-    recorder.onstop=async()=>{
+    recorder.onstop=()=>{
       if(finished)return;finished=true;stopTracks();
       if(recordingCleanup===cleanup)recordingCleanup=null;
       if(cancelled||!active()){cleanup();return;}
       const blob=new Blob(chunks,{type:mime});chunks=[];
       if(!blob.size){cleanup();if(!gesture)closeModal();return;}
       panel.remove();$('composer').classList.remove('voice-recording');
-      if(instant){try{await sendAttachment(room,'audio',blob,once);return;}catch(error){if(epoch!==authEpoch||!unlockToken||document.hidden||selected!==room.id)return;/* Do not auto-retry: delivery may already have succeeded. */showError(error);return;}}
-      const player=el('audio','temporary-media');player.controls=true;
-      const send=button(once?'Send once':'Send recording',async()=>{send.disabled=true;try{await sendAttachment(room,'audio',blob,once);}catch(error){send.disabled=false;modalError(error);}});
-      show('Voice message',[player,send,button('Discard',closeModal,'secondary-button')]);mediaRoom=room.id;mediaUrl=URL.createObjectURL(blob);player.src=mediaUrl;
+      const player=QzuMedia.voicePlayer(blob,{duration:elapsed()});
+      const actions=el('div','qzu-media-actions');
+      const send=button(once?'Send once':'Send recording',async()=>{
+        send.disabled=true;
+        try{await sendAttachment(room,'audio',blob,once);}
+        catch(error){if(send.isConnected&&epoch===authEpoch){send.disabled=false;modalError(error);}}
+      });
+      actions.append(send,button('Discard',closeModal,'secondary-button'));
+      show('Preview recording',once?[player.element,mediaOncePreview('Voice message'),actions]:[player.element,actions]);
+      mediaRoom=room.id;
+      mediaDispose=player.dispose;
     };
-    recorder.start();started=Date.now();pause.disabled=false;preview.disabled=false;sendNow.disabled=false;if(gesture?.action==='locked')lock();
-    try{const AudioCtx=window.AudioContext||window.webkitAudioContext;if(AudioCtx){context=new AudioCtx();source=context.createMediaStreamSource(microphone);analyser=context.createAnalyser();analyser.fftSize=256;source.connect(analyser);}}catch{}
+    recorder.start(300);started=Date.now();pause.disabled=false;preview.disabled=false;if(gesture?.action==='locked')lock();
+    try{const AudioCtx=window.AudioContext||window.webkitAudioContext;if(AudioCtx){context=new AudioCtx();const source=context.createMediaStreamSource(microphone);analyser=context.createAnalyser();analyser.fftSize=256;source.connect(analyser);}}catch{}
     ticker=setInterval(()=>{
       if(!active()){cancel();return;}
-      const seconds=Math.floor(((pausedAt||Date.now())-started-pausedTotal)/1000);
-      label.textContent=(locked?'Recording':'‹ Slide left to cancel · ↑ Lock')+' · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
+      const seconds=Math.floor(elapsed());
+      if(seconds>=60){stop();return;}
+      label.textContent=(pausedAt?'Paused':locked?'Recording':'Release to preview · Slide left to discard · Slide up to lock')+' · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
       const ctx=wave.getContext('2d');if(!ctx)return;ctx.clearRect(0,0,wave.width,wave.height);
-      const data=new Uint8Array(128);if(analyser)analyser.getByteTimeDomainData(data);else data.fill(128);
-      ctx.fillStyle=getComputedStyle(wave).color;for(let i=0;i<40;i++){const h=Math.max(2,Math.abs(data[i*3]-128)/128*36);ctx.fillRect(i*8,(38-h)/2,4,h);}
+      if(analyser&&!pausedAt)analyser.getByteTimeDomainData(waveform);else waveform.fill(128);
+      ctx.fillStyle=getComputedStyle(wave).color;for(let i=0;i<40;i++){const h=Math.max(2,Math.abs(waveform[i*3]-128)/128*36);ctx.fillRect(i*8,(38-h)/2,4,h);}
     },100);
-    timer=setTimeout(()=>stop(false),60000);
+    deadline=setTimeout(stop,5*60000);
   }catch(error){const visible=active();cleanup();if(visible)showError(error);}
 }
 
@@ -3340,6 +3767,58 @@ $('chatBackground').addEventListener('click', () => {
   show('Chat background', [picker, button('Close', closeModal)]);
 });
 
+const chatPresets = [
+  {label:'Midnight',theme:'dark',background:'plain',accent:'red'},
+  {label:'Graphite',theme:'dark',background:'grid',accent:'grey'},
+  {label:'Paper',theme:'light',background:'dots',accent:'red'}
+];
+const textSizes = {standard:'Standard',large:'Large',extra:'Extra large'};
+
+function appearanceSample(classes = '') {
+  const sample = el('div', 'appearance-sample ' + classes);
+  sample.append(el('span','', 'Are you free to chat?'),el('span','mine','Yes, give me a minute.'));
+  return sample;
+}
+
+$('appearancePresets').addEventListener('click',()=>{
+  const picker=el('div','theme-preset-list');
+  const root=document.documentElement;
+  for (const preset of chatPresets) {
+    const choice=button('',()=>{
+      applyTheme(preset.theme);
+      $('theme').value=preset.theme;
+      applyChatBackground(preset.background);
+      applyAccent(preset.accent);
+      for (const item of picker.children) item.setAttribute('aria-pressed',String(item===choice));
+      haptic();
+    },'theme-preset');
+    choice.setAttribute('aria-pressed',String(root.dataset.theme===preset.theme&&root.dataset.chatBackground===preset.background&&root.dataset.accent===preset.accent));
+    choice.append(appearanceSample('sample-'+preset.label.toLowerCase()+' pattern-'+preset.background),el('span','',preset.label));
+    picker.append(choice);
+  }
+  show('Theme presets',[picker,button('Done',closeModal)]);
+});
+
+function applyTextSize(size) {
+  if (!Object.hasOwn(textSizes,size)) size='standard';
+  document.documentElement.dataset.chatTextSize=size;
+  $('chatTextSizeLabel').textContent=textSizes[size];
+  try{localStorage.setItem('qzu-chat-text-size',size);}catch{}
+}
+try{applyTextSize(localStorage.getItem('qzu-chat-text-size'));}catch{applyTextSize('standard');}
+$('chatTextSize').addEventListener('click',()=>{
+  const size=el('select','settings-select');
+  size.setAttribute('aria-label','Message text size');
+  for (const [value,label] of Object.entries(textSizes)) {
+    const option=el('option','',label);
+    option.value=value;
+    size.append(option);
+  }
+  size.value=document.documentElement.dataset.chatTextSize;
+  size.addEventListener('change',()=>applyTextSize(size.value));
+  show('Message text size',[appearanceSample('text-size-sample'),size,button('Done',closeModal)]);
+});
+
 $('submitFeedback').addEventListener('click', () => {
   const input = el('textarea', 'edit-input feedback-input');
   input.placeholder = 'Your feedback';
@@ -3384,7 +3863,6 @@ function stopCheckout() {
   accessTimer = null;
 }
 
-// Persist intent before sending a request, so even a lost response can resume safely.
 function checkoutStorage(renewal){return renewal?'qzu-checkout-v2-renewal':'qzu-checkout-v2-access';}
 function readCheckout(renewal){
  const storage=checkoutStorage(renewal),legacy=renewal?'qzu-renewal':'qzu-access';
@@ -3566,6 +4044,22 @@ function showRenewal(){
  const saved=savedInvoice(true);if(saved){showInvoice(saved,null,true);return;}showPlanCheckout(true);
 }
 
+function paymentTimeline(payment) {
+  const blocked=payment.closed&&!payment.activationKey&&!payment.redeemed||['rejected','expired','revoked','cancelled'].includes(payment.state);
+  const stage=payment.redeemed?4:payment.activationKey||payment.released?3
+    :payment.needsReview||payment.state==='confirmed'||payment.status==='review'?2
+    :payment.state==='submitted'?1:0;
+  const timeline=el('ol','pay-timeline');
+  timeline.setAttribute('aria-label','Payment progress');
+  ['Payment','Confirmations','Support review','Key ready','Activated'].forEach((label,index)=>{
+    const item=el('li','',label);
+    if(index<stage)item.dataset.complete='true';
+    if(index===stage&&!blocked)item.setAttribute('aria-current','step');
+    timeline.append(item);
+  });
+  return timeline;
+}
+
 function showInvoice(secret,initial,renewal){
  if(playBuild){if(renewal)showRenewal();else showAccess();return;}
  if(checkoutOrder(renewal,secret)?.ticketOpen){showPaymentTicket(secret,renewal);return;}
@@ -3594,11 +4088,12 @@ function showInvoice(secret,initial,renewal){
   status.className='pay-status '+(approved||invoice.redeemed?'success':invoice.state==='submitted'?'waiting':expired||legacy?'warning':'');
   status.replaceChildren(el('span','pay-status-dot'),el('strong','',invoice.redeemed?'Activated':approved?(invoice.coin?'Confirmed on blockchain':secret.startsWith('QZO-')?'Payment approved':'Access key verified'):invoice.needsReview?'Automatic checking ended':invoice.state==='submitted'?'Waiting for confirmations':expired?'Quote expired':invoice.state==='rejected'?'Payment rejected':invoice.state==='pending'?'Awaiting payment':invoice.state));
   const order=el('div','pay-order-summary');order.append(el('div','',checkoutName(invoice.plan)),el('strong','',invoice.usd?'$'+invoice.usd:legacy?'€'+invoice.euro:'Access key'));details.append(order);
+  if(invoice.coin)details.append(paymentTimeline(invoice));
   if(invoice.ticketRequired&&!invoice.redeemed&&invoice.state==='confirmed'&&!invoice.activationKey){
-   details.append(el('div','pay-success-mark','✓'),el('p','pay-note','Payment verified. Open your ticket for key delivery.'));
+   details.append(el('p','pay-note','Payment verified. Open your ticket for key delivery.'));
    controls.append(button('Open Ticket  →',()=>showPaymentTicket(secret,renewal,record?.ticketStatus==='rejected'||record?.ticketStatus==='completed'),'primary-button pay-primary'));
   }else if(approved){
-   const keyBox=el('div','pay-success-box');keyBox.append(el('div','pay-success-mark','✓'),el('h3','','Your activation key'),el('p','access-address',invoice.activationKey),copy('Copy key',invoice.activationKey));details.append(keyBox);
+   const keyBox=el('div','pay-success-box');keyBox.append(el('h3','','Your activation key'),el('p','access-address',invoice.activationKey),copy('Copy key',invoice.activationKey));details.append(keyBox);
    const activate=button(renewal?'Apply access':'Activate account',async()=>{if(busy)return;setBusy(true);activate.disabled=true;try{
     if(renewal){await api('access/renew',{key:invoice.activationKey});await finishRenewal(secret);}
     else{const result=await api('session',{accessKey:invoice.activationKey});if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Activation unavailable.');completeInvoice(false,secret);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();}
@@ -3668,7 +4163,7 @@ function showPaymentTicket(secret,renewal,fresh=false){
   if(!active())return;current=t;ticketId=t.id;wantFresh=false;try{updateCheckoutOrder(renewal,secret,{ticketId:t.id,ticketFresh:false,ticketStatus:t.status});}catch{}
   const key=JSON.stringify([t.messages.map(m=>m.id),t.state,t.txid,t.confirmations,t.needsReview,t.released,t.closed,t.activationKey,t.redeemed,t.status,t.reason]);if(key===last)return;last=key;
   const pinned=list.scrollHeight-list.scrollTop-list.clientHeight<85,top=list.scrollTop;
-  const info=el('div','pay-ticket-system');info.append(el('strong','',checkoutName(t.plan)+' · $'+t.usd+' · '+t.coin),el('small','',t.status==='rejected'?'Ticket rejected':t.status==='completed'?'Ticket completed':t.status==='review'?'Under review':t.state==='confirmed'?'Payment verified':t.needsReview?'Support review needed':t.txid?'Verification pending':'Send your transaction ID and proof.'));list.replaceChildren(info);if(t.reason)list.append(el('p','pay-ticket-system pay-ticket-rejected',t.reason));
+  const info=el('div','pay-ticket-system');info.append(el('strong','',checkoutName(t.plan)+' · $'+t.usd+' · '+t.coin),paymentTimeline(t),el('small','',t.status==='rejected'?'Ticket rejected':t.status==='completed'?'Ticket completed':t.status==='review'?'Under review':t.state==='confirmed'?'Payment verified':t.needsReview?'Support review needed':t.txid?'Verification pending':'Send your transaction ID.'));list.replaceChildren(info);if(t.reason)list.append(el('p','pay-ticket-system pay-ticket-rejected',t.reason));
   if(t.needsReview&&!t.closed)list.append(el('p','pay-ticket-system','Automatic checking has ended. Correct the transaction ID if you entered it incorrectly, or message Support here. If you already paid, do not send a second payment.'));
   if(!t.messages.length&&!t.closed&&!t.needsReview)list.append(el('div','pay-ticket-bubble other','Send your transaction ID and add a screenshot if Support requests proof.'));
   for(const m of t.messages){
@@ -3706,6 +4201,19 @@ function updateAccessDisplay(){
  const text=v.plan==='Unavailable'?'':v.plan;if(row.textContent!==text)row.textContent=text;
  const remaining=$('accessRemaining'),status=$('accessStatusLabel');if(remaining&&remaining.textContent!==v.remaining)remaining.textContent=v.remaining;if(status&&status.textContent!==v.status){status.textContent=v.status;status.dataset.state=v.status;}
 }
+$('supportReference').addEventListener('click',async()=>{
+  try{
+    const {reference}=await api('account/support-reference');
+    const field=el('input','access-key-input');
+    field.value=reference;field.readOnly=true;
+    field.setAttribute('aria-label','Account reference');
+    const copy=button('Copy reference',async()=>{
+      try{await navigator.clipboard.writeText(reference);copy.textContent='Copied';}
+      catch{field.focus();field.select();}
+    });
+    show('Support reference',[el('p','','Share this reference with qzu-Support so they can find your account.'),field,copy,button('Close',closeModal,'secondary-button')]);
+  }catch(error){showError(error);}
+});
 $('accessSettings').addEventListener('click', () => {
  const v=QzuSimplicity.accessSummary(state.access,serverNow()),panel=el('div','access-summary-panel'),remaining=el('strong','access-summary-value',v.remaining),status=el('span','access-summary-status',v.status);
  remaining.id='accessRemaining';status.id='accessStatusLabel';status.dataset.state=v.status;
@@ -3714,39 +4222,178 @@ $('accessSettings').addEventListener('click', () => {
  if(v.timed&&!playBuild)controls.push(button('Renew access',showRenewal));controls.push(button('Close',closeModal,'secondary-button'));show('qzu-Access',controls);
 });
 
-function clearUserTicketUI(){ticketEpoch++;ticketSelected=null;ticketMode='list';ticketBusy=false;ticketPolling=false;ticketLast='';ticketDraft='';ticketPending=null;$('userTicketContent').replaceChildren();}
+let ticketBannerMessage=null,ticketReadMessage=null,ticketReadJob=null;
+function clearUserTicketUI(){ticketEpoch++;ticketSelected=null;ticketMode='list';ticketBusy=false;ticketPolling=false;ticketLast='';ticketDraft='';ticketPending=null;ticketBannerMessage=null;ticketReadMessage=null;ticketReadJob=null;$('userTicketContent').replaceChildren();}
 function ticketAlive(epoch,auth){return epoch===ticketEpoch&&auth===authEpoch&&Boolean(unlockToken)&&page==='tickets'&&!accessDue&&!termsPending&&!suspendedAccount;}
 function ticketNavigate(mode,id=null){ticketEpoch++;ticketMode=mode;ticketSelected=id;ticketLast='';ticketDraft='';ticketPending=null;ticketBusy=false;ticketPolling=false;$('userTicketContent').replaceChildren();refreshUserTickets();}
-function renderTicketList(items,completed=[]){
- if(ticketLast){try{const old=JSON.parse(ticketLast);if(Array.isArray(old)&&old.some(t=>completed.includes(t.id)&&!t.closed))showActivityBanner('Ticket completed');}catch{}}
- items=items.filter(t=>!t.closed);
- const root=$('userTicketContent');if(!state.supportAgent&&!items.length){ticketLast='[]';renderNewUserTicket(true);return;}const key=JSON.stringify(items);if(ticketLast===key)return;ticketLast=key;root.replaceChildren();
- if(state.supportAgent){root.append(button('Open ticket queue',()=>openControlCenter('Tickets')));return;}
- const list=el('div','user-ticket-list');for(const t of items){const row=button('',()=>ticketNavigate('chat',t.id),'user-ticket-row');row.append(svg('ticketIcon','user-ticket-icon'),el('span','user-ticket-title',t.topic+' · #'+t.id.slice(0,6)),el('small',t.closed?'ticket-solved':'ticket-open',t.closed?'Solved':t.assigned?'Open':'Pending'));list.append(row);}
- root.append(list);
- if(!items.some(t=>t.mine==='customer'&&!t.closed))root.append(button('New Ticket',()=>ticketNavigate('new'),'primary-button user-ticket-new'));
- if(!items.length)list.append(el('p','pay-note','Contact support or request a seller.'));
+
+function showTicketReply(update) {
+  if(!update||update.messageId===ticketBannerMessage||document.hidden||pushOptedOut()
+    ||(page==='tickets'&&ticketSelected===update.ticketId))return;
+  ticketBannerMessage=update.messageId;
+  showActivityBanner('New ticket reply',()=>{
+    if(!unlockToken)return;
+    navigate('/tickets');
+    ticketNavigate('chat',update.ticketId);
+  });
+}
+
+function ticketStatus(ticket){
+  if(ticket.closed)return 'Completed';
+  if(ticket.unreadReply)return 'New reply';
+  if(ticket.replyStatus==='reply')return 'Reply available';
+  return 'Waiting for Support';
+}
+
+function ticketRow(ticket, mode){
+  const row=button('',()=>ticketNavigate(mode,ticket.id),'user-ticket-row');
+  const title=el('span','user-ticket-title',ticket.topic+' · #'+ticket.id.slice(0,6));
+  const status=el('small',ticket.closed?'ticket-solved':'ticket-open',ticketStatus(ticket));
+  row.append(svg('ticketIcon','user-ticket-icon'),title,status);
+  return row;
+}
+
+function renderTicketList(items,completed=[],receipts=[]){
+  if(ticketLast){
+    try{
+      const old=JSON.parse(ticketLast).active;
+      if(old?.some(ticket=>completed.includes(ticket.id)))showActivityBanner('Ticket completed');
+    }catch{}
+  }
+  const active=items.filter(ticket=>!ticket.closed),key=JSON.stringify({active,receipts});
+  if(ticketLast===key)return;
+  ticketLast=key;
+  const root=$('userTicketContent');
+  if(state.supportAgent){root.replaceChildren(button('Open ticket queue',()=>openControlCenter('Tickets')));return;}
+  if(!active.length)renderNewUserTicket(true);
+  else{
+    root.replaceChildren();
+    const list=el('div','user-ticket-list');
+    list.append(...active.map(ticket=>ticketRow(ticket,'chat')));
+    root.append(list);
+    if(!active.some(ticket=>ticket.mine==='customer'))root.append(button('New Ticket',()=>ticketNavigate('new'),'primary-button user-ticket-new'));
+  }
+  const previous=root.querySelector('.user-ticket-receipts');
+  const open=Boolean(previous?.open);
+  previous?.remove();
+  if(receipts.length){
+    const history=el('details','user-ticket-receipts');
+    history.open=open;
+    history.append(el('summary','','Completed tickets'),...receipts.map(ticket=>ticketRow(ticket,'receipt')));
+    root.append(history);
+  }
 }
 function renderNewUserTicket(isDefault=false){
  const root=$('userTicketContent');if(root.querySelector('.user-ticket-form'))return;root.replaceChildren();const form=el('form','user-ticket-form'),topic=el('select','access-key-input'),field=el('textarea','edit-input');for(const name of ['General question','Request a Seller','Account issue','Other']){const o=el('option','',name);o.value=name;topic.append(o);}field.placeholder='What do you need?';field.maxLength=2000;field.value=ticketDraft;field.oninput=()=>ticketDraft=field.value;
  const submit=el('button','primary-button','Create Ticket'),err=el('p','pay-note');submit.type='submit';form.append(svg('ticketIcon','user-ticket-hero'),el('h2','','Create a Ticket'),topic,field,err,submit);if(!isDefault)form.append(button('Back',()=>ticketNavigate('list'),'secondary-button'));root.append(form);
  form.onsubmit=async e=>{e.preventDefault();if(ticketBusy||!field.value.trim())return;const epoch=ticketEpoch,auth=authEpoch;ticketBusy=true;submit.disabled=true;try{const t=await api('tickets/open',{topic:topic.value,text:field.value.trim(),requestId:crypto.randomUUID()},true);if(ticketAlive(epoch,auth))ticketNavigate('chat',t.id);}catch(e){if(ticketAlive(epoch,auth))err.textContent=errorMessage(e);}finally{if(ticketAlive(epoch,auth)){ticketBusy=false;submit.disabled=false;}}};
 }
+function ticketReceipt(ticket){
+  const receipt=el('div','user-ticket-receipt');
+  const reference=el('input','access-key-input');
+  reference.readOnly=true;reference.value=ticket.id;reference.setAttribute('aria-label','Ticket reference');
+  const copy=button('Copy ticket reference',async()=>{
+    try{await navigator.clipboard.writeText(ticket.id);copy.textContent='Copied';}
+    catch{reference.focus();reference.select();}
+  },'secondary-button');
+  receipt.append(el('strong','',ticketStatus(ticket)),el('p','pay-note',
+    (ticket.closed?'Closed ':'Opened ')+new Date(ticket.closed||ticket.created).toLocaleString()),reference,copy);
+  if(!ticket.closed)receipt.append(el('p','pay-note',ticket.unreadReply?'Support or another participant replied.':ticket.replyStatus==='reply'?'You can reply below.':'We’ll let you know when someone replies.'));
+  return receipt;
+}
+
+function readTicketReply(feed,id,epoch,auth){
+  const message=feed.dataset.unreadReply;
+  if(!message||ticketReadJob||document.hidden||!ticketAlive(epoch,auth)||feed.scrollHeight-feed.scrollTop-feed.clientHeight>=80)return;
+  const job=api('tickets/read',{id,message},true).then(()=>{
+    if(!ticketAlive(epoch,auth)||feed.dataset.unreadReply!==message)return;
+    delete feed.dataset.unreadReply;
+    ticketBannerMessage=message;
+    ticketReadMessage=message;
+    if(state.ticketUpdate?.messageId===message)state.ticketUpdate=null;
+    updateNavigation();
+    const status=feed.parentElement.querySelector('.user-ticket-receipt strong');
+    if(status?.textContent==='New reply')status.textContent='Reply available';
+  }).catch(()=>{}).finally(()=>{if(ticketReadJob===job)ticketReadJob=null;});
+  ticketReadJob=job;
+}
+
+function ticketBubble(message){
+  const bubble=el('div','pay-ticket-bubble '+(message.mine?'mine':'other'));
+  if(!message.mine){
+    const seller=['seller','verified-seller'].includes(message.role);
+    const name=el('span','user-ticket-name',message.role==='admin'?'qzu-Support':seller?(message.name||'Seller'):message.role==='system'?'Ticket':'Customer');
+    if(message.role==='admin')name.prepend(svg('supportAvatar','ticket-admin-avatar'));
+    if(message.role==='admin'||message.role==='verified-seller')name.append(svg(message.role==='admin'?'adminBadge':'sellerBadge','admin-badge'));
+    bubble.append(name);
+  }
+  bubble.append(el('p','',message.text),el('small','pay-ticket-time',fmtTime(message.at)));
+  return bubble;
+}
+
 function renderUserTicket(t,epoch,auth){
- if(t.closed){showActivityBanner('Ticket completed');ticketNavigate('list');return;}
- const root=$('userTicketContent');let feed=root.querySelector('.user-ticket-feed'),field=root.querySelector('textarea'),send=root.querySelector('.user-ticket-send'),notice=root.querySelector('.user-ticket-notice');
- if(!feed){root.replaceChildren();const head=el('div','user-ticket-head');const back=button('‹',()=>ticketNavigate('list'),'secondary-button');back.setAttribute('aria-label','Back to tickets');head.append(back,el('strong','',t.topic+' · #'+t.id.slice(0,6)));feed=el('div','user-ticket-feed');field=el('textarea','edit-input');field.placeholder='Message…';field.maxLength=2000;field.value=ticketDraft;field.oninput=()=>ticketDraft=field.value;notice=el('p','pay-note user-ticket-notice');
- const composer=el('form','user-ticket-compose');send=el('button','primary-button user-ticket-send','Send');composer.append(field,send);root.append(head,feed,notice,composer);
- composer.onsubmit=async e=>{e.preventDefault();const text=field.value.trim();if(!text||ticketBusy)return;ticketBusy=true;send.disabled=true;if(!ticketPending||ticketPending.text!==text)ticketPending={text,requestId:crypto.randomUUID()};try{const data=await api('tickets/send',{id:t.id,...ticketPending},true);if(ticketAlive(epoch,auth)){if(field.value.trim()===text){field.value='';ticketDraft='';}ticketPending=null;renderUserTicket(data,epoch,auth);feed.scrollTop=feed.scrollHeight;}}catch(e){if(ticketAlive(epoch,auth))notice.textContent=errorMessage(e);}finally{if(ticketAlive(epoch,auth)){ticketBusy=false;send.disabled=field.disabled;}}};
- }
- const key=JSON.stringify(t.messages);if(ticketLast!==key){ticketLast=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','pay-ticket-bubble '+(m.mine?'mine':'other'));if(!m.mine){const name=el('span','user-ticket-name',m.role==='admin'?'qzu-Support':m.role==='seller'||m.role==='verified-seller'?(m.name||'Seller'):m.role==='system'?'Ticket':'Customer');if(m.role==='admin')name.prepend(svg('supportAvatar','ticket-admin-avatar'));if(m.role==='admin'||m.role==='verified-seller')name.append(svg(m.role==='admin'?'adminBadge':'sellerBadge','admin-badge'));b.append(name);}b.append(el('p','',m.text),el('small','pay-ticket-time',fmtTime(m.at)));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
- field.disabled=Boolean(t.closed);send.disabled=field.disabled||ticketBusy;notice.textContent=t.closed?'Solved · Ticket closed':t.assigned?'Open':'Waiting for Support';root.querySelector('.user-ticket-compose').hidden=Boolean(t.closed);
+  const root=$('userTicketContent');
+  let feed=root.querySelector('.user-ticket-feed');
+  if(t.closed){
+    if(ticketMode==='receipt'&&root.querySelector('.user-ticket-receipt'))return;
+    ticketMode='receipt';
+    root.replaceChildren(button('Back to tickets',()=>ticketNavigate('list'),'secondary-button'),el('h2','',t.topic),ticketReceipt(t));
+    return;
+  }
+  if(!feed){
+    const back=button('Back',()=>ticketNavigate('list'),'secondary-button');
+    back.setAttribute('aria-label','Back to tickets');
+    const head=el('div','user-ticket-head');
+    head.append(back,el('strong','',t.topic+' · #'+t.id.slice(0,6)));
+    feed=el('div','user-ticket-feed');
+    const field=el('textarea','edit-input');
+    field.placeholder='Message…';field.maxLength=2000;field.value=ticketDraft;
+    field.setAttribute('aria-label','Ticket message');
+    field.oninput=()=>ticketDraft=field.value;
+    const notice=el('p','pay-note user-ticket-notice');
+    const composer=el('form','user-ticket-compose'),send=el('button','primary-button user-ticket-send','Send');
+    composer.append(field,send);
+    root.replaceChildren(head,ticketReceipt(t),feed,notice,composer);
+    feed.addEventListener('scroll',()=>readTicketReply(feed,t.id,epoch,auth),{passive:true});
+    composer.onsubmit=async e=>{
+      e.preventDefault();
+      const text=field.value.trim();
+      if(!text||ticketBusy)return;
+      ticketBusy=true;send.disabled=true;
+      if(!ticketPending||ticketPending.text!==text)ticketPending={text,requestId:crypto.randomUUID()};
+      try{
+        const data=await api('tickets/send',{id:t.id,...ticketPending},true);
+        if(!ticketAlive(epoch,auth))return;
+        if(field.value.trim()===text){field.value='';ticketDraft='';}
+        ticketPending=null;
+        renderUserTicket(data,epoch,auth);
+        feed.scrollTop=feed.scrollHeight;
+      }catch(error){
+        if(ticketAlive(epoch,auth))notice.textContent=errorMessage(error);
+      }finally{
+        if(ticketAlive(epoch,auth)){ticketBusy=false;send.disabled=field.disabled;}
+      }
+    };
+  }
+  const receipt=root.querySelector('.user-ticket-receipt'),status=ticketStatus(t);
+  if(receipt.querySelector('strong').textContent!==status)receipt.replaceWith(ticketReceipt(t));
+  if(t.unreadReply&&t.unreadReply!==ticketReadMessage)feed.dataset.unreadReply=t.unreadReply;
+  else delete feed.dataset.unreadReply;
+  const key=JSON.stringify(t.messages);
+  if(ticketLast!==key){
+    ticketLast=key;
+    const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;
+    feed.replaceChildren(...t.messages.map(ticketBubble));
+    if(bottom)feed.scrollTop=feed.scrollHeight;
+  }
+  root.querySelector('.user-ticket-send').disabled=ticketBusy;
+  readTicketReply(feed,t.id,epoch,auth);
 }
 async function refreshUserTickets(){
  if(!unlockToken||page!=='tickets'||accessDue||termsPending||suspendedAccount||ticketPolling||ticketBusy||document.hidden)return;
  if(ticketMode==='new'){renderNewUserTicket();return;}
- const epoch=ticketEpoch,auth=authEpoch;ticketPolling=true;try{const result=ticketMode==='chat'?await api('tickets/state',{id:ticketSelected},true):await api('tickets');if(!ticketAlive(epoch,auth)||ticketBusy)return;if(ticketMode==='chat')renderUserTicket(result,epoch,auth);else renderTicketList(result.items,result.completed||[]);}
- catch(e){if(ticketAlive(epoch,auth)&&ticketMode==='chat'&&(e.status===404||errorMessage(e)==='Ticket unavailable.')){showActivityBanner('Ticket no longer available');ticketNavigate('list');return;}if(ticketAlive(epoch,auth)&&!$('userTicketContent').childElementCount)$('userTicketContent').append(el('p','pay-note',errorMessage(e)),button('Retry',()=>ticketNavigate('list'),'secondary-button'));}
+ const epoch=ticketEpoch,auth=authEpoch;ticketPolling=true;try{const result=ticketSelected?await api('tickets/state',{id:ticketSelected},true):await api('tickets');if(!ticketAlive(epoch,auth)||ticketBusy)return;if(ticketSelected)renderUserTicket(result,epoch,auth);else renderTicketList(result.items,result.completed||[],result.receipts||[]);}
+ catch(e){if(ticketAlive(epoch,auth)&&ticketSelected&&(e.status===404||errorMessage(e)==='Ticket unavailable.')){showActivityBanner('Ticket no longer available');ticketNavigate('list');return;}if(ticketAlive(epoch,auth)&&!$('userTicketContent').childElementCount)$('userTicketContent').append(el('p','pay-note',errorMessage(e)),button('Retry',()=>ticketNavigate('list'),'secondary-button'));}
  finally{if(epoch===ticketEpoch)ticketPolling=false;}
 }
 setInterval(refreshUserTickets,5000);

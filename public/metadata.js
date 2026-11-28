@@ -21,18 +21,29 @@ globalThis.QzuMetadata = (() => {
     if(!header||!pixels||!ended)throw Error('Invalid image encoding.');
     return new Blob(parts,{type:'image/png'});
   }
-  async function cleanImage(blob) {
+  function photoGeometry(width,height,rotation=0,ratio=null) {
+    if(!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0||width*height>40000000)throw Error('Image dimensions are too large.');
+    if(![0,90,180,270].includes(rotation)||(ratio!==null&&(!Number.isFinite(ratio)||ratio<0.25||ratio>4)))throw Error('Invalid photo edit.');
+    const sideways=rotation===90||rotation===270;
+    const sourceRatio=ratio===null?width/height:sideways?1/ratio:ratio;
+    const w=Math.min(width,height*sourceRatio),h=Math.min(height,width/sourceRatio);
+    return {x:(width-w)/2,y:(height-h)/2,w,h,width:sideways?h:w,height:sideways?w:h};
+  }
+  async function cleanImage(blob,{rotation=0,ratio=null}={}) {
     if(!blob?.size||blob.size>inputLimit||!['image/jpeg','image/png','image/webp'].includes(blob.type))throw Error('Choose a JPG, PNG or WebP under 20 MB.');
     const url=URL.createObjectURL(blob),image=new Image(),canvas=document.createElement('canvas');
     try {
       await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(Error('Image could not be decoded.'));image.src=url;});
-      const width=image.naturalWidth,height=image.naturalHeight;
-      if(!width||!height||width*height>40000000)throw Error('Image dimensions are too large.');
-      let scale=Math.min(1,2048/Math.max(width,height));
+      const crop=photoGeometry(image.naturalWidth,image.naturalHeight,rotation,ratio);
+      const sideways=rotation===90||rotation===270;
+      let scale=Math.min(1,2048/Math.max(crop.width,crop.height));
       for(let attempt=0;attempt<7;attempt++){
-        canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
+        canvas.width=Math.max(1,Math.round(crop.width*scale));canvas.height=Math.max(1,Math.round(crop.height*scale));
         const ctx=canvas.getContext('2d');if(!ctx)throw Error('Image cleaning unavailable.');
-        ctx.drawImage(image,0,0,canvas.width,canvas.height);
+        const w=sideways?canvas.height:canvas.width,h=sideways?canvas.width:canvas.height;
+        ctx.translate(canvas.width/2,canvas.height/2);
+        ctx.rotate(rotation*Math.PI/180);
+        ctx.drawImage(image,crop.x,crop.y,crop.w,crop.h,-w/2,-h/2,w,h);
         const encoded=await new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(Error('Image cleaning failed.')),'image/png'));
         const cleaned=stripPng(new Uint8Array(await encoded.arrayBuffer()));
         if(cleaned.size<=limit)return cleaned;
@@ -43,5 +54,5 @@ globalThis.QzuMetadata = (() => {
       URL.revokeObjectURL(url);image.src='';canvas.width=0;canvas.height=0;
     }
   }
-  return Object.freeze({cleanImage,stripPng});
+  return Object.freeze({cleanImage,stripPng,photoGeometry});
 })();

@@ -47,5 +47,5 @@ test('public BTC explorer checks mainnet, exact output and confirmation depth',a
 });
 test('customer and admin interfaces include ticket lifecycle and viewport anchoring',()=>{
  const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),admin=readFileSync(new URL('../public/control.js',import.meta.url),'utf8');
- assert.ok(app.includes('Close Ticket'));assert.ok(app.includes('ticketStatus'));assert.ok(app.includes('ticketId'));assert.ok(app.includes('requestAnimationFrame'));assert.ok(admin.includes('Open Tickets'));assert.ok(admin.includes('Completed Tickets'));assert.ok(admin.includes('payment-tickets/reject'));
+ assert.ok(app.includes('Close Ticket'));assert.ok(app.includes('ticketStatus'));assert.ok(app.includes('ticketId'));assert.ok(app.includes('requestAnimationFrame'));assert.ok(admin.includes('Open payment tickets'));assert.ok(admin.includes('Completed payment tickets'));assert.ok(admin.includes("handle('reject'"));
 });
