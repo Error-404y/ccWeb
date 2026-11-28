@@ -164,3 +164,28 @@ test('desktop automatic verification and support deletion endpoints remain behin
  for(const path of ['/api/control/support/delete','/api/control/chats/delete','/api/control/chats/confirm'])assert.ok(server.indexOf("app.post('"+path+"'")>gate);
  assert.ok(desktop.includes("api('chats/confirm',{id,code:established.code})"));assert.ok(!desktop.includes('Confirm safety code'));assert.ok(control.includes('Approve deletion'));
 });
+
+test('structured audit captures only safe identifiers and preserves actor, source and outcome',async()=>{
+ const {adminAudit}=await import('../lib/admin-audit.mjs');const db=setup();try{
+ const audit=adminAudit(db,()=>start),actor=randomUUID(),target=randomUUID(),related=randomUUID();
+ audit.record(actor,'mobile','tickets/action','ticket',target,related,'assign');
+ audit.record(actor,'desktop','keys/generate','key','QZU-SECRET',null,'private text','rejected');
+ const items=audit.list();assert.equal(items.length,2);assert.equal(items[0].target,null);assert.equal(items[0].detail,null);assert.equal(items[0].outcome,'rejected');
+ assert.equal(items[1].actor,actor);assert.equal(items[1].source,'mobile');assert.equal(items[1].target,target);assert.equal(items[1].related,related);
+ assert.equal(audit.list({q:target}).length,1);assert.equal(audit.list({before:items[0].id}).length,1);
+ assert.throws(()=>audit.list({before:0}));
+ }finally{db.close();}
+});
+test('native control requires signed device, unlocked admin and cannot use desktop encryption identity',()=>{
+ const source=readFileSync(new URL('../server.mjs',import.meta.url),'utf8'),app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
+ const gate=source.slice(source.indexOf("app.use('/api/control',(req,res,next)=>"),source.indexOf("app.post('/api/control/logout'"));
+ assert.ok(gate.includes("req.account.access_plan!=='admin'"));assert.ok(gate.includes('unlocks.check'));assert.ok(gate.includes('isTicketAdmin'));assert.ok(gate.includes('Use your native messenger.'));
+ assert.ok(app.includes("api('control/'+path,data,true)"));
+});
+test('ticket creator and actual message actor are visible to admins, not customer or seller',()=>{
+ const db=setup();try{
+ const t=userTickets(db,{isAdmin:id=>id==='admin'});const {id}=t.open('customer','Other','test',randomUUID());t.adminAction(id,'admin','accept');t.send(id,'admin',true,'hello',randomUUID());
+ const a=t.view(id,'admin',true),c=t.view(id,'customer');assert.equal(a.owner,'customer');assert.equal(a.admin,'admin');assert.equal(a.messages[0].actor,'customer');assert.equal(a.messages[1].actor,'admin');assert.equal(c.admin,undefined);assert.equal(c.messages[1].actor,undefined);
+ assert.equal(db.prepare("SELECT count(*) n FROM access_audit WHERE action IN ('user-ticket-create','user-ticket-accept')").get().n,2);
+ }finally{db.close();}
+});
