@@ -539,6 +539,7 @@ app.post('/api/feedback', guard('feedback', 3, 10 * 60_000), async (req, res) =>
 });
 app.get('/api/admin/feedback',guard('admin-feedback',60,60000),(req,res)=>res.json({items:feedback.list(req.account.access_plan==='admin',req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before))}));
 app.post('/api/admin/feedback/review',guard('admin-feedback-review',60,60000),(req,res)=>res.json(feedback.review(req.account.access_plan==='admin',req.body?.id)));
+app.post('/api/admin/feedback/status',guard('admin-feedback-status',30,60000),(req,res)=>{const result=feedback.status(req.account.access_plan==='admin',req.body?.id,req.body?.status,req.account.id,req.body?.note??'');if(req.body?.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
 app.post('/api/admin/feedback/delete',guard('admin-feedback-delete',30,60000),(req,res)=>res.json(feedback.remove(req.account.access_plan==='admin',req.body?.id)));
 
 app.post('/api/message/edit', guard('edit', 40, 60_000), (req, res) => {
