@@ -292,6 +292,8 @@ app.post('/api/control/chats/once/send',(req,res)=>{const p=desktopChats.require
 app.post('/api/control/chats/receipts',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};chats.requireRoom(p.principal,b.id);const ids=Array.isArray(b.ids)?b.ids.slice(0,50):[];chats.acknowledge(p.principal,[{id:b.id,delivered:ids,read:ids,seen:ids}]);res.json({ok:true});});
 app.get('/api/control/sellers',(req,res)=>res.json({items:sellers.list(chats)}));
 app.post('/api/control/sellers/generate',(req,res)=>res.json(sellers.generateKey(req.account.id)));
+app.post('/api/control/sellers/rotate',(req,res)=>res.json(sellers.rotate(req.body?.id,chats,req.account.id)));
+app.post('/api/control/sellers/access',(req,res)=>{const b=req.body||{};if(!sellers.isSeller(b.id)||typeof b.suspended!=='boolean')return res.status(404).json({error:'Seller unavailable.'});const result=accountAction(db,b.id,req.account.id,b.suspended?'revoke':'restore','Seller access management');if(b.suspended){unlocks.revokeAll(b.id);push.remove(b.id);chats.hidePresence(b.id);}sellers.sync(chats);res.json(result);});
 app.post('/api/control/sellers/verify',(req,res)=>res.json(sellers.verify(req.body?.id,req.body?.verified,req.account.id)));
 app.get('/api/control/announcements',(req,res)=>res.json(req.query.before?official.history(Number(req.query.before)):official.snapshot(req.account.id)));
 app.post('/api/control/announcements/publish',(req,res)=>{const result=official.publish(req.body?.text,true);push.broadcast(req.account.id);res.json(result);});
@@ -428,6 +430,9 @@ app.use('/api',(req,res,next)=>{
   if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
 });
+app.get('/api/sellers/directory',guard('seller-directory',30,60000),(req,res)=>res.json({items:sellers.directory(req.account.id)}));
+app.post('/api/sellers/profile',guard('seller-profile',10,60000),(req,res)=>res.json(sellers.rename(req.account.id,req.body?.name)));
+app.post('/api/sellers/connect',guard('seller-connect',10,60000),(req,res)=>{if(!sellers.isActive(req.account.id)||!sellers.isActive(req.body?.id))return res.status(403).json({error:'Seller unavailable.'});if(req.account.restricted_until>Date.now())return res.status(403).json({error:'Messaging is temporarily restricted.'});const invite=sellers.ensureCode(req.body.id,chats);res.json(chats.requestConnection(req.account.id,invite.code,sellers.name(req.body.id)));});
 app.get('/api/tickets',guard('user-tickets',60,60000),(req,res)=>res.json({items:helpTickets.list(req.account.id)}));
 app.post('/api/tickets/open',guard('user-ticket-open',10,60000),(req,res)=>{if(req.account.access_plan==='admin')return res.status(403).json({error:'Use Control to manage tickets.'});const b=req.body||{},t=helpTickets.open(req.account.id,b.topic,b.text,b.requestId);notifyPaymentAdmins();res.json(t);});
 app.post('/api/tickets/state',guard('user-ticket-state',60,60000),(req,res)=>res.json(helpTickets.view(req.body?.id,req.account.id)));
@@ -565,7 +570,7 @@ function stateData(a) {
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
     access: accessStatus(a),
     supportAgent: a.access_plan==='admin',
-    seller:a.access_plan==='seller',sellerVerified:sellers.role(a.id)==='verified-seller',
+    seller:a.access_plan==='seller',sellerName:sellers.name(a.id),sellerVerified:sellers.role(a.id)==='verified-seller',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
