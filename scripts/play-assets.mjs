@@ -7,8 +7,8 @@ function replaceBetween(source,start,end,replacement){
 export function playAssets(source){
   source=replaceBetween(source,'function updateDownload(release) {','let pushPlugin=null,',`function maybePromptUpdate(){}
 $('updateCenter').addEventListener('click',()=>info('Update center','Installed: '+installedVersion+'. Updates are delivered by Google Play.'));`);
-  source=replaceBetween(source,'function showAccess() {',"$('accessSettings').addEventListener",`function showAccess(){
-  showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key',()=>showKeyEntry(false)),...legalButtons()]);
+  source=replaceBetween(source,'function showAccess(){',"$('accessSettings').addEventListener",`function showAccess(){
+  showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key',()=>showKeyEntry(false)),button('Recover account',showAccountRecovery,'secondary-button'),...legalButtons()]);
 }
 function showKeyEntry(renewal){
   if(renewal){showRenewal();return;}
@@ -29,7 +29,7 @@ function showInvoice(secret,initial,renewal){if(renewal)showRenewal();else showA
   if(start<0)throw Error('Missing access settings');
   source=source.slice(0,start)+`$('accessSettings').addEventListener('click',()=>{
   const access=state.access;
-  info('qzu-Access',access?.plan==='monthly'?'Existing access until '+new Date(access.paidUntil).toLocaleDateString()+'.':'Lifetime or existing account access.');
+  info('qzu-Access',['monthly','week','month','year'].includes(access?.plan)?'Existing access until '+new Date(access.paidUntil).toLocaleDateString()+'.':'Lifetime or existing account access.');
 });
 `;
   if(/Litecoin checkout|Pay with Litecoin|Purchase access|access\/invoice|access\/submit|access\/renew|release\.downloads/.test(source))throw Error('External payment or update action remains in Play assets.');
