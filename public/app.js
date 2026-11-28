@@ -308,7 +308,7 @@ async function api(path, data, quiet = false) {
       body: write ? JSON.stringify(data): undefined,
       cache: 'no-store',
       credentials: 'same-origin',
-      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(path==='push/test'?25000:8000) : undefined
+      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(path==='push/test'||path==='access/invoice'?25000:8000) : undefined
     });
   }
   catch (error) {
@@ -516,7 +516,7 @@ function showLogin() {
     closeModal();
     if(suspendedAccount){updatePages();showRestrictedAccount('Account suspended','Your account access has been restricted.');return;}
     if(termsPending){updatePages();showTermsGate(result.termsVersion||1);return;}
-    if (accessDue || checkoutReturn) {
+    if (accessDue || checkoutReturn || (!playBuild&&savedInvoice(true))) {
       updatePages();
       const resume = checkoutReturn;
       checkoutReturn = null;
@@ -3182,17 +3182,40 @@ function stopCheckout() {
   accessTimer = null;
 }
 
-function rememberInvoice(key, renewal) {
-  try { localStorage.setItem(renewal ? 'qzu-renewal' : 'qzu-access', key); } catch {}
+// Persist intent before sending a request, so even a lost response can resume safely.
+function checkoutStorage(renewal){return renewal?'qzu-checkout-v2-renewal':'qzu-checkout-v2-access';}
+function readCheckout(renewal){
+ const storage=checkoutStorage(renewal),legacy=renewal?'qzu-renewal':'qzu-access';
+ let state={active:null,orders:[],draft:{plan:'month',coin:'LTC'}};
+ try{const parsed=JSON.parse(localStorage.getItem(storage)||'null');if(parsed&&Array.isArray(parsed.orders))state={...state,...parsed};
+ const old=localStorage.getItem(legacy);
+ if(old&&/^QZ[UO]-[A-F0-9]{48}$/.test(old)&&!state.orders.some(x=>x.key===old)){
+  state.orders.push({key:old,stage:'legacy',created:Date.now()});
+  localStorage.setItem(storage,JSON.stringify(state));
+ }
+ if(old)localStorage.removeItem(legacy);
+ }catch{}
+ return state;
 }
-
-function savedInvoice(renewal) {
-  try { return localStorage.getItem(renewal ? 'qzu-renewal' : 'qzu-access') || ''; } catch { return ''; }
+function saveCheckout(renewal,state){localStorage.setItem(checkoutStorage(renewal),JSON.stringify(state));}
+function checkoutOrder(renewal,key){return readCheckout(renewal).orders.find(x=>x.key===key);}
+function updateCheckoutOrder(renewal,key,patch={},activate=false){
+ const state=readCheckout(renewal),index=state.orders.findIndex(x=>x.key===key);
+ const next={...(index<0?{key,created:Date.now()}:state.orders[index]),...patch,key};
+ if(index<0)state.orders.push(next);else state.orders[index]=next;
+ if(activate)state.active=key;
+ saveCheckout(renewal,state);return next;
 }
-
-function forgetInvoice(renewal) {
-  try { localStorage.removeItem(renewal ? 'qzu-renewal' : 'qzu-access'); } catch {}
-}
+function saveCheckoutDraft(renewal,plan,coin){try{const state=readCheckout(renewal);state.draft={plan,coin};saveCheckout(renewal,state);}catch{}}
+function rememberInvoice(key,renewal){updateCheckoutOrder(renewal,key,{stage:'order'},true);}
+function savedInvoice(renewal){const state=readCheckout(renewal);return state.orders.some(x=>x.key===state.active&&!['redeemed','archived'].includes(x.stage))?state.active:'';}
+function leaveInvoice(renewal,key){const state=readCheckout(renewal);if(state.active===key)state.active=null;saveCheckout(renewal,state);}
+function completeInvoice(renewal,key){try{updateCheckoutOrder(renewal,key,{stage:'redeemed',txDraft:''});leaveInvoice(renewal,key);}catch{}}
+function forgetInvoice(renewal){try{const state=readCheckout(renewal);state.active=null;saveCheckout(renewal,state);}catch{}}
+function checkoutSecret(){return 'QZO-'+Array.from(crypto.getRandomValues(new Uint8Array(24)),v=>v.toString(16).padStart(2,'0')).join('').toUpperCase();}
+const checkoutPlans=[['week','1 Week','1.99','7 days of private messaging'],['month','1 Month','5.99','A full month of access'],['year','1 Year','69.99','12 months of access'],['lifetime','Lifetime','79.99','Pay once, no renewal']];
+function checkoutName(plan){return checkoutPlans.find(p=>p[0]===plan)?.[1]|| (plan==='monthly'?'Legacy · 5 months':plan==='renewal'?'Legacy renewal':'Access order');}
+function checkoutPrice(plan){return checkoutPlans.find(p=>p[0]===plan)?.[2]||null;}
 
 function showAccountRecovery(){
  if(!native){dialogError(Error('Recover your account in the mobile app.'));return;}
@@ -3204,23 +3227,37 @@ function showAccountRecovery(){
 }
 function showAccess(){
  if(playBuild){showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key', () => showKeyEntry(false)),button('Recover account',showAccountRecovery,'secondary-button'),...legalButtons()]);return;}
- showPlanCheckout(false);
+ const saved=savedInvoice(false);if(saved){showInvoice(saved,null,false);return;}showPlanCheckout(false);
+}
+function checkoutHeading(step,title,description){
+ const head=el('div','pay-heading'),brand=el('div','pay-brand');brand.append(svg('lock'),el('span','','qzu. ACCESS'),el('span','pay-secure','SECURE CHECKOUT'));
+ const steps=el('div','pay-steps');for(const [i,label] of ['Choose','Payment','Activate'].entries()){const item=el('div','pay-step'+(i<=step?' current':'')+(i<step?' done':''));item.append(el('span','',i<step?'✓':String(i+1)),el('small','',label));steps.append(item);}
+ head.append(brand,steps,el('h2','',title),el('p','',description));return head;
 }
 function showPlanCheckout(renewal){
- const plans=[['week','1 Week','1.99'],['month','1 Month','5.99'],['year','1 Year','69.99'],['lifetime','Lifetime','79.99']];
- let plan='month',coin='LTC',available=new Set(),busy=false;
- const cards=el('div','checkout-plans'),coins=el('div','checkout-coins'),notice=el('p','access-mini','Checking payment networks…');
- const check=el('input');check.type='checkbox';const terms=el('label','feedback-confirm');terms.append(check,el('span','','I accept the payment terms and will send the exact amount on the selected network.'));
- const purchase=button('Continue',async()=>{if(busy||!check.checked||!available.has(coin))return;busy=true;renderChoice();try{const invoice=await api('access/invoice',{plan,coin,renewal,accepted:true});rememberInvoice(invoice.orderKey,renewal);showInvoice(invoice.orderKey,invoice,renewal);}catch(e){dialogError(e);busy=false;renderChoice();}});
- function renderChoice(){cards.replaceChildren();for(const [id,label,price] of plans){const b=button('',()=>{if(!busy){plan=id;renderChoice();}},'checkout-plan'+(plan===id?' selected':''));b.append(el('strong','',label),el('span','',' $'+price));b.setAttribute('aria-pressed',String(plan===id));cards.append(b);}coins.replaceChildren();for(const [id,label] of [['LTC','Litecoin'],['BTC','Bitcoin'],['SOL','Solana']]){const b=button(label,()=>{coin=id;renderChoice();},'checkout-coin'+(coin===id?' selected':''));b.disabled=busy||!available.has(id);b.setAttribute('aria-pressed',String(coin===id));coins.append(b);}purchase.disabled=busy||!check.checked||!available.has(coin);purchase.textContent=busy?'Creating invoice…':'Continue · $'+plans.find(p=>p[0]===plan)[2];}
- check.addEventListener('change',renderChoice);renderChoice();
- const controls=[el('p','access-mini','Choose your access. Validity begins at activation.'),cards,el('h3','','Payment network'),coins,notice,terms,purchase];
- const saved=savedInvoice(renewal);if(saved)controls.push(button('Resume purchase',()=>showInvoice(saved,null,renewal),'secondary-button'));
- controls.push(button(renewal?'Enter renewal key':'Redeem Key',()=>showKeyEntry(renewal),'secondary-button'));
- if(!renewal)controls.push(button('Recover account',showAccountRecovery,'secondary-button'));
- else controls.push(button(accessDue?'Lock':'Close',()=>{modalLocked=false;if(accessDue){delete modal.dataset.checkout;checkoutReturn=null;lock();}else closeModal();},'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button'));
- showCheckout(renewal?'Renew access':'Choose your access',controls,renewal);
- api('access/methods',undefined,true).then(data=>{if(!body.contains(coins))return;available=new Set(data.coins.filter(c=>c.available).map(c=>c.coin));if(!available.has(coin))coin=[...available][0]||'LTC';notice.textContent=available.size?'Network fees are not included.':'Payment networks are temporarily unavailable. You can still redeem an existing key.';renderChoice();}).catch(()=>{notice.textContent='Payment networks are unavailable. You can still redeem an existing key.';});
+ const saved=readCheckout(renewal);let plan=checkoutPrice(saved.draft?.plan)?saved.draft.plan:'month',coin=['LTC','BTC','SOL'].includes(saved.draft?.coin)?saved.draft.coin:'LTC',available=new Set(),busy=false;
+ const shell=el('div','pay-shell'),cards=el('div','pay-plans'),coins=el('div','pay-coins'),notice=el('p','pay-note','Checking payment networks…'),history=el('div','pay-history');
+ const check=el('input');check.type='checkbox';const terms=el('label','pay-terms');terms.append(check,el('span','','I accept the payment terms. I will send the exact quoted amount using the selected network.'));
+ const purchase=button('Continue',async()=>{
+  if(busy||!check.checked||!available.has(coin))return;
+  busy=true;renderChoice();const chosen=plan,network=coin;
+  try{const key=checkoutSecret();updateCheckoutOrder(renewal,key,{stage:'intent',plan:chosen,coin:network,usd:checkoutPrice(chosen)},true);showInvoice(key,null,renewal);}
+  catch(e){notice.textContent='Cannot save this order on your device. No payment requested.';busy=false;renderChoice();}
+ },'primary-button pay-primary');
+ function renderChoice(){
+  cards.replaceChildren();for(const [id,label,price,desc] of checkoutPlans){const b=button('',()=>{if(!busy){plan=id;saveCheckoutDraft(renewal,plan,coin);renderChoice();}},'pay-plan'+(plan===id?' selected':''));b.setAttribute('aria-pressed',String(plan===id));const top=el('div','pay-plan-top');top.append(el('span','pay-radio',plan===id?'●':'○'),el('span','',label));if(id==='lifetime')top.append(el('span','pay-tag','ONE TIME'));b.append(top,el('strong','pay-price','$'+price),el('small','',desc));cards.append(b);}
+  coins.replaceChildren();for(const [id,label,symbol] of [['LTC','Litecoin','Ł'],['BTC','Bitcoin','₿'],['SOL','Solana','◎']]){const b=button('',()=>{if(!busy){coin=id;saveCheckoutDraft(renewal,plan,coin);renderChoice();}},'pay-coin '+id.toLowerCase()+(coin===id?' selected':''));b.append(el('span','pay-coin-symbol',symbol),el('strong','',id),el('small','',label));b.disabled=busy||!available.has(id);b.setAttribute('aria-pressed',String(coin===id));coins.append(b);}
+  purchase.disabled=busy||!check.checked||!available.has(coin);purchase.textContent=busy?'Preparing checkout…':'Continue · $'+checkoutPrice(plan);total.textContent='$'+checkoutPrice(plan);
+ }
+ const total=el('strong','pay-total'),summary=el('div','pay-summary');summary.append(el('span','','Order total · USD'),total);
+ const orders=saved.orders.filter(o=>o.stage!=='redeemed'&&o.stage!=='archived').sort((a,b)=>b.created-a.created);
+ if(orders.length){history.append(el('h3','','Saved orders'),el('p','pay-note','Previous orders are separate. Opening one never changes the price of a new purchase.'));for(const o of orders){const label=o.stage==='legacy'?'Previous order · check details':checkoutName(o.plan)+' · '+(o.usd?'$'+o.usd:'Saved quote')+' · '+(o.coin||'LTC');const row=button(label+'  →',()=>{try{updateCheckoutOrder(renewal,o.key,{},true);showInvoice(o.key,null,renewal);}catch(e){dialogError(e);}},'pay-history-row');history.append(row);}}
+ shell.append(checkoutHeading(0,renewal?'Extend your access':'Your privacy. Your access.','Choose a plan. No automatic subscription charges.'),cards,el('h3','','Pay with crypto'),coins,notice,summary,terms,purchase,history);
+ shell.append(button(renewal?'Enter renewal key':'Redeem Key',()=>showKeyEntry(renewal),'secondary-button'));
+ if(!renewal)shell.append(button('Recover account',showAccountRecovery,'secondary-button'),...legalButtons());
+ else shell.append(button(accessDue?'Lock':'Close',()=>{modalLocked=false;if(accessDue){delete modal.dataset.checkout;checkoutReturn=null;lock();}else closeModal();},'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button'));
+ showCheckout(renewal?'Renew access':'Choose your access',[shell],renewal);check.addEventListener('change',renderChoice);renderChoice();
+ api('access/methods',undefined,true).then(data=>{if(!body.contains(shell))return;available=new Set(data.coins.filter(c=>c.available).map(c=>c.coin));if(!available.has(coin)&&available.size)coin=[...available][0];notice.textContent=available.size?'Network fees are separate. Your crypto amount will be fixed on the next screen.':'Payment networks are temporarily unavailable. Saved orders and existing keys remain available.';renderChoice();}).catch(()=>{if(body.contains(shell))notice.textContent='Cannot reach payment service. Reopen checkout to retry.';});
 }
 
 function showKeyEntry(renewal) {
@@ -3251,134 +3288,81 @@ function showKeyEntry(renewal) {
 
 function showRenewal(){
  if(playBuild){showRestrictedAccount('Access unavailable','Your current access is no longer active.');return;}
- showPlanCheckout(true);
+ const saved=savedInvoice(true);if(saved){showInvoice(saved,null,true);return;}showPlanCheckout(true);
 }
 
-function showInvoice(secret, initial, renewal) {
-  if(playBuild){if(renewal)showRenewal();else showAccess();return;}
-  const content = el('div', 'access-invoice');
-  const status = el('strong', 'access-status', 'Checking order…');
-  const details = el('div', 'access-details');
-  const timer = el('span', 'access-timer');
-  const controls = el('div', 'access-controls');
-  content.append(status, details, timer, controls);
-  showCheckout('Secure checkout', [content, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
-  const ticket = checkoutEpoch;
-  let current = null;
-  let busy = false;
-  let lastKey = '';
-  let serverOffset = 0;
-  let polling = false;
-
-  function copy(label, value) {
-    return button(label, async () => {
-      try { await navigator.clipboard.writeText(value); }
-      catch { dialogError(new Error('Select and copy the text manually.')); }
-    }, 'secondary-button');
+function showInvoice(secret,initial,renewal){
+ if(playBuild){if(renewal)showRenewal();else showAccess();return;}
+ let record=checkoutOrder(renewal,secret),current=null,busy=false,polling=false,serverOffset=0,lastFingerprint='',nextPoll=0;
+ const shell=el('div','pay-shell pay-invoice'),heading=el('div'),status=el('div','pay-status'),details=el('div','pay-details'),timer=el('p','pay-timer'),errorLine=el('p','pay-note pay-error'),controls=el('div','pay-controls');
+ const back=button('All plans & saved orders',()=>{if(busy)return;try{leaveInvoice(renewal,secret);showPlanCheckout(renewal);}catch(e){dialogError(e);}},'secondary-button');
+ shell.append(heading,status,details,timer,errorLine,controls,back);
+ showCheckout('Secure checkout',[shell],renewal);
+ const ticket=checkoutEpoch,active=()=>ticket===checkoutEpoch&&body.contains(shell);
+ const copy=(label,value)=>button(label,async()=>{try{await navigator.clipboard.writeText(value);errorLine.textContent='Copied '+label.replace('Copy ','')+'.';haptic();}catch{errorLine.textContent='Select and copy manually.';}},'secondary-button pay-copy');
+ function persist(patch){try{record=updateCheckoutOrder(renewal,secret,patch);}catch{errorLine.textContent='Unable to save locally. Copy your private order reference before leaving.';}}
+ function setHeading(step,title,description){heading.replaceChildren(checkoutHeading(step,title,description));}
+ function showReference(){if(!secret.startsWith('QZO-'))return;const ref=el('details','pay-reference');ref.append(el('summary','','Private order reference'),el('p','access-address',secret),el('p','pay-note','Save this reference securely. It is needed to recover this order.'),copy('Copy reference',secret));details.append(ref);}
+ function setBusy(value){busy=value;back.disabled=value;}
+ function matching(invoice){return !record?.plan||(invoice.plan===record.plan&&invoice.coin===record.coin&&invoice.usd===record.usd);}
+ function renderInvoice(invoice){
+  if(!active())return;
+  if(!matching(invoice)){setHeading(1,'Order mismatch','This reference does not match your selected plan.');status.textContent='Payment blocked';details.replaceChildren();controls.replaceChildren();errorLine.textContent='Return to saved orders. Do not pay this invoice.';return;}
+  current=invoice;serverOffset=invoice.now-Date.now();
+  const approved=invoice.state==='confirmed'&&!invoice.redeemed&&invoice.activationKey;
+  persist({stage:invoice.redeemed?'redeemed':'order',plan:invoice.plan,coin:invoice.coin,usd:invoice.usd,legacy:!invoice.coin,serverState:invoice.state,priceLabel:invoice.usd?'$'+invoice.usd:'€'+invoice.euro});
+  const fp=JSON.stringify([invoice.state,invoice.redeemed,invoice.activationKey,invoice.confirmations,invoice.txid,invoice.amount,Boolean(invoice.qr)]);
+  if(fp===lastFingerprint){updateTimer();return;}lastFingerprint=fp;details.replaceChildren();controls.replaceChildren();
+  const legacy=!invoice.coin&&secret.startsWith('QZO-'),expired=invoice.state==='expired';
+  setHeading(approved||invoice.redeemed?2:1,approved?'Payment verified':invoice.redeemed?'Access activated':legacy?'Previous legacy order':invoice.state==='submitted'?'Verifying payment':expired?'Payment window ended':'Complete your payment',approved?'Your access is ready to activate.':legacy?'This is an older, separate EUR order. It is not a new USD purchase.':'Your plan and invoice amount are fixed.');
+  status.className='pay-status '+(approved||invoice.redeemed?'success':invoice.state==='submitted'?'waiting':expired||legacy?'warning':'');
+  status.replaceChildren(el('span','pay-status-dot'),el('strong','',invoice.redeemed?'Activated':approved?'Confirmed on blockchain':invoice.state==='submitted'?'Waiting for confirmations':expired?'Quote expired':invoice.state==='rejected'?'Payment rejected':invoice.state==='pending'?'Awaiting payment':invoice.state));
+  const order=el('div','pay-order-summary');order.append(el('div','',checkoutName(invoice.plan)),el('strong','',invoice.usd?'$'+invoice.usd:legacy?'€'+invoice.euro:'Access key'));details.append(order);
+  if(approved){
+   const keyBox=el('div','pay-success-box');keyBox.append(el('div','pay-success-mark','✓'),el('h3','','Your activation key'),el('p','access-address',invoice.activationKey),copy('Copy key',invoice.activationKey));details.append(keyBox);
+   const activate=button(renewal?'Apply access':'Activate account',async()=>{if(busy)return;setBusy(true);activate.disabled=true;try{
+    if(renewal){await api('access/renew',{key:invoice.activationKey});completeInvoice(true,secret);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}
+    else{const result=await api('session',{accessKey:invoice.activationKey});if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Activation unavailable.');completeInvoice(false,secret);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();}
+   }catch(e){if(active())errorLine.textContent=errorMessage(e);}finally{setBusy(false);activate.disabled=false;}},'primary-button pay-primary');controls.append(activate);
+  }else if(invoice.redeemed){completeInvoice(renewal,secret);controls.append(button('Continue',()=>{delete modal.dataset.checkout;stopCheckout();modalLocked=false;if(renewal){closeModal();refresh().catch(()=>{});}else getSession();}));}
+  else if(['pending','submitted','expired'].includes(invoice.state)&&secret.startsWith('QZO-')){
+   if(legacy){details.append(el('p','pay-warning','Do not send a new payment to this old order. If already paid, submit its original transaction ID for review. Create a new USD order from All plans.'));}
+   else if(invoice.state==='pending'){
+    const amount=el('div','pay-amount');amount.append(el('small','','EXACT AMOUNT TO SEND'),el('strong','',invoice.amount+' '+invoice.coin),copy('Copy amount',invoice.amount));details.append(amount);
+    if(invoice.qr){const qr=el('div','pay-qr-frame'),image=el('img');image.src=invoice.qr;image.alt='QR code for the exact payment amount';qr.append(image);details.append(qr);}
+    const addr=el('div','pay-address');addr.append(el('small','','RECEIVING ADDRESS · '+invoice.coin),el('p','access-address',invoice.address),copy('Copy address',invoice.address));details.append(addr,el('p','pay-warning','Send only '+invoice.coin+' on its native network. Network fees are separate. Do not round the amount.'));
+   }else if(expired){details.append(el('p','pay-warning','Do not send a new payment. If you already paid, submit your transaction ID. Delayed blockchain inclusion may be reviewed for up to 24 hours after the quote expired.'));}
+   if(invoice.state==='submitted'){
+    const count=invoice.confirmations||0,required=invoice.requiredConfirmations||0,progress=el('div','pay-confirmation');
+    progress.append(el('strong','',legacy?'Manual review':count+' / '+required+' confirmations'),el('p','pay-note','You can close the app. Do not pay twice.'));
+    if(required){const track=el('div','pay-progress');for(let i=0;i<required;i++)track.append(el('span',i<count?'':'',i<count?'filled':''));progress.append(track);}details.append(progress);
+    if(invoice.txid)details.append(el('p','pay-note pay-txid','Transaction: '+invoice.txid));
+   }
+   const form=el('form','pay-tx-form'),input=el('input','access-key-input');input.placeholder=invoice.coin==='SOL'?'Transaction signature':'Transaction ID (TXID)';input.setAttribute('aria-label',input.placeholder);input.autocomplete='off';input.spellcheck=false;input.maxLength=88;input.value=record?.txDraft||invoice.txid||'';
+   const valid=()=>invoice.coin==='SOL'?/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(input.value.trim()):/^[a-f0-9]{64}$/i.test(input.value.trim());
+   const submit=el('button','primary-button pay-primary',invoice.state==='submitted'?'Update transaction ID':'Verify payment');submit.type='submit';submit.disabled=!valid()||(invoice.state==='submitted'&&(legacy||invoice.confirmations>0));
+   input.disabled=invoice.state==='submitted'&&(legacy||invoice.confirmations>0);
+   input.addEventListener('input',()=>{persist({txDraft:input.value});submit.disabled=!valid();});form.append(input,submit);
+   form.addEventListener('submit',async e=>{e.preventDefault();if(busy||submit.disabled||!valid())return;setBusy(true);submit.disabled=true;const txid=input.value.trim();persist({txDraft:txid});try{const result=await api('access/submit',{key:secret,txid});if(active()){errorLine.textContent='';renderInvoice(result);}}catch(e){if(active())errorLine.textContent=errorMessage(e);}finally{setBusy(false);submit.disabled=!valid()||(current?.state==='submitted'&&current?.confirmations>0);}});controls.append(form);
+  }else details.append(el('p','pay-note','This order cannot be paid. Keep its reference if you need support.'));
+  showReference();updateTimer();
+ }
+ function updateTimer(){if(!current||current.state!=='pending'||!current.coin){timer.textContent='';return;}const remaining=current.expires-(Date.now()+serverOffset);timer.textContent=remaining>0?'Quote valid for '+clock(remaining):'Quote expired · checking status';if(remaining<=0){for(const item of details.querySelectorAll('.pay-qr-frame,.pay-address,.pay-amount'))item.remove();}}
+ async function requestInvoice(){
+  if(record?.stage==='intent'){
+   const invoice=await api('access/invoice',{plan:record.plan,coin:record.coin,renewal,accepted:true,requestKey:secret},true);
+   if(!matching(invoice)||invoice.orderKey!==secret)throw Error('Order identity mismatch. Payment blocked.');return invoice;
   }
-
-  function renderInvoice(invoice) {
-    current = invoice;
-    serverOffset = invoice.now - Date.now();
-    const fingerprint = JSON.stringify([invoice.state, invoice.redeemed, invoice.activationKey, invoice.reviewUntil,invoice.confirmations]);
-    if (lastKey === fingerprint) return;
-    lastKey = fingerprint;
-    const approved = invoice.state === 'confirmed' && !invoice.redeemed && invoice.activationKey;
-    status.textContent = invoice.redeemed ? 'Key redeemed' : approved ? 'Payment confirmed' : invoice.state === 'submitted' ? 'Waiting for blockchain confirmation' : invoice.state === 'expired' ? 'Quote expired' : invoice.state === 'rejected' ? 'Payment not approved' : invoice.state === 'pending' ? 'Pay with '+(invoice.coin||'Litecoin') : 'Contact the developer';
-    details.replaceChildren();
-    controls.replaceChildren();
-
-    if (['pending','submitted','expired'].includes(invoice.state) && secret.startsWith('QZO-')) {
-      details.append(el('strong','access-price',invoice.usd?'$'+invoice.usd:'€'+invoice.euro));
-      if(invoice.amount){details.append(el('strong','checkout-amount',invoice.amount+' '+invoice.coin));}
-      if(invoice.state==='pending'&&(invoice.qr||initial?.qr)){const image=el('img','payment-qr');image.src=invoice.qr||initial.qr;image.alt='Payment QR code';details.append(image);}
-      details.append(el('p','access-address',invoice.address),el('p','access-mini',invoice.state==='expired'?'Do not send a new payment. If you already paid before expiry, submit the transaction ID.':invoice.amount?'Send the exact quoted amount using the selected network.':'Legacy Litecoin order; manual review required.'));
-      controls.append(copy('Copy address',invoice.address));if(invoice.amount)controls.append(copy('Copy amount',invoice.amount));
-      if(invoice.state==='submitted')details.append(el('p','access-mini','Confirmations: '+(invoice.confirmations||0)+' · Do not pay twice.'));
-      const form=el('form','access-details'),input=el('input','access-key-input');input.placeholder=invoice.coin==='SOL'?'Transaction signature':'Transaction ID (TXID)';input.autocomplete='off';input.spellcheck=false;input.maxLength=88;input.required=true;
-      const valid=()=>invoice.coin==='SOL'?/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(input.value.trim()):/^[a-f0-9]{64}$/i.test(input.value.trim());
-      const submit=el('button','primary-button',invoice.state==='submitted'?'Update transaction ID':'I have paid');submit.type='submit';submit.disabled=true;input.addEventListener('input',()=>submit.disabled=!valid());form.append(input,submit);
-      form.addEventListener('submit',async e=>{e.preventDefault();if(busy||!valid())return;busy=true;submit.disabled=true;try{const result=await api('access/submit',{key:secret,txid:input.value.trim()});if(ticket===checkoutEpoch)renderInvoice(result);}catch(error){if(ticket===checkoutEpoch)dialogError(error);submit.disabled=false;}finally{busy=false;}});controls.append(form);
-    }
-
-    if (secret.startsWith('QZO-') && !invoice.redeemed) {
-      const reference = el('details', 'access-reference');
-      reference.append(el('summary', '', 'Order reference'), el('p', 'access-address', secret), el('p', 'access-mini', 'Keep private to resume your purchase.'), copy('Copy reference', secret));
-      details.append(reference);
-    }
-
-    const keyBox = el('div', 'access-key-box');
-    if (approved) {
-      keyBox.append(el('strong', '', renewal ? 'Your renewal key' : 'Your qzu-Access key'), el('p', 'access-address', invoice.activationKey));
-      controls.append(copy('Copy key', invoice.activationKey));
-      if (!renewal) details.append(el('p', 'access-mini', 'Keep your key private.'));
-      controls.append(button(renewal ? 'Apply renewal' : 'Activate account', async () => {
-        if (busy) return;
-        busy = true;
-        try {
-          if (renewal) {
-            await api('access/renew', { key: invoice.activationKey });
-            forgetInvoice(true);
-            accessDue = false;
-            modalLocked = false;
-            closeModal();
-            updatePages();
-            await refresh();
-          } else {
-            const result = await api('session', { accessKey: invoice.activationKey });
-            if (result.accessRequired) throw new Error('Activation unavailable.');
-            forgetInvoice(false);
-            delete modal.dataset.checkout;
-            stopCheckout();
-            sessionReady = true;
-            needsSetup = result.needsSetup;
-            showLogin();
-          }
-        } catch (error) {
-          if (ticket === checkoutEpoch) dialogError(error);
-        } finally { busy = false; }
-      }));
-    } else {
-      keyBox.append(svg('lock'), el('strong', '', invoice.redeemed ? 'Key redeemed' : 'Not Available Yet'));
-    }
-    details.append(keyBox);
-    updateTimer();
-  }
-
-  function updateTimer() {
-    if(current?.state==='pending'&&current.expires){timer.textContent='Quote expires in '+clock(Math.max(0,current.expires-(Date.now()+serverOffset)));return;}
-    if (!current || current.state !== 'submitted') {
-      timer.textContent = '';
-      return;
-    }
-    const remaining = current.reviewUntil - (Date.now() + serverOffset);
-    timer.textContent = remaining > 0 ? clock(remaining) : 'Awaiting confirmation';
-  }
-
-  let nextPoll = 0;
-  async function tick() {
-    if (ticket !== checkoutEpoch || !body.contains(content) || polling) return;
-    clearTimeout(accessTimer);
-    if (document.hidden) return;
-    polling = true;
-    updateTimer();
-    if (!busy && Date.now() >= nextPoll) {
-      nextPoll = Date.now() + 5000;
-      try {
-        const result = await api('access/status', { key: secret }, true);
-        if (ticket !== checkoutEpoch || !body.contains(content)) return;
-        renderInvoice(result);
-      } catch (error) {
-        if (ticket === checkoutEpoch) status.textContent = errorMessage(error);
-      }
-    }
-    polling = false;
-    if (ticket === checkoutEpoch && !current?.redeemed) accessTimer = setTimeout(tick, 1000);
-  }
-
-  resumeCheckout = () => { nextPoll = 0; tick(); };
-  if (initial) renderInvoice(initial);
-  tick();
+  return api('access/status',{key:secret},true);
+ }
+ async function tick(force=false){
+  if(!active()||polling||document.hidden)return;clearTimeout(accessTimer);updateTimer();polling=true;
+  try{if(!busy&&(force||Date.now()>=nextPoll)){nextPoll=Date.now()+5000;const invoice=await requestInvoice();if(active()){errorLine.textContent='';renderInvoice(invoice);}}}
+  catch(e){if(active()){errorLine.textContent=errorMessage(e)+' · Your order is saved. Retry below or reconnect.';if(!current){status.textContent='Waiting for connection';controls.replaceChildren(button('Retry',()=>tick(true),'primary-button pay-primary'));}}}
+  finally{polling=false;if(active()&&!current?.redeemed)accessTimer=setTimeout(()=>tick(),1000);}
+ }
+ setHeading(1,record?.stage==='intent'?'Preparing your order':'Restoring your order',record?.usd?checkoutName(record.plan)+' · $'+record.usd+' · '+record.coin:'Retrieving the saved invoice.');status.textContent='Connecting securely…';showReference();resumeCheckout=()=>tick(true);
+ if(initial)renderInvoice(initial);tick(true);
 }
 
 $('accessSettings').addEventListener('click', () => {
@@ -3389,5 +3373,5 @@ $('accessSettings').addEventListener('click', () => {
   }
   if(playBuild){info('qzu-Access','Existing access until '+new Date(access.paidUntil).toLocaleDateString()+'.');return;}
   const date = new Date(access.paidUntil).toLocaleDateString();
-  show('qzu-Access', [el('p', '', 'Paid through ' + date), el('p', '', access.plan==='monthly'?'Months paid: '+access.monthsPaid+'. Legacy renewal €2.99 including 19% tax.':'Your account is renewed using a new access key.'), button('Renew access', showRenewal), button('Close', closeModal, 'secondary-button')]);
+  show('qzu-Access', [el('p', '', 'Paid through ' + date), el('p', '', 'Renew with any of the four USD access plans or a valid renewal key.'), button('Renew access', showRenewal), button('Close', closeModal, 'secondary-button')]);
 });
