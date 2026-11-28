@@ -504,8 +504,8 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'qzu. Fluid Update: compact checkout, persistent payment tickets and smoother keyboard transitions.',
-  changes: ['Compact checkout and native-network payment quotes','Persistent payment-support tickets and proof uploads','Admin ticket review, completion and rejection','Verified activation-key delivery','Keyboard viewport anchoring and smoother chat layout'],
+  notes: 'qzu. Admin & Seller Network: desktop admin messaging, seller verification, rotating codes and user tickets.',
+  changes: ['Desktop admin messenger and announcements','Seller activation and verification','28-day seller codes','User tickets with seller assignment and archive'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
