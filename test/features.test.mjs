@@ -51,6 +51,33 @@ test('group member can leave without removing other members', () => {
   assert.equal(chats.snapshot('a').length, 1);
 });
 
+test('group descriptions and closed invites survive restart while submitted requests remain reviewable', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  const codes = ['ABC234','DEF567'];
+  let chats = new Chats(() => 1000, () => codes.shift());
+  chats.attachSupportStore(db);
+  const id = chats.createGroup('owner','Workshop','  Bring a piece to share.  ');
+  assert.deepEqual(chats.groupInvite('owner',id,'status'),{closed:false});
+  const invite = chats.groupInvite('owner',id,'open');
+  assert.deepEqual(chats.previewGroupInvite('visitor',id),{groupName:'Workshop',groupDescription:'Bring a piece to share.'});
+  assert.deepEqual(chats.connectionRequests('owner'),[]);
+  chats.requestConnection('visitor',invite.code,'Visitor');
+  assert.throws(() => chats.editGroupDescription('owner',id,'x'.repeat(161)),{status:400});
+  chats.editGroupDescription('owner',id,'Monthly workshop');
+  assert.deepEqual(chats.groupInvite('owner',id,'close'),{closed:true});
+  assert.throws(() => chats.requestConnection('late',invite.code),{status:404});
+  assert.equal(chats.respondConnection('owner',chats.connectionRequests('owner')[0].id,true).id,id);
+  assert.throws(() => chats.groupInvite('visitor',id,'open'),{status:403});
+  assert.throws(() => chats.editGroupDescription('visitor',id,'Changed'),{status:403});
+  chats = new Chats(() => 1000, () => codes.shift());
+  chats.attachSupportStore(db);
+  assert.equal(chats.snapshot('visitor')[0].groupDescription,'Monthly workshop');
+  assert.deepEqual(chats.groupInvite('owner',id,'status'),{closed:true});
+  assert.throws(() => chats.groupInvite('owner',id),{status:409});
+  assert.notEqual(chats.groupInvite('owner',id,'open').code,invite.code);
+});
+
 test('group and message timers work independently across restarts and staff joining is visible',()=>{
   const db=new DatabaseSync(':memory:');
   try{

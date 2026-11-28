@@ -2825,3 +2825,10 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
   font-size: .82rem;
   text-align: center;
 }
+
+.group-join-preview { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--sub); }
+.group-join-preview h3 { margin: 0; overflow-wrap: anywhere; }
+.group-join-preview p { margin-block-start: 6px; }
+.group-description-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.group-description-input { width: 100%; resize: vertical; }
+.group-invite-panel { display: grid; gap: 10px; }

@@ -165,12 +165,23 @@ dialog:has(.seller-catalog, .seller-catalog-form) {
 }
 
 .seller-listing-method,
+.seller-listing-description,
 .seller-listing-alert-status,
 .seller-stock-details small {
   display: block;
   margin-block-start: 3px;
   color: var(--muted);
   font-weight: 500;
+}
+
+.seller-listing-description {
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.seller-listing-preview .seller-catalog-edit {
+  display: inline-flex;
+  align-items: center;
 }
 
 .seller-listing-alert-status:empty {
@@ -233,9 +244,14 @@ dialog:has(.seller-catalog, .seller-catalog-form) {
   font-weight: 600;
 }
 
-.seller-catalog-field :is(input,select) {
+.seller-catalog-field :is(input,select,textarea) {
   min-width: 0;
   font-weight: 400;
+}
+
+.seller-listing-description-input {
+  width: 100%;
+  resize: vertical;
 }
 
 .seller-catalog-fields {

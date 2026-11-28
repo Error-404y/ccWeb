@@ -1040,8 +1040,8 @@ async function askAboutSellerItem(contact, item, control, root, epoch) {
   }
 }
 
-function sellerListingTable(items, contact, root, epoch) {
-  const editable = !contact;
+function sellerListingTable(items, contact, root, epoch, preview = false) {
+  const editable = !contact && !preview;
   const table = el('table','seller-catalog-table');
   table.setAttribute('aria-label',items[0]?.published===false?'Private drafts':'Items for sale');
   const header = table.createTHead().insertRow();
@@ -1054,17 +1054,23 @@ function sellerListingTable(items, contact, root, epoch) {
   for (const item of items) {
     const row = rows.insertRow(), title = el('th','seller-catalog-item');
     title.scope = 'row';
+    const description = el('small','seller-listing-description',item.description);
     if (editable) {
       title.append(el('span','',item.name));
+      if(item.description)title.append(description);
       if (item.published!==false) title.append(el('small','seller-listing-method',sellerFulfillmentLabels[item.fulfillment]||sellerFulfillmentLabels.unspecified));
       const edit = button('Edit', () => editSellerListing(item), 'seller-catalog-edit');
       edit.setAttribute('aria-label','Edit ' + item.name);
       title.append(edit);
     } else {
-      const ask = button(item.name, () => askAboutSellerItem(contact,item,ask,root,epoch),'seller-listing-name');
-      ask.setAttribute('aria-label','Ask about '+item.name);
-      title.append(ask,el('small','seller-listing-method',sellerFulfillmentLabels[item.fulfillment]||sellerFulfillmentLabels.unspecified));
-      if (state.capabilities?.sellerListingsV2 && !item.quantity) {
+      const name = preview ? el('span','seller-listing-name',item.name)
+        : button(item.name, () => askAboutSellerItem(contact,item,name,root,epoch),'seller-listing-name');
+      if(!preview)name.setAttribute('aria-label','Ask about '+item.name);
+      title.append(name);
+      if(item.description)title.append(description);
+      title.append(el('small','seller-listing-method',sellerFulfillmentLabels[item.fulfillment]||sellerFulfillmentLabels.unspecified));
+      if(preview && !item.quantity)title.append(el('span','seller-catalog-edit','Notify me'));
+      if (!preview && state.capabilities?.sellerListingsV2 && !item.quantity) {
         const status = el('small','seller-listing-alert-status');
         status.setAttribute('role','status');
         const toggle = button('',async()=>{
@@ -1287,6 +1293,11 @@ function editSellerListing(item) {
     fulfillment.append(option);
   }
   fulfillment.value = item?.fulfillment || 'unspecified';
+  const description = el('textarea','nickname-input seller-listing-description-input');
+  description.name = 'description';
+  description.rows = 3;
+  description.maxLength = 300;
+  description.value = item?.description || '';
   const details = el('div','seller-catalog-fields');
   details.append(sellerField('Quantity',quantity),sellerField('Price per item',price),sellerField('Currency',currency));
   if (managed) details.append(sellerField('How buyers receive it',fulfillment));
@@ -1298,28 +1309,54 @@ function editSellerListing(item) {
   publish.type = 'submit';
   const saveDraft = el('button','secondary-button','Save draft');
   saveDraft.type = 'submit';
+  function listingPayload(published){
+    const payload={id,name:title.value,quantity:quantity.valueAsNumber,price:price.value,currency:currency.value};
+    if(managed)Object.assign(payload,{fulfillment:fulfillment.value,published});
+    if(state.capabilities?.sellerListingPreview)payload.description=description.value;
+    return payload;
+  }
+  const preview=button('Preview listing',async()=>{
+    if(!form.reportValidity())return;
+    preview.disabled=publish.disabled=saveDraft.disabled=true;
+    error.textContent='';
+    try{
+      const result=await api(sellerShopRoute()+'/preview',listingPayload(true));
+      if(!sellerDialogActive(form,epoch))return;
+      const content=el('section','seller-catalog seller-listing-preview');
+      const back=button('Back to editing',()=>{
+        show(item?'Edit item':'Add item',[form]);
+        preview.focus({preventScroll:true});
+      },'secondary-button');
+      content.append(sellerListingTable([result.item],null,null,epoch,true),back);
+      show('Buyer preview',[content]);
+    }catch(failure){
+      if(sellerDialogActive(form,epoch))error.textContent=errorMessage(failure);
+    }finally{preview.disabled=publish.disabled=saveDraft.disabled=false;}
+  },'secondary-button');
   if (managed && !alreadyPublished) {
     actions.append(saveDraft,publish);
     note.textContent=state.capabilities?.shopReview?'Staff reviews submitted listings before they appear in your shop.':'Drafts are private. Choose a price and pickup or delivery before publishing.';
   } else actions.append(publish);
+  if(state.capabilities?.sellerListingPreview)actions.append(preview);
   actions.append(button('Cancel',closeModal,'secondary-button'));
   if (item) actions.append(button('Remove item',() => confirmRemoveSellerListing(item),'secondary-button danger-button'));
-  form.append(sellerField('Item name',title),details,note,error,actions);
+  form.append(sellerField('Item name',title));
+  if(state.capabilities?.sellerListingPreview)form.append(sellerField('Description (optional)',description));
+  form.append(details,note,error,actions);
   form.addEventListener('submit',async event => {
     event.preventDefault();
     if (publish.disabled) return;
-    publish.disabled = saveDraft.disabled = true;
+    preview.disabled = publish.disabled = saveDraft.disabled = true;
     error.textContent = '';
     try {
-      const payload = {id,name:title.value,quantity:quantity.valueAsNumber,price:price.value,currency:currency.value};
-      if (managed) Object.assign(payload,{fulfillment:fulfillment.value,published:Boolean(alreadyPublished)||event.submitter===publish});
+      const payload=listingPayload(Boolean(alreadyPublished)||event.submitter===publish);
       const result = await api(sellerShopRoute(),payload);
       if (sellerDialogActive(form,epoch)) closeModal();
       if (sellerShopSession === session) showSellerShopListings(result.items);
     } catch (failure) {
       if (!sellerDialogActive(form,epoch)) return;
       error.textContent = errorMessage(failure);
-      publish.disabled = saveDraft.disabled = false;
+      preview.disabled = publish.disabled = saveDraft.disabled = false;
     }
   });
   show(item ? 'Edit item' : 'Add item',[form]);
@@ -3111,22 +3148,53 @@ $('privacyMode').addEventListener('change', () => {
 $('createGroup').addEventListener('click', () => {
   const groupName=el('input','nickname-input');
   groupName.maxLength=40;groupName.placeholder='Group name';groupName.setAttribute('aria-label','Group name');
+  const description=groupDescriptionInput();
   const create = button('Create group', async () => {
     create.disabled = true;
     try {
-      const result = await api('group/create', {name:groupName.value.trim()||'Group'});
+      const result = await api('group/create', {name:groupName.value.trim()||'Group',description:description.value});
       closeModal();
       await refresh();
       navigate('/chat');
       selectRoom(result.id);
-      await showGroupInvite(result.id);
+      await showGroupInvite(result.id,'open');
     } catch (error) {
       create.disabled = false;
       showError(error);
     }
   });
-  show('New group', [groupName,el('p', '', 'Up to 12 members. Group owners approve join requests. qzu. staff may join for moderation, and members see a join notice.'),create,button('Cancel',closeModal,'secondary-button')]);
+  const fields=[groupName];
+  if(state.capabilities?.groupDetails)fields.push(sellerField('Group description (optional)',description),
+    el('p','','Anyone with an active invite code can see the description.'));
+  show('New group', [...fields,el('p', '', 'Up to 12 members. Group owners approve join requests. qzu. staff may join for moderation, and members see a join notice.'),create,button('Cancel',closeModal,'secondary-button')]);
 });
+
+function groupDescriptionInput(value=''){
+  const field=el('textarea','nickname-input group-description-input');
+  field.rows=3;
+  field.maxLength=160;
+  field.value=value;
+  return field;
+}
+
+function showGroupDetails(room){
+  const heading=el('h3','',room.groupName);
+  const close=button('Close',closeModal,'secondary-button');
+  if(!room.canInvite){
+    show('Group details',[heading,el('p','group-description-text',room.groupDescription||'No description yet.'),close]);
+    return;
+  }
+  const field=groupDescriptionInput(room.groupDescription);
+  const save=button('Save description',async()=>{
+    save.disabled=true;
+    try{
+      await api('group/description',{id:room.id,description:field.value});
+      if(save.isConnected)closeModal();
+      await refresh();
+    }catch(error){if(save.isConnected)modalError(error);}finally{save.disabled=false;}
+  });
+  show('Group details',[heading,sellerField('Group description',field),el('p','','Anyone with an active invite code can see this description.'),save,close]);
+}
 
 function editGroupTimers(room){
   const selectTimer=(label,current)=>{
@@ -3149,18 +3217,40 @@ function editGroupTimers(room){
   show('Group deletion timers',[el('p','','The message timer also applies to messages already in the group.'),group.wrap,chat.wrap,save,button('Cancel',closeModal,'secondary-button')]);
 }
 
-async function showGroupInvite(id) {
-  try {
-    const invite = await api('group/invite', { id });
-    const code = el('strong', 'pin-display', invite.code);
-    const copy = button('Copy code', async () => {
-      try { await navigator.clipboard.writeText(invite.code); } catch {}
-    });
-    const expires = el('p', '', 'Valid for ' + clock(invite.expires - serverNow()) + ' at the time of opening.');
-    show('Group invite', [code, expires, el('p', '', 'Share this code. Approve join requests from Connections.'), copy, button('Close', closeModal, 'secondary-button')]);
-  } catch (error) {
-    showError(error);
+async function showGroupInvite(id, initial='status') {
+  const managed=Boolean(state.capabilities?.groupDetails);
+  const panel=el('div','group-invite-panel');
+  const status=el('p','','Loading invite…');
+  status.setAttribute('role','status');
+  panel.append(status);
+  show('Group invite',[panel,button('Close',closeModal,'secondary-button')]);
+
+  async function update(action, control){
+    if(control)control.disabled=true;
+    body.querySelector('.modal-error')?.remove();
+    try{
+      const invite=await api('group/invite',managed?{id,action}:{id});
+      if(!panel.isConnected)return;
+      if(!invite.code){
+        status.textContent=invite.closed?'Invites are closed. Pending join requests can still be reviewed.':'No active invite code.';
+        panel.replaceChildren(status,button('Create new code',event=>update('open',event.currentTarget)));
+        return;
+      }
+      const code=el('strong','pin-display',invite.code);
+      const copy=button('Copy code',async()=>{
+        try{await navigator.clipboard.writeText(invite.code);}catch{}
+      });
+      status.textContent='Valid for '+clock(invite.expires-serverNow())+' at the time of opening.';
+      panel.replaceChildren(code,status,el('p','','Share this code. Approve join requests from Connections.'),copy);
+      if(managed)panel.append(button('Close invites',event=>update('close',event.currentTarget),'secondary-button'));
+    }catch(error){
+      if(!panel.isConnected)return;
+      modalError(error);
+      if(control)control.disabled=false;
+      else panel.replaceChildren(button('Retry',event=>update(action,event.currentTarget),'secondary-button'));
+    }
   }
+  await update(initial);
 }
 
 $('groupInvite').addEventListener('click', () => {
@@ -3200,13 +3290,13 @@ $('enterCode').addEventListener('paste',event=>{
 $('enterCode').addEventListener('input', () => {
   $('enterCode').value = $('enterCode').value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 });
-function askNickname(action, submitLabel = 'Continue', group = false) {
+function askNickname(action, submitLabel = 'Continue', group = null) {
   const field=el('input','nickname-input');
   field.type='text';
   field.maxLength=40;
   field.placeholder='Nickname';
   field.autocomplete='off';
-  field.setAttribute('aria-label','Contact nickname');
+  field.setAttribute('aria-label',group?'Your name in the group':'Contact nickname');
   const save=button(submitLabel,async()=>{
     const value=field.value.trim();
     if(!value)return;
@@ -3217,8 +3307,15 @@ function askNickname(action, submitLabel = 'Continue', group = false) {
   save.disabled=true;
   field.addEventListener('input',()=>{save.disabled=!field.value.trim();});
   field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!save.disabled){event.preventDefault();save.click();}});
-  show(group?'Your name in the group':'Give your contact a nickname',
-    [field,el('p','',group?'Group members will see this name after your request is accepted.':'Only visible to you.'),save,button('Cancel',closeModal,'secondary-button')]);
+  const content=[];
+  if(group?.groupName){
+    const preview=el('section','group-join-preview');
+    preview.append(el('h3','',group.groupName));
+    if(group.groupDescription)preview.append(el('p','group-description-text',group.groupDescription));
+    content.push(preview);
+  }
+  content.push(field,el('p','',group?'Group members will see this name after your request is accepted.':'Only visible to you.'),save,button('Cancel',closeModal,'secondary-button'));
+  show(group?'Your name in the group':'Give your contact a nickname',content);
 }
 $('connectForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -3233,7 +3330,7 @@ $('connectForm').addEventListener('submit', async e => {
     if(result.id)selectRoom(result.id);
     else info('Request sent','Awaiting approval.');
   };
-  try{const p=await api('connect/preview',{code});if(p.group){askNickname(connect,'Send request',true);return;}if(state.supportAgent||p.admin){await connect(p.admin?'qzu-Support':'Contact');return;}askNickname(connect,'Send request');}catch(e){showError(e);}
+  try{const p=await api('connect/preview',{code});if(p.group){askNickname(connect,'Send request',p);return;}if(state.supportAgent||p.admin){await connect(p.admin?'qzu-Support':'Contact');return;}askNickname(connect,'Send request');}catch(e){showError(e);}
 });
 
 function loadScanner() {
@@ -3817,6 +3914,7 @@ $('chatOptions').addEventListener('click', () => {
   }
   if (room.admin&&!room.support) return;
   const controls = [];
+  if(room.group&&state.capabilities?.groupDetails)controls.push(button('Group details',()=>showGroupDetails(room),'secondary-button'));
   if(room.group&&room.canInvite&&state.capabilities?.groupTimers)controls.push(button('Group deletion timers',()=>editGroupTimers(room),'secondary-button'));
   controls.push(button(room.mutedUntil>serverNow()?'Notifications muted':'Mute notifications',()=>showRoomMute(room),'secondary-button'));
   if(room.contact)controls.push(button(room.contact.favorite?'Unpin contact':'Pin contact',async()=>{
