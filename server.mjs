@@ -296,6 +296,7 @@ app.post('/api/control/sellers/verify',(req,res)=>res.json(sellers.verify(req.bo
 app.get('/api/control/announcements',(req,res)=>res.json(req.query.before?official.history(Number(req.query.before)):official.snapshot(req.account.id)));
 app.post('/api/control/announcements/publish',(req,res)=>{const result=official.publish(req.body?.text,true);push.broadcast(req.account.id);res.json(result);});
 app.post('/api/control/announcements/delete',(req,res)=>res.json(official.remove(req.body?.id,true)));
+app.get('/api/control/ticket-admins',(req,res)=>res.json({items:db.prepare("SELECT id FROM accounts WHERE access_plan='admin'").all().filter(a=>a.id!==req.account.id&&isTicketAdmin(a.id)).map(a=>({id:a.id}))}));
 app.get('/api/control/tickets',(req,res)=>res.json({items:helpTickets.list(req.account.id,true,req.query.archived==='1')}));
 app.post('/api/control/tickets/state',(req,res)=>res.json(helpTickets.view(req.body?.id,req.account.id,true)));
 app.post('/api/control/tickets/send',(req,res)=>{const b=req.body||{},t=helpTickets.send(b.id,req.account.id,true,b.text,b.requestId);notifyHelp(t.id,req.account.id);res.json(t);});
