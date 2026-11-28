@@ -3171,32 +3171,25 @@ function forgetInvoice(renewal) {
   try { localStorage.removeItem(renewal ? 'qzu-renewal' : 'qzu-access'); } catch {}
 }
 
-function showAccess() {
-  if(playBuild){showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key',()=>showKeyEntry(false)),...legalButtons()]);return;}
-  const plan = el('div', 'access-plan');
-  plan.append(el('strong', 'access-price', '€19.99'), el('span', '', 'First 5 months included'), el('span', 'access-mini', 'Then €2.99/month · Incl. 19% tax'), el('span', 'access-mini', '12 months · €40.92 total'));
-  const terms = el('label', 'feedback-confirm');
-  const check = el('input');
-  check.type = 'checkbox';
-  terms.append(check, el('span', '', 'I accept the payment terms.'));
-  const purchase = button('Purchase access', async () => {
-    purchase.disabled = true;
-    try {
-      const invoice = await api('access/invoice', { plan: 'monthly', accepted: true });
-      rememberInvoice(invoice.orderKey, false);
-      showInvoice(invoice.orderKey, invoice, false);
-    } catch (error) {
-      dialogError(error);
-      purchase.disabled = !check.checked;
-    }
-  });
-  purchase.disabled = true;
-  check.addEventListener('change', () => { purchase.disabled = !check.checked; });
-  const controls = [plan, terms, purchase];
-  const saved = savedInvoice(false);
-  if (saved) controls.push(button('Resume purchase', () => showInvoice(saved, null, false), 'secondary-button'));
-  controls.push(button('Redeem Key', () => showKeyEntry(false), 'secondary-button'));
-  showCheckout('qzu-Access', controls);
+function showAccess(){
+ if(playBuild){showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key', () => showKeyEntry(false)),button('Recover account',showAccountRecovery,'secondary-button'),...legalButtons()]);return;}
+ showPlanCheckout(false);
+}
+function showPlanCheckout(renewal){
+ const plans=[['week','1 Week','1.99'],['month','1 Month','5.99'],['year','1 Year','69.99'],['lifetime','Lifetime','79.99']];
+ let plan='month',coin='LTC',available=new Set(),busy=false;
+ const cards=el('div','checkout-plans'),coins=el('div','checkout-coins'),notice=el('p','access-mini','Checking payment networks…');
+ const check=el('input');check.type='checkbox';const terms=el('label','feedback-confirm');terms.append(check,el('span','','I accept the payment terms and will send the exact amount on the selected network.'));
+ const purchase=button('Continue',async()=>{if(busy||!check.checked||!available.has(coin))return;busy=true;renderChoice();try{const invoice=await api('access/invoice',{plan,coin,renewal,accepted:true});rememberInvoice(invoice.orderKey,renewal);showInvoice(invoice.orderKey,invoice,renewal);}catch(e){dialogError(e);busy=false;renderChoice();}});
+ function renderChoice(){cards.replaceChildren();for(const [id,label,price] of plans){const b=button('',()=>{if(!busy){plan=id;renderChoice();}},'checkout-plan'+(plan===id?' selected':''));b.append(el('strong','',label),el('span','',' $'+price));b.setAttribute('aria-pressed',String(plan===id));cards.append(b);}coins.replaceChildren();for(const [id,label] of [['LTC','Litecoin'],['BTC','Bitcoin'],['SOL','Solana']]){const b=button(label,()=>{coin=id;renderChoice();},'checkout-coin'+(coin===id?' selected':''));b.disabled=busy||!available.has(id);b.setAttribute('aria-pressed',String(coin===id));coins.append(b);}purchase.disabled=busy||!check.checked||!available.has(coin);purchase.textContent=busy?'Creating invoice…':'Continue · $'+plans.find(p=>p[0]===plan)[2];}
+ check.addEventListener('change',renderChoice);renderChoice();
+ const controls=[el('p','access-mini','Choose your access. Validity begins at activation.'),cards,el('h3','','Payment network'),coins,notice,terms,purchase];
+ const saved=savedInvoice(renewal);if(saved)controls.push(button('Resume purchase',()=>showInvoice(saved,null,renewal),'secondary-button'));
+ controls.push(button(renewal?'Enter renewal key':'Redeem Key',()=>showKeyEntry(renewal),'secondary-button'));
+ if(!renewal)controls.push(button('Recover account',showAccountRecovery,'secondary-button'));
+ else controls.push(button(accessDue?'Lock':'Close',()=>{modalLocked=false;if(accessDue){delete modal.dataset.checkout;checkoutReturn=null;lock();}else closeModal();},'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button'));
+ showCheckout(renewal?'Renew access':'Choose your access',controls,renewal);
+ api('access/methods',undefined,true).then(data=>{if(!body.contains(coins))return;available=new Set(data.coins.filter(c=>c.available).map(c=>c.coin));if(!available.has(coin))coin=[...available][0]||'LTC';notice.textContent=available.size?'Network fees are not included.':'Payment networks are temporarily unavailable. You can still redeem an existing key.';renderChoice();}).catch(()=>{notice.textContent='Payment networks are unavailable. You can still redeem an existing key.';});
 }
 
 function showKeyEntry(renewal) {
@@ -3208,6 +3201,7 @@ function showKeyEntry(renewal) {
   input.maxLength = renewal ? 52 : 58;
   const submit = button('Continue', async () => {
     const value = input.value.trim().toUpperCase();
+    if(renewal&&/^QZU-[A-F0-9]{48}$/.test(value)){submit.disabled=true;try{await api('access/renew',{key:value});forgetInvoice(true);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}catch(e){dialogError(e);submit.disabled=false;}return;}
     if(!renewal&&(/^QZU-ADMIN-[A-F0-9]{48}$/.test(value)||/^QZU-REVIEW-[A-F0-9]{40}$/.test(value)||(playBuild&&/^QZU-[A-F0-9]{48}$/.test(value)))){
       submit.disabled=true;
       try{
@@ -3224,29 +3218,9 @@ function showKeyEntry(renewal) {
   showCheckout('Use Access-Key', [input, submit, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
 }
 
-function showRenewal() {
-  if(playBuild){showRestrictedAccount('Access unavailable','Your current access is no longer active.');return;}
-  if(state.access?.plan!=='monthly'){
-    const input=el('input','access-key-input');input.placeholder='Enter renewal access key';input.autocomplete='off';input.spellcheck=false;input.maxLength=52;
-    const apply=button('Apply renewal',async()=>{apply.disabled=true;try{await api('access/renew',{key:input.value.trim().toUpperCase()});accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}catch(error){dialogError(error);apply.disabled=false;}});
-    showCheckout('Renew access',[el('p','','Enter a new access key to extend your existing account.'),input,apply,button(accessDue?'Lock':'Close',accessDue?()=>{delete modal.dataset.checkout;checkoutReturn=null;lock();}:()=>{modalLocked=false;closeModal();},'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button')],true);
-    return;
-  }
-  const plan = el('div', 'access-plan');
-  plan.append(el('strong', 'access-price', '€2.99'), el('span', '', 'One month · Incl. 19% tax'));
-  const controls = [plan, button('Renew access', async () => {
-    try {
-      const invoice = await api('access/invoice', { plan: 'renewal', accepted: true });
-      rememberInvoice(invoice.orderKey, true);
-      showInvoice(invoice.orderKey, invoice, true);
-    } catch (error) { dialogError(error); }
-  })];
-  const saved = savedInvoice(true);
-  if (saved) controls.push(button('Resume renewal', () => showInvoice(saved, null, true), 'secondary-button'));
-  controls.push(button('Enter renewal key or reference', () => showKeyEntry(true), 'secondary-button'));
-  controls.push(button(accessDue ? 'Lock' : 'Close', accessDue ? () => { delete modal.dataset.checkout; checkoutReturn = null; lock(); } : () => { modalLocked = false; closeModal(); }, 'secondary-button'));
-  controls.push(button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button'));
-  showCheckout('Renew access', controls, true);
+function showRenewal(){
+ if(playBuild){showRestrictedAccount('Access unavailable','Your current access is no longer active.');return;}
+ showPlanCheckout(true);
 }
 
 function showInvoice(secret, initial, renewal) {
@@ -3257,7 +3231,7 @@ function showInvoice(secret, initial, renewal) {
   const timer = el('span', 'access-timer');
   const controls = el('div', 'access-controls');
   content.append(status, details, timer, controls);
-  showCheckout('Litecoin checkout', [content, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
+  showCheckout('Secure checkout', [content, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
   const ticket = checkoutEpoch;
   let current = null;
   let busy = false;
@@ -3275,57 +3249,25 @@ function showInvoice(secret, initial, renewal) {
   function renderInvoice(invoice) {
     current = invoice;
     serverOffset = invoice.now - Date.now();
-    const fingerprint = JSON.stringify([invoice.state, invoice.redeemed, invoice.activationKey, invoice.reviewUntil]);
+    const fingerprint = JSON.stringify([invoice.state, invoice.redeemed, invoice.activationKey, invoice.reviewUntil,invoice.confirmations]);
     if (lastKey === fingerprint) return;
     lastKey = fingerprint;
     const approved = invoice.state === 'confirmed' && !invoice.redeemed && invoice.activationKey;
-    status.textContent = invoice.redeemed ? 'Key redeemed' : approved ? 'Payment confirmed' : invoice.state === 'submitted' ? 'Please wait until the Payment has been confirmed' : invoice.state === 'rejected' ? 'Payment not approved' : invoice.state === 'pending' ? 'Pay with Litecoin' : 'Contact the developer';
+    status.textContent = invoice.redeemed ? 'Key redeemed' : approved ? 'Payment confirmed' : invoice.state === 'submitted' ? 'Waiting for blockchain confirmation' : invoice.state === 'expired' ? 'Quote expired' : invoice.state === 'rejected' ? 'Payment not approved' : invoice.state === 'pending' ? 'Pay with '+(invoice.coin||'Litecoin') : 'Contact the developer';
     details.replaceChildren();
     controls.replaceChildren();
 
-    if (invoice.state === 'pending' && secret.startsWith('QZO-')) {
-      details.append(el('strong', 'access-price', '€' + invoice.euro), el('span', '', 'Including 19% tax'));
-      if (invoice.qr || initial?.qr) {
-        const image = el('img', 'payment-qr');
-        image.src = invoice.qr || initial.qr;
-        image.alt = 'Litecoin receiving address QR code';
-        const qr = el('div', 'payment-qr-wrap');
-        qr.setAttribute('aria-label', 'Payment QR not available');
-        image.alt = '';
-        image.setAttribute('aria-hidden', 'true');
-        const overlay = el('span', 'payment-qr-lock');
-        overlay.append(svg('lock'), el('span', '', 'Not Available'));
-        qr.append(image, overlay);
-        details.append(qr);
-      }
-      details.append(el('p', 'access-address', invoice.address), el('p', 'access-mini', 'Pay the EUR equivalent in LTC. Network fees extra.'));
-      controls.append(copy('Copy address', invoice.address));
-      const form = el('form', 'access-details');
-      const input = el('input', 'access-key-input');
-      input.placeholder = 'Transaction ID (TXID)';
-      input.autocomplete = 'off';
-      input.spellcheck = false;
-      input.maxLength = 64;
-      input.required = true;
-      const submit = el('button', 'primary-button', 'I have paid');
-      submit.type = 'submit';
-      submit.disabled = true;
-      input.addEventListener('input', () => { submit.disabled = !/^[a-f0-9]{64}$/i.test(input.value.trim()); });
-      form.append(input, submit);
-      form.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (busy || submit.disabled) return;
-        busy = true;
-        submit.disabled = true;
-        try {
-          const result = await api('access/submit', { key: secret, txid: input.value.trim() });
-          if (ticket === checkoutEpoch) renderInvoice(result);
-        } catch (error) {
-          if (ticket === checkoutEpoch) dialogError(error);
-          submit.disabled = false;
-        } finally { busy = false; }
-      });
-      controls.append(form);
+    if (['pending','submitted','expired'].includes(invoice.state) && secret.startsWith('QZO-')) {
+      details.append(el('strong','access-price',invoice.usd?'$'+invoice.usd:'€'+invoice.euro));
+      if(invoice.amount){details.append(el('strong','checkout-amount',invoice.amount+' '+invoice.coin));}
+      if(invoice.state==='pending'&&(invoice.qr||initial?.qr)){const image=el('img','payment-qr');image.src=invoice.qr||initial.qr;image.alt='Payment QR code';details.append(image);}
+      details.append(el('p','access-address',invoice.address),el('p','access-mini',invoice.state==='expired'?'Do not send a new payment. If you already paid before expiry, submit the transaction ID.':invoice.amount?'Send the exact quoted amount using the selected network.':'Legacy Litecoin order; manual review required.'));
+      controls.append(copy('Copy address',invoice.address));if(invoice.amount)controls.append(copy('Copy amount',invoice.amount));
+      if(invoice.state==='submitted')details.append(el('p','access-mini','Confirmations: '+(invoice.confirmations||0)+' · Do not pay twice.'));
+      const form=el('form','access-details'),input=el('input','access-key-input');input.placeholder=invoice.coin==='SOL'?'Transaction signature':'Transaction ID (TXID)';input.autocomplete='off';input.spellcheck=false;input.maxLength=88;input.required=true;
+      const valid=()=>invoice.coin==='SOL'?/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(input.value.trim()):/^[a-f0-9]{64}$/i.test(input.value.trim());
+      const submit=el('button','primary-button',invoice.state==='submitted'?'Update transaction ID':'I have paid');submit.type='submit';submit.disabled=true;input.addEventListener('input',()=>submit.disabled=!valid());form.append(input,submit);
+      form.addEventListener('submit',async e=>{e.preventDefault();if(busy||!valid())return;busy=true;submit.disabled=true;try{const result=await api('access/submit',{key:secret,txid:input.value.trim()});if(ticket===checkoutEpoch)renderInvoice(result);}catch(error){if(ticket===checkoutEpoch)dialogError(error);submit.disabled=false;}finally{busy=false;}});controls.append(form);
     }
 
     if (secret.startsWith('QZO-') && !invoice.redeemed) {
@@ -3373,6 +3315,7 @@ function showInvoice(secret, initial, renewal) {
   }
 
   function updateTimer() {
+    if(current?.state==='pending'&&current.expires){timer.textContent='Quote expires in '+clock(Math.max(0,current.expires-(Date.now()+serverOffset)));return;}
     if (!current || current.state !== 'submitted') {
       timer.textContent = '';
       return;
