@@ -203,7 +203,7 @@ const clock = ms => {
 };
 const serverNow = () => Date.now() + offset;
 const supportClock = (room,now) => room.persistent ? 'No expiry' : room.mobileSupport && room.expires-now >= 3600000 ? Math.ceil((room.expires-now)/60000/60)+'h' : clock(room.expires-now);
-const nameFor = room => room.peerRole==='admin'?'qzu-Support':room.support ? (room.supportAgent ? 'Contact ' + room.id.slice(0,4).toUpperCase() : 'qzu-Support') : room.admin ? 'Announcements' : room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
+const nameFor = room => room.peerRole==='admin'?'qzu-Support':room.support ? (room.supportAgent ? 'Contact ' + room.id.slice(0,4).toUpperCase() : 'qzu-Support') : room.admin ? 'Announcements' : room.peerName || room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
   cancelAnimationFrame(scanFrame);
@@ -832,7 +832,7 @@ function addContactMarks(node,contact,room=null) {
 }
 function showContactManagement(contact) {
   const field=el('input','nickname-input');
-  field.type='text';field.value=contact.nickname;field.maxLength=40;field.setAttribute('aria-label','Nickname');
+  field.type='text';field.value=contact.peerRole==='admin'?'qzu-Support':contact.nickname;field.disabled=contact.peerRole==='admin';field.maxLength=40;field.setAttribute('aria-label','Nickname');
   const favorite=el('input');favorite.type='checkbox';favorite.checked=contact.favorite;
   const muted=el('input');muted.type='checkbox';muted.checked=contact.muted;
   const favoriteLabel=el('label','contact-setting');favoriteLabel.append(el('span','','Favorite'),favorite);
@@ -845,7 +845,7 @@ function showContactManagement(contact) {
   const confirmRemove=block=>show(block?'Block contact?':'Remove contact?',[el('p','',block?'This removes the contact and prevents new connections.':'This removes the contact and shared chat for both users.'),button(block?'Block':'Remove',async()=>{try{await api('contacts/remove',{id:contact.id,block});closeModal();await refresh();}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]);
   const controls=[el('p','',contact.trusted?'Trusted contact · 30 days inactivity':'Contact · 14 days inactivity'),field,favoriteLabel,mutedLabel,save];
   if(contact.trusted)controls.push(button('Reset trust',()=>show('Reset trust?',[el('p','','Both users must verify a new chat. The regular inactivity limit applies.'),button('Reset trust',async()=>{try{await api('contacts/update',{id:contact.id,resetTrust:true});closeModal();await refresh();}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]),'secondary-button'));
-  controls.push(button('Remove contact',()=>confirmRemove(false),'secondary-button'),button('Block contact',()=>confirmRemove(true),'secondary-button'),button('Close',closeModal,'secondary-button'));
+  controls.push(button('Remove contact',()=>confirmRemove(false),'secondary-button'));if(contact.peerRole!=='admin')controls.push(button('Block contact',()=>confirmRemove(true),'secondary-button'));controls.push(button('Close',closeModal,'secondary-button'));
   show('Manage contact',controls);
 }
 $('manageContacts').addEventListener('click',()=>{
@@ -925,7 +925,7 @@ function renderChat() {
       const preview = r.deletionRequested ? 'Deletion requested' : identityChanged(r) ? 'Contact identity changed' : r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode || r.contact?.muted ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
       content.append(name, el('span', 'contact-preview' + (r.contact?.warning || identityChanged(r) ? ' contact-warning' : ''), preview));
-      b.append(svg(r.support && !r.supportAgent ? 'supportAvatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
+      b.append(svg(r.support && !r.supportAgent ? 'avatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       const count=unreadCount(r);if(count){const badge=el('span','unread-badge',count>99?'99+':String(count));badge.setAttribute('aria-label',count+' unread messages');b.append(badge);}
       b.addEventListener('click', () => selectRoom(r.id));
       list.append(b);
@@ -934,7 +934,7 @@ function renderChat() {
       const row = el('button','contact saved-contact');
       row.type='button';
       const content=el('div','contact-body');
-      const name=el('span','contact-name',contact.peerRole==='admin'?'qzu-Support':contact.nickname);
+      const name=el('span','contact-name',contact.peerRole==='admin'?'qzu-Support':contact.peerName||contact.nickname);
       addContactMarks(name,contact);if(contact.peerRole==='admin'||contact.peerRole==='verified-seller'){const badge=svg(contact.peerRole==='admin'?'adminBadge':'sellerBadge','admin-badge');badge.setAttribute('aria-label',contact.peerRole==='admin'?'Verified Admin':'Verified Seller');badge.removeAttribute('aria-hidden');name.append(badge);}
       row.dataset.contactPriority=String(contact.favorite?1:0);
       content.append(name,el('span','contact-preview'+(contact.warning?' contact-warning':''),contact.warning?'Contact deletion incoming':'Start a new chat'));
@@ -971,7 +971,7 @@ function renderChat() {
   encryptionStatus.hidden = !showDirectSecurity;
   encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? '🔒 Encrypted' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : 'Connecting securely';
   $('threadBadge').hidden = !(current?.peerRole==='admin'||current?.peerRole==='verified-seller'||(isAdmin&&!current?.supportAgent));$('threadBadge').querySelector('use').setAttribute('href',current?.peerRole==='verified-seller'?'#sellerBadge':'#adminBadge');$('threadBadge').setAttribute('aria-label',current?.peerRole==='verified-seller'?'Verified Seller':'Verified Admin');
-  $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
+  $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#avatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
   $('chatOptions').hidden = true;
   $('profileAvatar').disabled=!current||readOnly;$('profileName').disabled=!current||readOnly;updateNavigation();
@@ -2106,11 +2106,11 @@ function askNickname(action, submitLabel = 'Continue') {
   field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!save.disabled){event.preventDefault();save.click();}});
   show('Give your contact a nickname',[field,el('p','','Only visible to you.'),save,button('Cancel',closeModal,'secondary-button')]);
 }
-$('connectForm').addEventListener('submit', e => {
+$('connectForm').addEventListener('submit', async e => {
   e.preventDefault();
   const code=$('enterCode').value.trim().toUpperCase();
   if(!/^[A-Z0-9]{6}$/.test(code)){info('Connect','Enter a 6-character code.');return;}
-  askNickname(async nickname=>{
+  const connect=async nickname=>{
     const result=await api('connect',{code,nickname});
     closeModal();
     await refresh();
@@ -2118,7 +2118,8 @@ $('connectForm').addEventListener('submit', e => {
     navigate('/chat');
     if(result.id)selectRoom(result.id);
     else info('Request sent','Awaiting approval.');
-  },'Send request');
+  };
+  try{if(state.supportAgent){await connect('Contact');return;}const p=await api('connect/preview',{code});if(p.admin){await connect('qzu-Support');return;}askNickname(connect,'Send request');}catch(e){showError(e);}
 });
 
 function loadScanner() {
@@ -2426,7 +2427,7 @@ $('connectionRequests').addEventListener('click', () => {
             await refresh();
             if(result.id)selectRoom(result.id);
           };
-          if(accept&&!request.group){askNickname(respond,'Accept');return;}
+          if(accept&&!request.group&&request.peerRole!=='admin'&&!state.supportAgent){askNickname(respond,'Accept');return;}
           try{await respond(undefined);}catch(error){modalError(error);}
         },accept?'primary-button':'secondary-button'));
       }
@@ -2580,7 +2581,7 @@ $('chatOptions').addEventListener('click', () => {
   };
   if (room.group) {
     for (const member of room.members || []) controls.push(button('Block ' + member, () => confirm(member), 'secondary-button'));
-  } else controls.push(button('Block contact', () => confirm(null), 'secondary-button danger-button'));
+  } else if(room.peerRole!=='admin')controls.push(button('Block contact', () => confirm(null), 'secondary-button danger-button'));
   controls.push(button('Close', closeModal, 'secondary-button'));
   const origin=$('profileAvatar').getBoundingClientRect();
   show('Contact information', controls);
