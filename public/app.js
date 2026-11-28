@@ -3340,9 +3340,9 @@ function showInvoice(secret,initial,renewal){
   status.className='pay-status '+(approved||invoice.redeemed?'success':invoice.state==='submitted'?'waiting':expired||legacy?'warning':'');
   status.replaceChildren(el('span','pay-status-dot'),el('strong','',invoice.redeemed?'Activated':approved?(invoice.coin?'Confirmed on blockchain':secret.startsWith('QZO-')?'Payment approved':'Access key verified'):invoice.state==='submitted'?'Waiting for confirmations':expired?'Quote expired':invoice.state==='rejected'?'Payment rejected':invoice.state==='pending'?'Awaiting payment':invoice.state));
   const order=el('div','pay-order-summary');order.append(el('div','',checkoutName(invoice.plan)),el('strong','',invoice.usd?'$'+invoice.usd:legacy?'€'+invoice.euro:'Access key'));details.append(order);
-  if(invoice.ticketRequired&&!invoice.redeemed&&invoice.state==='confirmed'){
+  if(invoice.ticketRequired&&!invoice.redeemed&&invoice.state==='confirmed'&&!invoice.activationKey){
    details.append(el('div','pay-success-mark','✓'),el('p','pay-note','Payment verified. Open your ticket for key delivery.'));
-   controls.append(button('Open Ticket  →',()=>showPaymentTicket(secret,renewal),'primary-button pay-primary'));
+   controls.append(button('Open Ticket  →',()=>showPaymentTicket(secret,renewal,record?.ticketStatus==='rejected'||record?.ticketStatus==='completed'),'primary-button pay-primary'));
   }else if(approved){
    const keyBox=el('div','pay-success-box');keyBox.append(el('div','pay-success-mark','✓'),el('h3','','Your activation key'),el('p','access-address',invoice.activationKey),copy('Copy key',invoice.activationKey));details.append(keyBox);
    const activate=button(renewal?'Apply access':'Activate account',async()=>{if(busy)return;setBusy(true);activate.disabled=true;try{
@@ -3363,7 +3363,7 @@ function showInvoice(secret,initial,renewal){
     if(required){const track=el('div','pay-progress');for(let i=0;i<required;i++)track.append(el('span',i<count?'':'',i<count?'filled':''));progress.append(track);}details.append(progress);
     if(invoice.txid)details.append(el('p','pay-note pay-txid','Transaction: '+invoice.txid));
    }
-   if(!legacy){controls.append(button(invoice.state==='pending'?"I've paid  →":'Open Ticket  →',()=>showPaymentTicket(secret,renewal),'primary-button pay-primary'));showReference();updateTimer();return;}
+   if(!legacy){controls.append(button(invoice.state==='pending'?"I've paid  →":'Open Ticket  →',()=>showPaymentTicket(secret,renewal,record?.ticketStatus==='rejected'||record?.ticketStatus==='completed'),'primary-button pay-primary'));showReference();updateTimer();return;}
    const form=el('form','pay-tx-form'),input=el('input','access-key-input');input.placeholder=invoice.coin==='SOL'?'Transaction signature':'Transaction ID (TXID)';input.setAttribute('aria-label',input.placeholder);input.autocomplete='off';input.spellcheck=false;input.maxLength=88;input.value=record?.txDraft||invoice.txid||'';
    const valid=()=>invoice.coin==='SOL'?/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(input.value.trim()):/^[a-f0-9]{64}$/i.test(input.value.trim());
    const submit=el('button','primary-button pay-primary',invoice.state==='submitted'?'Update transaction ID':'Verify payment');submit.type='submit';submit.disabled=!valid()||(invoice.state==='submitted'&&(legacy||invoice.confirmations>0));
@@ -3391,11 +3391,11 @@ function showInvoice(secret,initial,renewal){
  if(initial)renderInvoice(initial);tick(true);
 }
 
-function showPaymentTicket(secret,renewal){
+function showPaymentTicket(secret,renewal,fresh=false){
  if(playBuild)return;
- try{updateCheckoutOrder(renewal,secret,{ticketOpen:true},true);}catch(e){dialogError(e);return;}
+ try{updateCheckoutOrder(renewal,secret,{ticketOpen:true,...(fresh?{ticketId:null,ticketFresh:true,ticketDraft:''}:{})},true);}catch(e){dialogError(e);return;}
  const root=el('div','pay-ticket'),head=el('div','pay-ticket-head'),list=el('div','pay-ticket-messages'),composer=el('div','pay-ticket-compose'),notice=el('p','pay-note pay-ticket-notice');
- const back=button('‹',()=>{try{updateCheckoutOrder(renewal,secret,{ticketOpen:false});showInvoice(secret,null,renewal);}catch(e){dialogError(e);}},'pay-ticket-back');back.setAttribute('aria-label','Back to payment');
+ const backToPayment=()=>{try{updateCheckoutOrder(renewal,secret,{ticketOpen:false});showInvoice(secret,null,renewal);}catch(e){dialogError(e);}};const back=button('‹',backToPayment,'pay-ticket-back');back.setAttribute('aria-label','Back to payment');
  const title=el('div');title.append(el('strong','','Payment Ticket'),el('small','','qzu-Support'));head.append(back,title,el('span','pay-ticket-dot'));
  const field=el('textarea');field.rows=1;field.maxLength=2000;field.placeholder='Message…';field.setAttribute('aria-label','Message');
  field.value=checkoutOrder(renewal,secret)?.ticketDraft||'';
@@ -3403,18 +3403,18 @@ function showPaymentTicket(secret,renewal){
  const file=el('input');file.type='file';file.accept='image/png,image/jpeg,image/webp';file.hidden=true;
  const attach=button('+',()=>file.click(),'pay-ticket-attach');attach.setAttribute('aria-label','Upload payment proof');
  const send=button('➤',()=>sendText(),'pay-ticket-send');send.setAttribute('aria-label','Send message');
- composer.append(attach,field,send,file);root.append(head,list,notice,composer);
+ const closedPanel=el('div','pay-ticket-closed');closedPanel.hidden=true;closedPanel.append(el('p','','You can’t write here.'),button('Close Ticket',backToPayment,'primary-button'));composer.append(attach,field,send,file);root.append(head,list,notice,composer,closedPanel);
  showCheckout('Payment Ticket',[root],renewal);
  const epoch=checkoutEpoch,active=()=>epoch===checkoutEpoch&&body.contains(root);
- let current=null,last='',polling=false,busy=false,opened=false,mutation=0,pending=null;
+ let current=null,last='',polling=false,busy=false,opened=false,mutation=0,pending=null;let ticketId=checkoutOrder(renewal,secret)?.ticketId||null;let wantFresh=Boolean(checkoutOrder(renewal,secret)?.ticketFresh);
  function setBusy(v){busy=v;if(v)mutation++;attach.disabled=v;send.disabled=v;}
- async function request(path,data={}){return api('access/ticket/'+path,{key:secret,...data},true);}
+ async function request(path,data={}){return api('access/ticket/'+path,{key:secret,ticketId,...data},true);}
  function render(t){
-  if(!active())return;current=t;
-  const key=JSON.stringify([t.messages.map(m=>m.id),t.state,t.txid,t.confirmations,t.released,t.closed,t.activationKey,t.redeemed]);if(key===last)return;last=key;
+  if(!active())return;current=t;ticketId=t.id;wantFresh=false;try{updateCheckoutOrder(renewal,secret,{ticketId:t.id,ticketFresh:false,ticketStatus:t.status});}catch{}
+  const key=JSON.stringify([t.messages.map(m=>m.id),t.state,t.txid,t.confirmations,t.released,t.closed,t.activationKey,t.redeemed,t.status,t.reason]);if(key===last)return;last=key;
   const pinned=list.scrollHeight-list.scrollTop-list.clientHeight<85,top=list.scrollTop;
-  const info=el('div','pay-ticket-system');info.append(el('strong','',checkoutName(t.plan)+' · $'+t.usd+' · '+t.coin),el('small','',t.state==='confirmed'?'Payment verified':t.txid?'Verification pending':'Send your transaction ID and proof.'));list.replaceChildren(info);
-  if(!t.messages.length)list.append(el('div','pay-ticket-bubble other','Welcome! Please send your transaction ID and a payment screenshot if needed.'));
+  const info=el('div','pay-ticket-system');info.append(el('strong','',checkoutName(t.plan)+' · $'+t.usd+' · '+t.coin),el('small','',t.status==='rejected'?'Ticket rejected':t.status==='completed'?'Ticket completed':t.status==='review'?'Under review':t.state==='confirmed'?'Payment verified':t.txid?'Verification pending':'Send your transaction ID and proof.'));list.replaceChildren(info);if(t.reason)list.append(el('p','pay-ticket-system pay-ticket-rejected',t.reason));
+  if(!t.messages.length&&!t.closed)list.append(el('div','pay-ticket-bubble other','Welcome! Please send your transaction ID and a payment screenshot if needed.'));
   for(const m of t.messages){
    const b=el('div','pay-ticket-bubble '+(m.actor==='customer'?'mine':'other'));
    if(m.actor!=='customer')b.append(el('small','pay-ticket-agent','qzu-Support'));
@@ -3429,7 +3429,7 @@ function showPaymentTicket(secret,renewal){
    const b=el('div','pay-ticket-bubble other');b.append(el('small','pay-ticket-agent','qzu-Support'),el('p','','Payment verified. Your key is ready.'),el('p','access-address',t.activationKey),button('Copy key',()=>navigator.clipboard.writeText(t.activationKey).catch(()=>{}),'pay-proof-link'));
    const activate=button(renewal?'Apply access':'Activate account',async()=>{if(busy)return;setBusy(true);activate.disabled=true;try{if(renewal){await api('access/renew',{key:t.activationKey});completeInvoice(true,secret);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}else{const result=await api('session',{accessKey:t.activationKey});if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Activation unavailable.');completeInvoice(false,secret);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();}}catch(e){if(active())notice.textContent=errorMessage(e);}finally{setBusy(false);activate.disabled=false;}},'primary-button');b.append(activate);list.append(b);
   }
-  composer.hidden=t.closed||t.redeemed;
+  composer.hidden=t.closed||t.redeemed;closedPanel.hidden=!t.closed;closedPanel.classList.toggle('rejected',t.status==='rejected');
   if(t.redeemed){completeInvoice(renewal,secret);list.append(button('Continue',()=>{delete modal.dataset.checkout;stopCheckout();modalLocked=false;if(renewal){closeModal();refresh().catch(()=>{});}else getSession();}));}
   requestAnimationFrame(()=>{if(active())list.scrollTop=pinned?list.scrollHeight:top;});
  }
@@ -3441,7 +3441,7 @@ function showPaymentTicket(secret,renewal){
  }
  file.addEventListener('change',async()=>{const selected=file.files?.[0];file.value='';if(!selected||busy)return;setBusy(true);try{const cleaned=await QzuMetadata.cleanImage(selected);const bytes=new Uint8Array(await cleaned.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192));if(!active())return;setBusy(false);await sendText(btoa(binary));}catch(e){if(active())notice.textContent=errorMessage(e);}finally{setBusy(false);}});
  field.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendText();}});
- async function tick(){if(!active()||polling||document.hidden)return;clearTimeout(accessTimer);polling=true;try{if(!busy){const observed=mutation,t=await request(opened?'state':'open');if(active()&&observed===mutation&&!busy){opened=true;render(t);notice.textContent='';}}}catch(e){if(active())notice.textContent=errorMessage(e)+' · Tap to retry.';}finally{polling=false;if(active())accessTimer=setTimeout(tick,5000);}}
+ async function tick(){if(!active()||polling||document.hidden)return;clearTimeout(accessTimer);polling=true;try{if(!busy){const observed=mutation,t=await request(ticketId?'state':'open',ticketId?{}:{fresh:wantFresh});if(active()&&observed===mutation&&!busy){opened=true;render(t);notice.textContent='';}}}catch(e){if(active())notice.textContent=errorMessage(e)+' · Tap to retry.';}finally{polling=false;if(active()&&!current?.closed)accessTimer=setTimeout(tick,5000);}}
  notice.addEventListener('click',tick);resumeCheckout=tick;tick();
 }
 
