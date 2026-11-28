@@ -124,3 +124,43 @@ test('legacy ticket seller migration preserves membership and never resurrects r
  const restarted=userTickets(db,options);assert.throws(()=>restarted.view(id,'seller'));assert.deepEqual(restarted.view(id,'admin',true).sellers,[]);
  }finally{db.close();}
 });
+
+test('automatic desktop verification preserves signed key validation and does not mark manual trust',()=>{
+ const db=setup();try{
+ const c=new Chats(()=>start);c.contacts=contactStore(db,()=>start);c.requireEncryptedDirect=true;
+ const a=signer(),b=signer(),bad=signer();
+ const id=c.connectPair('admin','customer');c.rooms.get(id).contactId=c.contacts.add('admin','customer','Contact','qzu-Support');
+ assert.throws(()=>c.publishRoomKey('admin',id,a.device,bad.record(id)));
+ c.publishRoomKey('admin',id,a.device,a.record(id));
+ assert.throws(()=>c.confirmRoomKey('admin',id,'0'.repeat(64),true));
+ c.publishRoomKey('customer',id,b.device,b.record(id));
+ const records=[a.record(id),b.record(id)];const code=createHash('sha256').update(JSON.stringify(['qzu-safety-v1',id,...records.map(r=>JSON.stringify([r.identity,r.key])).sort()])).digest('hex').toUpperCase();
+ assert.throws(()=>c.confirmRoomKey('admin',id,'0'.repeat(64),true));
+ assert.throws(()=>c.confirmRoomKey('stranger',id,code,true));
+ c.confirmRoomKey('admin',id,code,true);c.confirmRoomKey('customer',id,code,true);
+ assert.equal(c.contacts.between('admin','customer').identityVerified,false);
+ assert.equal(c.contacts.between('admin','customer').peerIdentity,b.pub);
+ const cipher={v:2,iv:Buffer.alloc(12,1).toString('base64'),data:Buffer.alloc(20,2).toString('base64')};
+ c.sendEncrypted('admin',id,cipher);assert.equal(c.rooms.get(id).messages[0].text,'');
+ assert.throws(()=>c.publishRoomKey('customer',id,bad.device,bad.record(id)));
+ }finally{db.close();}
+});
+test('accepted and pending legacy deletion requests appear only in assigned admin inbox and survive restart',()=>{
+ const db=setup();try{
+ let c=new Chats(()=>start);c.attachSupportStore(db);
+ const accepted=c.openMobileSupport('customer','admin',true),pending=c.openMobileSupport('other','admin');
+ c.remove('customer',accepted);c.remove('customer',accepted);c.remove('other',pending);
+ assert.equal(c.supportRequests('admin',true).length,1);
+ assert.deepEqual(new Set(c.supportDeletions('admin',true).map(x=>x.id)),new Set([accepted,pending]));
+ assert.equal(c.supportDeletions('another-admin',true).length,0);assert.throws(()=>c.supportDeletions('admin'));
+ assert.throws(()=>c.approveSupportDeletion('another-admin',accepted,true));assert.throws(()=>c.approveSupportDeletion('admin',accepted,false));
+ c=new Chats(()=>start);c.attachSupportStore(db);assert.equal(c.supportDeletions('admin',true).length,2);
+ c.approveSupportDeletion('admin',accepted,true);c.approveSupportDeletion('admin',pending,true);assert.equal(c.supportDeletions('admin',true).length,0);assert.equal(db.prepare('SELECT count(*) n FROM mobile_support_rooms').get().n,0);
+ }finally{db.close();}
+});
+test('desktop automatic verification and support deletion endpoints remain behind authenticated control routes',()=>{
+ const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8'),desktop=readFileSync(new URL('../public/desktop-messenger.js',import.meta.url),'utf8'),control=readFileSync(new URL('../public/control.js',import.meta.url),'utf8');
+ const gate=server.indexOf("app.use('/api/control',(req,res,next)=>");
+ for(const path of ['/api/control/support/delete','/api/control/chats/delete','/api/control/chats/confirm'])assert.ok(server.indexOf("app.post('"+path+"'")>gate);
+ assert.ok(desktop.includes("api('chats/confirm',{id,code:established.code})"));assert.ok(!desktop.includes('Confirm safety code'));assert.ok(control.includes('Approve deletion'));
+});
