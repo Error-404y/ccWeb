@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.15.1';
+const installedVersion = window.QZU_APP_VERSION || '0.15.2';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -978,7 +978,7 @@ function renderChat() {
   $('memberCount').hidden = !current?.group;
   $('memberCount').textContent = current?.group ? current.memberCount + ' members' : '';
   $('expiryProgress').hidden = !current || current.persistent;
-  const supportNotice = current?.supportStatus==='pending' ? 'Waiting for Support to accept' : current?.supportStatus==='rejected' ? 'Send a message to contact Support again' : '';
+  const supportNotice = current?.supportStatus==='pending' ? 'Waiting for Support to accept' : ['rejected','solved'].includes(current?.supportStatus) ? 'Send a message to contact Support again' : '';
   $('extensionNotice').hidden = !current?.extension && !current?.deletionRequested && !supportNotice;
   $('extensionNotice').textContent = current?.deletionRequested ? 'Deletion requested · Awaiting support action' : supportNotice || (current?.extension?.incoming ? 'Chat extension requested · Review' : 'Waiting for extension approval');
   $('typingIndicator').hidden = !current?.typing?.length;
