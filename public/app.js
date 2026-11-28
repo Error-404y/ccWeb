@@ -891,7 +891,7 @@ function renderChat() {
   const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
   $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
+  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -934,8 +934,8 @@ function renderChat() {
       const row = el('button','contact saved-contact');
       row.type='button';
       const content=el('div','contact-body');
-      const name=el('span','contact-name',contact.nickname);
-      addContactMarks(name,contact);
+      const name=el('span','contact-name',contact.peerRole==='admin'?'qzu-Support':contact.nickname);
+      addContactMarks(name,contact);if(contact.peerRole==='admin'||contact.peerRole==='verified-seller'){const badge=svg(contact.peerRole==='admin'?'adminBadge':'sellerBadge','admin-badge');badge.setAttribute('aria-label',contact.peerRole==='admin'?'Verified Admin':'Verified Seller');badge.removeAttribute('aria-hidden');name.append(badge);}
       row.dataset.contactPriority=String(contact.favorite?1:0);
       content.append(name,el('span','contact-preview'+(contact.warning?' contact-warning':''),contact.warning?'Contact deletion incoming':'Start a new chat'));
       row.append(svg('avatar','avatar'),content,svg('chevron','official-chevron'));
