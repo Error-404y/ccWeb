@@ -217,6 +217,9 @@ app.post('/api/control/keys/replace',(req,res)=>res.json(replaceUnusedKey(db,req
 app.post('/api/control/keys/revoke',(req,res)=>res.json(revokeAccessKey(db,req.body?.id,req.account.id,req.body?.reason)));
 app.post('/api/control/accounts/action',(req,res)=>{const b=req.body||{},result=accountAction(db,b.id,req.account.id,b.action,b.reason,b.plan);if(b.action==='revoke'){unlocks.revokeAll(b.id);push.remove(b.id);chats.hidePresence(b.id);}res.json(result);});
 app.get('/api/control/payments',(req,res)=>res.json({items:controlPayments(db)}));
+app.get('/api/control/support',(req,res)=>res.json({requests:chats.supportRequests(req.account.id,true),rooms:chats.snapshot(req.account.id).filter(r=>r.support&&r.supportAgent&&r.supportStatus==='accepted').map(r=>({id:r.id,expires:r.expires,deletionRequested:r.deletionRequested,messages:r.messages.slice(-50).map(m=>({mine:m.mine,at:m.at,text:m.deleted?'Deleted message':m.once||m.burnSeconds?'Temporary message':m.kind==='text'?m.text:'Attachment',sender:m.sender}))}))}));
+app.post('/api/control/support/respond',(req,res)=>res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true)));
+app.post('/api/control/support/send',(req,res)=>{const room=chats.requireRoom(req.account.id,req.body?.id);if(room.supportAgent!==req.account.id||room.supportStatus!=='accepted'||typeof req.body?.text!=='string')return res.status(403).json({error:'Assigned support conversation required.'});const result=chats.send(req.account.id,room.id,req.body.text);push.notify(room.users.filter(id=>id!==req.account.id));res.json({ok:true});});
 app.get('/api/control/audit',(req,res)=>res.json({items:controlAudit(db)}));
 app.get('/api/control/reports',(req,res)=>res.json({items:compliance.list(true)}));
 app.get('/api/control/reports/media/:id',(req,res)=>{const m=compliance.media(req.params.id);if(!m)return res.sendStatus(404);res.set('Cache-Control','no-store').type(m.mime).send(Buffer.from(m.body));});
