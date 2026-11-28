@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.17.0';
+const installedVersion = window.QZU_APP_VERSION || '0.17.2';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -1330,6 +1330,15 @@ function renderConnect() {
 
 $('sellerProfileSettings').addEventListener('click',()=>{if(!state.seller)return;const field=el('input','nickname-input');field.value=state.sellerName||'Seller';field.maxLength=40;field.setAttribute('aria-label','Seller display name');const save=button('Save',async()=>{save.disabled=true;try{await api('sellers/profile',{name:field.value.trim()});closeModal();await refresh();}catch(e){modalError(e);save.disabled=false;}});show('Seller profile',[el('p','',state.sellerVerified?'Verified seller':'Unverified seller'),field,save,button('Close',closeModal,'secondary-button')]);});
 $('sellerDirectorySettings').addEventListener('click',async()=>{if(!state.seller)return;try{const result=await api('sellers/directory');const list=el('div','request-list');for(const p of result.items){const row=el('div','request-item'),name=el('strong','',p.name);if(p.verified)name.append(svg('sellerBadge','admin-badge'));const connect=button('Connect',async()=>{connect.disabled=true;try{const r=await api('sellers/connect',{id:p.id});closeModal();await refresh();navigate('/chat');if(r.id)selectRoom(r.id);else info('Request sent','Awaiting approval.');}catch(e){modalError(e);connect.disabled=false;}},'secondary-button');row.append(name,connect);list.append(row);}if(!result.items.length)list.append(el('p','','No other active sellers.'));show('Seller directory',[list,button('Close',closeModal,'secondary-button')]);}catch(e){showError(e);}});
+$('adminControlCenter').addEventListener('click',()=>{
+ if(!native||!unlockToken||!state.supportAgent||!window.QzuControl)return;
+ const epoch=authEpoch,root=el('div','cc-native-panel');
+ show('Control Center',[root]);let panel;
+ const active=()=>root.isConnected&&modal.open&&epoch===authEpoch&&Boolean(unlockToken)&&state.supportAgent;
+ const observer=new MutationObserver(()=>{if(!active()){observer.disconnect();panel?.close();}});
+ panel=window.QzuControl.mount(root,(path,data)=>{if(!active())throw Error('Locked.');return api('control/'+path,data,true);},{mobile:true,isActive:active,onExit:closeModal,mobileChat:()=>{closeModal();navigate('/chat');},media:async id=>{if(!active())throw Error('Locked.');const response=await transport('/api/control/reports/media/'+encodeURIComponent(id),{headers:{'X-QZU-Unlock':unlockToken},cache:'no-store'});if(!response.ok||!active())throw Error('Evidence unavailable.');return response.blob();}});
+ observer.observe(body,{childList:true,subtree:true});modal.addEventListener('close',()=>{observer.disconnect();panel?.close();},{once:true});
+});
 function renderSettings() {
   if (page !== 'settings') return;
   const requested = location.pathname.split('/')[2] || 'main';
