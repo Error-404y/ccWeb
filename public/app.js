@@ -308,7 +308,7 @@ async function api(path, data, quiet = false) {
       body: write ? JSON.stringify(data): undefined,
       cache: 'no-store',
       credentials: 'same-origin',
-      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(path==='push/test'||path==='access/invoice'?25000:8000) : undefined
+      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(path==='push/test'||path.startsWith('access/')?25000:8000) : undefined
     });
   }
   catch (error) {
