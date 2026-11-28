@@ -40,3 +40,5 @@
 .cc-chat-admin-avatar{background:#f4eeee}.cc-chat-admin-avatar:before{width:17px;height:22px;top:10px;left:15px;border-radius:0;background:#bd0000;clip-path:polygon(0 0,100% 39%,100% 59%,0 100%,0 73%,65% 50%,0 27%)}.cc-chat-admin-avatar:after{width:13px;height:4px;top:28px;left:29px;border-radius:0;background:#bd0000}
 
 .cc-support-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:10px}.cc-support-metric{display:flex;flex-direction:column;gap:5px;padding:14px;background:#1b1c21;border:1px solid #303137;border-radius:12px}.cc-support-metric strong{font-size:25px}.cc-support-section{display:flex;flex-direction:column;gap:10px}.cc-support-section h3{margin:12px 0 0}.cc-support-feed{min-height:240px;max-height:55vh;overflow:auto;display:flex;flex-direction:column;gap:10px;padding:14px;background:#0b0c0f;border-radius:12px}
+
+.cc-admin-profile-logo{display:flex;align-items:center;gap:8px}.cc-admin-profile-logo .cc-chat-avatar{width:36px;height:36px;flex-basis:36px}.cc-admin-profile-logo .cc-chat-admin-avatar:before{left:13px;top:8px}.cc-admin-profile-logo .cc-chat-admin-avatar:after{left:25px;top:25px}
