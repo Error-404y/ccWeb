@@ -11,9 +11,9 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  root.classList.add('cc-root');root.replaceChildren();
  let revision=0,current=location.pathname==='/control/monitoring'?'Monitoring':'Overview',query='',cursor='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false;
  const header=el('header','','cc-header'),identity=el('div','','cc-identity'),brand=el('h1','qzu.'),server=el('p',location.origin,'cc-muted'),connection=el('span','Connecting…','cc-connection');
- brand.append(el('span',' Control','cc-accent'));identity.append(brand,server);header.append(identity,connection,button('Sign out',async()=>{stop();await api('logout',{}).catch(()=>{});onExit();},'cc-secondary'));
+ brand.append(el('span',' Control','cc-accent'));identity.append(brand,server);header.append(el('span','qzu-Support ✓','cc-admin-profile'));header.append(identity,connection,button('Sign out',async()=>{stop();await api('logout',{}).catch(()=>{});onExit();},'cc-secondary'));
  const layout=el('div','','cc-layout'),nav=el('nav','','cc-nav'),main=el('section','','cc-content');main.setAttribute('aria-label','Control Center content');layout.append(nav,main);root.append(header,layout);
- const tabs=['Overview','Accounts','Keys','Payments','Payment tickets','Reports','Feedback','Support','Audit','Archive','Monitoring'];
+ const tabs=['Chats','Announcements','Tickets','Sellers','Overview','Accounts','Keys','Payments','Payment tickets','Reports','Feedback','Support','Audit','Archive','Monitoring'];
  for(const tab of tabs){const b=button('',()=>navigate(tab),'cc-tab');b.dataset.tab=tab;b.append(el('span',tab),el('span','','cc-count'));nav.append(b);}
  const alive=token=>!closed&&isActive()&&token===revision;
  function stop(){closed=true;revision++;clearInterval(inboxTimer);if(objectURL)URL.revokeObjectURL(objectURL);root.replaceChildren();}
@@ -26,12 +26,12 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    const info=await api('inbox');if(closed)return;
    server.textContent=(info.environment==='production'?'Production':'Development')+' · '+location.host+' · v'+info.version+' · Admin '+info.adminId.slice(0,8);
    connection.textContent='Connected';connection.dataset.state='online';
-   updateCount('Payment tickets',info.paymentTickets);updateCount('Support',info.supportRequests);
-   if(listView&&['Payment tickets','Support'].includes(current)){
-    const token=revision,tab=current,data=await api(tab==='Payment tickets'?'payment-tickets':'support');
-    if(alive(token)&&listView&&tab===current&&JSON.stringify(data)!==listSignature&&!main.querySelector('textarea:focus, input:focus, button:disabled')&&![...main.querySelectorAll('textarea')].some(n=>n.value.trim()))load(data);
+   updateCount('Payment tickets',info.paymentTickets);updateCount('Support',info.supportRequests);updateCount('Tickets',info.userTickets);
+   if(listView&&['Payment tickets','Support','Tickets','Sellers'].includes(current)){
+    const token=revision,tab=current,data=await api(tab==='Payment tickets'?'payment-tickets':tab.toLowerCase());
+    if(alive(token)&&listView&&tab===current&&JSON.stringify(data)!==listSignature&&!main.querySelector('textarea:focus, input:focus, button:disabled, dialog[open]')&&![...main.querySelectorAll('textarea')].some(n=>n.value.trim()))load(data);
    }
-  }catch(e){if(!closed){connection.textContent='Connection unavailable';connection.dataset.state='offline';}}
+  }catch(e){if(!closed){if(e.status===401){stop();onExit();return;}connection.textContent='Connection unavailable';connection.dataset.state='offline';}}
   finally{pollingInbox=false;}
  }
  const inboxTimer=setInterval(pollInbox,5000);
@@ -95,6 +95,31 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   async function tick(){if(!alive(token))return;await refresh();if(alive(token))setTimeout(tick,5000);}
   setTimeout(tick,5000);
  }
+ function renderAnnouncements(initial,token){
+  const feed=el('div','','cc-announcements-feed'),draft=el('textarea'),older=button('Load earlier announcements',async()=>{if(!alive(token)||busy||!posts.length)return;busy=true;try{const result=await api('announcements?before='+posts[0].id);if(alive(token)&&result.deletedRevision===deleted){posts=[...result.posts,...posts];draw();}}catch(e){error(e);}finally{busy=false;}},'cc-secondary');
+  let posts=initial.posts,deleted=initial.deletedRevision,busy=false,fp='';
+  draft.placeholder='Write an announcement…';draft.maxLength=2000;
+  const send=action('Publish to everyone',async()=>{if(busy||!draft.value.trim())return;busy=true;try{await api('announcements/publish',{text:draft.value.trim()});draft.value='';}finally{busy=false;}await poll();});
+  function draw(){if(!alive(token))return;const next=JSON.stringify(posts);if(fp===next)return;fp=next;feed.replaceChildren();for(const p of posts){const row=el('article','','cc-announcement'),head=el('div','','cc-announcement-head'),menu=el('details','','cc-announcement-menu');const trigger=el('summary','⋯');trigger.setAttribute('aria-label','Announcement options');menu.append(trigger,action('Delete for all',async()=>{if(busy||!confirm('Permanently delete this announcement for everyone?'))return;busy=true;try{await api('announcements/delete',{id:p.id});posts=posts.filter(x=>x.id!==p.id);draw();}finally{busy=false;}await poll();},'cc-danger'));head.append(el('strong','qzu-Support'),el('span','✓','cc-admin-mark'),el('small',date(p.at),'cc-muted'),menu);row.append(head,el('p',p.text));feed.append(row);}if(!posts.length)feed.append(el('p','No announcements yet.','cc-muted'));}
+  async function poll(){if(!alive(token)||busy||document.hidden)return;busy=true;try{const d=await api('announcements');if(!alive(token))return;if(deleted!==d.deletedRevision){posts=d.posts;deleted=d.deletedRevision;}else posts=[...new Map([...posts,...d.posts].map(p=>[p.id,p])).values()].sort((a,b)=>a.id-b.id);draw();}catch(e){if(alive(token))error(e);}finally{busy=false;}}
+  main.append(older,feed,draft,send);draw();async function tick(){if(!alive(token))return;await poll();if(alive(token))setTimeout(tick,5000);}setTimeout(tick,5000);
+ }
+ async function openUserTicket(id){
+  listView=false;const token=++revision;main.replaceChildren(el('h2','Ticket'),button('‹ Back',()=>load(),'cc-secondary'));
+  const info=el('p','','cc-muted'),feed=el('div','','cc-ticket-chat cc-snapshot'),field=el('textarea'),controls=el('div','','cc-actions'),seller=select([['','Choose a seller']]),notice=el('p','','cc-muted');field.placeholder='Write a reply…';field.maxLength=2000;
+  let current=null,busy=false,polling=false,fp='',pending=null;
+  const act=(label,path,data,cls='')=>action(label,async()=>{if(busy)return;busy=true;try{const t=await api(path,data());if(alive(token))render(t);}finally{busy=false;}},cls);
+  const accept=act('Accept ticket','tickets/action',()=>({id,action:'accept'})),assign=act('Add seller','tickets/action',()=>({id,action:'assign',seller:seller.value})),share=act('Share seller code','tickets/action',()=>({id,action:'share',seller:seller.value}),'cc-secondary');
+  const close=action('Close & archive',async()=>{if(busy||!confirm('Close this ticket and archive it?'))return;busy=true;try{await api('tickets/action',{id,action:'close'});if(alive(token))await load();}finally{busy=false;}},'cc-danger');
+  const send=action('Send reply',async()=>{if(busy||!field.value.trim())return;const text=field.value.trim();if(!pending||pending.text!==text)pending={text,requestId:crypto.randomUUID()};busy=true;try{const t=await api('tickets/send',{id,...pending});if(alive(token)){if(field.value.trim()===text)field.value='';pending=null;render(t);}}finally{busy=false;}});
+  controls.append(accept,seller,assign,share,close);main.append(info,feed,notice,field,send,controls);
+  function render(t){if(!alive(token))return;current=t;info.textContent=t.topic+' · '+(t.closed?'Solved':t.assigned?'Open':'Waiting for admin');
+   const key=JSON.stringify(t.messages);if(key!==fp){fp=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','','cc-bubble '+(m.mine?'mine':'other')),name=m.role==='admin'?'qzu-Support ✓':m.role==='verified-seller'?'Seller ✓':m.role==='seller'?'Seller':m.role==='system'?'Ticket':'Customer';b.append(el('small',name+' · '+date(m.at),m.role==='admin'?'cc-admin-mark':m.role==='verified-seller'?'cc-seller-mark':''),el('p',m.text));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
+   accept.hidden=Boolean(t.closed||t.assigned);const editable=!t.closed&&t.canReply;field.disabled=!editable;send.hidden=!editable;seller.hidden=!editable;assign.hidden=!editable||Boolean(t.seller);share.hidden=!editable;close.hidden=!editable;notice.textContent=t.closed?'Ticket closed and archived.':t.assigned&&!editable?'Assigned to another administrator.':'';
+  }
+  try{const d=await api('sellers');if(alive(token)){for(const p of d.items.filter(p=>p.active)){const o=el('option','Seller '+p.account.slice(0,8)+(p.verified?' ✓':''));o.value=p.account;seller.append(o);}}}catch(e){if(alive(token))notice.textContent=e.message;}
+  async function poll(){if(!alive(token)||polling)return;polling=true;try{if(!busy&&!document.hidden){const t=await api('tickets/state',{id});if(!busy)render(t);}}catch(e){if(alive(token))notice.textContent=e.message;}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}poll();
+ }
  async function load(prefetched=null){
   listView=false;const token=++revision;if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
   for(const b of nav.children){b.classList.toggle('selected',b.dataset.tab===current);b.setAttribute('aria-current',b.dataset.tab===current?'page':'false');}
@@ -103,9 +128,16 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    const archived=current==='Archive',view=archived?archiveTab:current;
    const route=view==='Payment tickets'?'payment-tickets':view.toLowerCase();
    const url=route+(archived?'?archived=1':['Accounts','Keys'].includes(view)?'?q='+encodeURIComponent(query)+(cursor?'&after='+encodeURIComponent(cursor):''):'');
+   if(view==='Chats'){main.replaceChildren(el('h2','Chats'));await window.QzuDesktopMessenger(main,api,()=>alive(token));return;}
    const data=await (prefetched&&typeof prefetched==='object'&&('items' in prefetched||'requests' in prefetched)?prefetched:api(url));if(!alive(token))return;listSignature=JSON.stringify(data);main.replaceChildren(el('h2',current),button('Refresh',()=>load(),'cc-secondary'));
-   if(archived){const sub=el('div','','cc-actions cc-archive-tabs');for(const name of ['Reports','Feedback','Payment tickets','Payments','Support'])sub.append(button(name,()=>{archiveTab=name;load();},name===archiveTab?'':'cc-secondary'));main.append(sub,el('p','Finished records only. Restoring returns them to the working list. Existing privacy retention still applies.','cc-muted'));}
-   if(view==='Monitoring'){renderMonitoring(data,token);}else if(view==='Overview'){
+   if(archived){const sub=el('div','','cc-actions cc-archive-tabs');for(const name of ['Reports','Feedback','Payment tickets','Payments','Support','Tickets'])sub.append(button(name,()=>{archiveTab=name;load();},name===archiveTab?'':'cc-secondary'));main.append(sub,el('p','Finished records only. Restoring returns them to the working list. Existing privacy retention still applies.','cc-muted'));}
+   if(view==='Announcements'){renderAnnouncements(data,token);}else if(view==='Tickets'){
+     for(const t of data.items){const n=card(t.topic+' · #'+t.id.slice(0,8),[status(t.closed?'solved':t.assigned?'active':'inspection'),details([['Updated',date(t.updated)],['Seller assigned',t.seller?'Yes':'No']]),button('Open ticket',()=>openUserTicket(t.id))]);main.append(n);}listView=!archived;
+   }else if(view==='Sellers'){
+     const controls=el('div','','cc-actions');controls.append(action('Generate Seller key',async()=>{const result=await api('sellers/generate',{});if(!alive(token))return;const d=el('dialog','','cc-seller-dialog');d.append(el('h2','Seller key generated'),el('p','Save this one-time activation secret privately.','cc-muted'),el('code',result.key,'cc-secret'),action('Copy key',()=>navigator.clipboard.writeText(result.key)),button('Done',()=>{d.close();d.remove();},'cc-secondary'));main.append(d);d.addEventListener('close',()=>d.remove());d.showModal();}),button('View Seller Accounts',()=>load(),'cc-secondary'));main.append(controls);
+     for(const p of data.items){const n=card('Seller · '+p.account.slice(0,8),[status(p.active?'active':'revoked'),details([['Account',p.account],['Created',date(p.created)],['Current connection code',p.code],['Next rotation',date(p.rotates)],['Verification',p.verified?'Verified':'Not verified']])]);if(p.verified)n.append(el('span','✓ Verified Seller','cc-seller-mark'));if(p.code)n.append(action('Copy connection code',()=>navigator.clipboard.writeText(p.code),'cc-secondary'));n.append(action(p.verified?'Revoke verification':'Verify Seller',async()=>{await api('sellers/verify',{id:p.account,verified:!p.verified});if(alive(token))await load();},p.verified?'cc-danger':''));main.append(n);}
+    listView=true;
+   }else if(view==='Monitoring'){renderMonitoring(data,token);}else if(view==='Overview'){
     const metrics=el('div','','cc-metrics');for(const [label,val] of [['Accounts',data.accounts],['Active',data.active],['Admin accounts',data.admins],['Unused keys',data.keys],['Open reports',data.reports],['Open feedback',data.feedback],['Pending payments',data.payments],['Open payment tickets',data.paymentTickets],['Assigned support requests',data.supportRequests],['Verified revenue','$'+(data.revenue/100).toFixed(2)]]){const n=el('div','','cc-metric');n.append(el('strong',String(val)),el('span',label));metrics.append(n);}main.append(metrics,card('Inbox shortcuts',[button('Open payment tickets',()=>navigate('Payment tickets')),button('Support requests',()=>navigate('Support'),'cc-secondary')]));
     if(pair)main.append(card('Desktop pairing',[el('p','Link a browser with a one-time code. Your admin PIN is required.'),button('Pair desktop',pair),action('Sign out all linked browsers',async()=>{await api('logout',{});main.prepend(el('p','Desktop sessions revoked.','cc-muted'));},'cc-secondary')]));
     main.append(card('Privacy boundary',[el('p','Only explicitly submitted report snapshots are available. Private encrypted conversations and consumed View Once content cannot be recovered.')]));
@@ -117,7 +149,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     }
     if(data.items.length===100)main.append(button('Next page',()=>{cursor=data.items.at(-1).id;load();}));if(!data.items.length)main.append(el('p','No matching accounts.'));
    }else if(view==='Keys'){
-    main.append(search('Key ID, fingerprint or account ID'));const picker=select(plans),count=input('Quantity (1–100)','number');count.min='1';count.max='100';count.value='1';
+    main.append(button('Sellers',()=>navigate('Sellers'),'cc-secondary'),search('Key ID, fingerprint or account ID'));const picker=select(plans),count=input('Quantity (1–100)','number');count.min='1';count.max='100';count.value='1';
     main.append(card('Generate access keys',[picker,count,action('Generate',async()=>{const result=await api('keys/generate',{plan:picker.value,count:Number(count.value)});await load();secret('New access keys',result.keys.map(k=>k.key+' · '+k.id).join('\n'));})]));
     for(const k of data.items){const state=k.state==='revoked'?'revoked':k.redeemed?'redeemed':'unused';const n=card(k.fingerprint?'QZU-••••-'+k.fingerprint:k.id,[status(state),details([['ID',k.id],['Plan',k.plan],['Created',date(k.created)],['Activated',date(k.redeemed)],['Account',k.account]])]);
      if(!k.redeemed&&k.generated&&k.state==='confirmed'){n.append(button('Replace unused key',()=>{const box=card('Replace key?',[el('p','The previous secret will stop working.'),action('Replace',async()=>{const result=await api('keys/replace',{id:k.id});await load();secret('Replacement key',result.key);},'cc-danger'),button('Cancel',()=>box.remove(),'cc-secondary')]);main.prepend(box);}),button('Revoke',()=>confirmAction('Revoke unused key',reason=>api('keys/revoke',{id:k.id,reason})),'cc-secondary'));}

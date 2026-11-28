@@ -24,10 +24,10 @@
       </symbol>
       <symbol id="supportAvatar" viewBox="0 0 48 48"><circle cx="24" cy="24" r="24" fill="#f4eeee" stroke="none"/><use href="#logo" x="7" y="12" width="34" height="24"/></symbol>
       <symbol id="adminBadge" viewBox="0 0 20 20">
-        <circle cx="10" cy="10" r="9" fill="#bd2929" stroke="none"/>
+        <circle cx="10" cy="10" r="9" fill="#2589eb" stroke="none"/>
         <path d="m6 10 3 3 5-6" fill="none" stroke="#fff" stroke-width="1.8"/>
       </symbol>
-      <symbol id="lock" viewBox="0 0 24 24">
+      <symbol id="sellerBadge" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#a855f7" stroke="none"/><path d="m6 10 3 3 5-6" fill="none" stroke="#fff" stroke-width="1.8"/></symbol><symbol id="ticketIcon" viewBox="0 0 24 24"><path d="M3 6h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4Z"/><path d="M14 6v2m0 3v2m0 3v2"/></symbol><symbol id="lock" viewBox="0 0 24 24">
         <rect x="5" y="10" width="14" height="11" rx="2"/>
         <path d="M8 10V7a4 4 0 0 1 8 0v3"/>
       </symbol>
@@ -164,7 +164,11 @@
           </div>
         </div>
       </section>
-      <section id="settingsPage" class="sub-page" hidden>
+      <section id="ticketsPage" class="sub-page" hidden>
+  <header class="page-header"><a href="/chat" class="icon-button" aria-label="Back to chats"><svg><use href="#back"/></svg></a><h2>Tickets</h2><span class="header-spacer"></span></header>
+  <div id="userTicketContent" class="page-content user-ticket-content"></div>
+ </section>
+ <section id="settingsPage" class="sub-page" hidden>
         <header class="page-header"><a id="settingsBack" href="/chat" class="icon-button" aria-label="Back"><svg><use href="#back"/></svg></a><a class="brand" href="/chat" aria-label="qzu."><svg class="wordmark"><use href="#logo"/></svg></a><span class="header-spacer"></span></header>
         <div class="page-content">
           <div class="panel settings-panel" data-settings-category="main">
@@ -255,7 +259,7 @@
           </div>
         </div>
       </section>
-      <nav id="bottomNav" class="bottom-nav" aria-label="Main navigation" hidden><a href="/chat" data-tab="chat"><span class="nav-icon"><svg><use href="#chat"/></svg><span id="navUnread" class="unread-badge" hidden></span></span><span>Chats</span></a><a href="/connect" data-tab="connect"><svg><use href="#qr"/></svg><span>Connect</span></a><a href="/settings" data-tab="settings"><svg><use href="#settings"/></svg><span>Settings</span></a></nav><div id="activityBanner" class="activity-banner" role="status" hidden></div><div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
+      <nav id="bottomNav" class="bottom-nav" aria-label="Main navigation" hidden><a href="/chat" data-tab="chat"><span class="nav-icon"><svg><use href="#chat"/></svg><span id="navUnread" class="unread-badge" hidden></span></span><span>Chats</span></a><a href="/connect" data-tab="connect"><svg><use href="#qr"/></svg><span>Connect</span></a><a href="/tickets" data-tab="tickets"><svg><use href="#ticketIcon"/></svg><span>Ticket</span></a><a href="/settings" data-tab="settings"><svg><use href="#settings"/></svg><span>Settings</span></a></nav><div id="activityBanner" class="activity-banner" role="status" hidden></div><div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
     </main>
     <div id="bootSplash" aria-hidden="true"><div class="boot-grid"></div><div class="boot-center"><i></i><i></i><i></i><svg viewBox="0 0 172 110"><path class="boot-chevron" fill="#bd0000" d="M5 5 85 44 85 64 5 105 5 80 55 54 5 30Z"/><rect class="boot-cursor" x="87" y="86" width="80" height="19" fill="#bd0000"/></svg></div><div class="boot-scan"></div><div class="boot-progress"></div></div>
     <dialog id="modal" aria-labelledby="modalTitle">

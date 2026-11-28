@@ -4,13 +4,14 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.16.0';
+const installedVersion = window.QZU_APP_VERSION || '0.17.0';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
 const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
 const updateReminders = new Map();
+let officialDeleteRevision=null,ticketEpoch=0,ticketSelected=null,ticketMode='list',ticketBusy=false,ticketPolling=false,ticketLast='',ticketDraft='',ticketPending=null;
 let officialReadJob=null,officialRenderKey='',liveRevision='',officialHistory=[],manualRefreshes=0,pushRegistration=null,pushEpoch=-1;
 
 async function transport(path, options = {}) {
@@ -119,7 +120,7 @@ const acknowledgedDelivery = new Set();
 const acknowledgedRead = new Set();
 
 function routeName(path) {
-  return path === '/settings' || path.startsWith('/settings/') ? 'settings': path === '/connect' ? 'connect': 'chat';
+  return path === '/settings' || path.startsWith('/settings/') ? 'settings': path === '/connect' ? 'connect': path==='/tickets'?'tickets':'chat';
 }
 
 const drafts=new Map(), scrollMemory=new Map(), outbox=new Map();
@@ -155,7 +156,7 @@ function rememberRoom(){if(typeof selected!=='string'||page!=='chat'||!unlockTok
 function restoreDraft(id){const draft=drafts.get(id);$('message').value=draft?.text||'';resetOnce();if(draft?.once)setOnceMode(true);else if(draft?.burn){burnSeconds=draft.burn;$('attachmentMenu').classList.add('once-active');$('message').placeholder='Timed text · '+burnSeconds+'s';}}
 function updatePages() {
   updateNavigation();
-  for (const name of ['chat', 'settings', 'connect']) {const node=$(name+'Page'),hidden=!unlockToken||accessDue||termsPending||suspendedAccount||name!==page;if(node.hidden&&!hidden)motion(node,'motion-page');node.hidden=hidden;}
+  for (const name of ['chat', 'settings', 'connect','tickets']) {const node=$(name+'Page'),hidden=!unlockToken||accessDue||termsPending||suspendedAccount||name!==page;if(node.hidden&&!hidden)motion(node,'motion-page');node.hidden=hidden;}
   $('loading').hidden = Boolean(unlockToken);
   $('loading').classList.toggle('locked', !unlockToken);
 }
@@ -175,6 +176,7 @@ function navigate(path, push = true) {
     renderedRoom = null;
   }
   page = nextPage;
+  if(page==='tickets'){ticketLast='';refreshUserTickets();}
   if (page === 'connect' && pendingInvite && unlockToken) {
     $('enterCode').value = pendingInvite;
     pendingInvite = '';
@@ -186,7 +188,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('a[href]');
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const url = new URL(a.href);
-  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/'].includes(url.pathname)) return;
+  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/tickets', '/'].includes(url.pathname)) return;
   e.preventDefault();
   if (unlockToken) {if(a.dataset.tab==='chat'){rememberRoom();mobileOpen=false;selected=null;renderedRoom=null;$('message').value='';}navigate(url.pathname);}
 });
@@ -201,7 +203,7 @@ const clock = ms => {
 };
 const serverNow = () => Date.now() + offset;
 const supportClock = (room,now) => room.persistent ? 'No expiry' : room.mobileSupport && room.expires-now >= 3600000 ? Math.ceil((room.expires-now)/60000/60)+'h' : clock(room.expires-now);
-const nameFor = room => room.support ? (room.supportAgent ? 'Contact ' + room.id.slice(0,4).toUpperCase() : 'qzu-Support') : room.admin ? 'Announcements' : room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
+const nameFor = room => room.peerRole==='admin'?'qzu-Support':room.support ? (room.supportAgent ? 'Contact ' + room.id.slice(0,4).toUpperCase() : 'qzu-Support') : room.admin ? 'Announcements' : room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
   cancelAnimationFrame(scanFrame);
@@ -660,6 +662,7 @@ function lock(reopen = true) {
   authEpoch++;
   sequence++;
   const old = unlockToken;
+  clearUserTicketUI();officialDeleteRevision=null;
   unlockToken = null;roomKeys.clear();roomKeyJobs.clear();keyPruneSignature='';nextCryptoRetry=0;nextPrekeyAttempt=0;lastBadge=-1;clearTimeout(activityTimer);$('activityBanner').hidden=true;
   pendingUpdate = null;
   nextUpdateCheck = 0;
@@ -888,7 +891,7 @@ function renderChat() {
   const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
   $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
+  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -912,9 +915,9 @@ function renderChat() {
 
       addContactMarks(name,r.contact,r);
       b.dataset.contactPriority=String(r.admin?2:r.contact?.favorite?1:0);
-      if (r.admin && !r.supportAgent) {
-        const badge = svg('adminBadge', 'admin-badge');
-        badge.setAttribute('aria-label', 'Verified Admin');
+      if ((r.admin && !r.supportAgent)||r.peerRole==='admin'||r.peerRole==='verified-seller') {
+        const badge = svg(r.peerRole==='verified-seller'?'sellerBadge':'adminBadge', 'admin-badge');
+        badge.setAttribute('aria-label', r.peerRole==='verified-seller'?'Verified Seller':'Verified Admin');
         badge.removeAttribute('aria-hidden');
         name.append(badge);
       }
@@ -931,8 +934,8 @@ function renderChat() {
       const row = el('button','contact saved-contact');
       row.type='button';
       const content=el('div','contact-body');
-      const name=el('span','contact-name',contact.nickname);
-      addContactMarks(name,contact);
+      const name=el('span','contact-name',contact.peerRole==='admin'?'qzu-Support':contact.nickname);
+      addContactMarks(name,contact);if(contact.peerRole==='admin'||contact.peerRole==='verified-seller'){const badge=svg(contact.peerRole==='admin'?'adminBadge':'sellerBadge','admin-badge');badge.setAttribute('aria-label',contact.peerRole==='admin'?'Verified Admin':'Verified Seller');badge.removeAttribute('aria-hidden');name.append(badge);}
       row.dataset.contactPriority=String(contact.favorite?1:0);
       content.append(name,el('span','contact-preview'+(contact.warning?' contact-warning':''),contact.warning?'Contact deletion incoming':'Start a new chat'));
       row.append(svg('avatar','avatar'),content,svg('chevron','official-chevron'));
@@ -967,7 +970,7 @@ function renderChat() {
   const showDirectSecurity = encryptionRequired(current) && directRoom(current);
   encryptionStatus.hidden = !showDirectSecurity;
   encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? '🔒 Encrypted' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : 'Connecting securely';
-  $('threadBadge').hidden = !isAdmin || Boolean(current?.supportAgent);
+  $('threadBadge').hidden = !(current?.peerRole==='admin'||current?.peerRole==='verified-seller'||(isAdmin&&!current?.supportAgent));$('threadBadge').querySelector('use').setAttribute('href',current?.peerRole==='verified-seller'?'#sellerBadge':'#adminBadge');$('threadBadge').setAttribute('aria-label',current?.peerRole==='verified-seller'?'Verified Seller':'Verified Admin');
   $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
   $('chatOptions').hidden = true;
@@ -1280,7 +1283,7 @@ async function acknowledgeMessages() {
 }
 
 let inviteMotionKey='',inviteMotionDuration=1;
-function updateInviteMotion(inv,now=serverNow()){const key=inv?.code+':'+inv?.expires;if(key!==inviteMotionKey){inviteMotionKey=key;inviteMotionDuration=Math.max(1,(inv?.expires||now)-now);}const remaining=inv?Math.max(0,inv.expires-now):0;$('inviteProgress').max=inviteMotionDuration;$('inviteProgress').value=remaining;$('inviteTimer').textContent=inv?clock(remaining):'Generating code…';}
+function updateInviteMotion(inv,now=serverNow()){const key=inv?.code+':'+inv?.expires;if(key!==inviteMotionKey){inviteMotionKey=key;inviteMotionDuration=Math.max(1,(inv?.expires||now)-now);}const remaining=inv?Math.max(0,inv.expires-now):0;$('inviteProgress').max=inviteMotionDuration;$('inviteProgress').value=remaining;$('inviteTimer').textContent=inv?(state.seller?Math.ceil(remaining/86400000)+' days until code rotation':clock(remaining)):'Generating code…';}
 function fitConnectPage(){
   const content=$('connectPage').querySelector('.page-content'),panel=content.querySelector('.connect-panel');
   if(!content.clientHeight)return;
@@ -1295,6 +1298,7 @@ if(typeof ResizeObserver==='function'){
 function renderConnect() {
   if (page !== 'connect' || !unlockToken) return;
   fitConnectPage();
+  $('inviteLifetime').hidden=Boolean(state.seller);$('newCode').hidden=Boolean(state.seller);
   const inv = state.invite && state.invite.expires > serverNow() ? state.invite: null;
   $('inviteCode').textContent = inv?.code || '– – – – – –';
   updateInviteMotion(inv);
@@ -1358,6 +1362,7 @@ function render() {
   updateConnection();updateNavigation();renderChat();
   renderConnect();
   renderSettings();
+  if(page==='tickets'&&!$('userTicketContent').childElementCount)refreshUserTickets();
 }
 
 function purgeExpired() {
@@ -1400,7 +1405,7 @@ function scrubRemovedRooms(previous,next,clearKeys=true){
   }
 }
 function clearVolatile() {
-  drafts.clear();scrollMemory.clear();outbox.clear();nextOutboxAttempt=0;updateConnection();
+  clearUserTicketUI();  drafts.clear();scrollMemory.clear();outbox.clear();nextOutboxAttempt=0;updateConnection();
   scrubRemovedRooms(state.rooms,[]);
   liveRevision='';
   roomKeys.clear();roomKeyJobs.clear();if(native)clearPrivateKeys().catch(()=>{});
@@ -1789,6 +1794,7 @@ $('supportOpen').addEventListener('click',confirmSupport);
 $('writeSupport').addEventListener('click',confirmSupport);
 function renderOfficial(open){
   const feed=state.official||{posts:[],latest:0,seen:0,unread:false};
+  if(officialDeleteRevision!==null&&feed.deletedRevision!==officialDeleteRevision)officialHistory=[];officialDeleteRevision=feed.deletedRevision??null;
   $('officialUnread').hidden=!feed.unread;
   $('officialComposer').hidden=!state.supportAgent;
   $('officialReadOnly').hidden=Boolean(state.supportAgent);
@@ -1802,7 +1808,7 @@ function renderOfficial(open){
     for(const post of postsToShow){
       const article=el('article','official-post');
       const head=el('div','official-post-title');
-      head.append(el('strong','','qzu.'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));
+      head.append(el('strong','','qzu-Support'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));if(state.supportAgent)head.append(button('⋯',()=>show('Announcement',[button('Delete for everyone',async()=>{try{await api('official/delete',{id:post.id});officialHistory=officialHistory.filter(p=>p.id!==post.id);closeModal();await refresh();}catch(e){showError(e);}},'danger-button primary-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
       article.append(head,el('p','official-text',post.text));posts.append(article);
     }
   }
@@ -1820,7 +1826,7 @@ $('officialOlder').addEventListener('click',async()=>{
   const older=$('officialOlder'),first=Math.min(...[...officialHistory,...(state.official?.posts||[])].map(post=>post.id));
   if(!Number.isFinite(first)||first<=1)return;
   older.disabled=true;const epoch=authEpoch;
-  try{const result=await api('official/history?before='+first);if(epoch!==authEpoch||!unlockToken)return;officialHistory=[...result.posts,...officialHistory];renderOfficial(selected===officialChannel);if(!result.posts.length)older.hidden=true;}
+  try{const result=await api('official/history?before='+first);if(epoch!==authEpoch||!unlockToken||result.deletedRevision!==undefined&&result.deletedRevision!==officialDeleteRevision)return;officialHistory=[...result.posts,...officialHistory];renderOfficial(selected===officialChannel);if(!result.posts.length)older.hidden=true;}
   catch(error){if(epoch===authEpoch)showError(error);}finally{older.disabled=false;}
 });
 $('officialMessage').addEventListener('input',()=>{$('officialSend').disabled=!$('officialMessage').value.trim();});
@@ -3272,11 +3278,11 @@ function showKeyEntry(renewal) {
   input.setAttribute('aria-label', 'Use Access-Key');
   input.autocomplete = 'off';
   input.spellcheck = false;
-  input.maxLength = renewal ? 52 : 58;
+  input.maxLength = renewal ? 52 : 59;
   const submit = button('Continue', async () => {
     const value = input.value.trim().toUpperCase();
     if(renewal&&/^QZU-[A-F0-9]{48}$/.test(value)){submit.disabled=true;try{await api('access/renew',{key:value});forgetInvoice(true);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}catch(e){dialogError(e);submit.disabled=false;}return;}
-    if(!renewal&&(/^QZU-ADMIN-[A-F0-9]{48}$/.test(value)||/^QZU-REVIEW-[A-F0-9]{40}$/.test(value)||(playBuild&&/^QZU-[A-F0-9]{48}$/.test(value)))){
+    if(!renewal&&(/^QZU-ADMIN-[A-F0-9]{48}$/.test(value)||/^QZU-SELLER-[A-F0-9]{48}$/.test(value)||/^QZU-REVIEW-[A-F0-9]{40}$/.test(value)||(playBuild&&/^QZU-[A-F0-9]{48}$/.test(value)))){
       submit.disabled=true;
       try{
         const result=await api('session',{accessKey:value});
@@ -3439,3 +3445,37 @@ $('accessSettings').addEventListener('click', () => {
   const date = new Date(access.paidUntil).toLocaleDateString();
   show('qzu-Access', [el('p', '', 'Paid through ' + date), el('p', '', 'Renew with any of the four USD access plans or a valid renewal key.'), button('Renew access', showRenewal), button('Close', closeModal, 'secondary-button')]);
 });
+
+function clearUserTicketUI(){ticketEpoch++;ticketSelected=null;ticketMode='list';ticketBusy=false;ticketPolling=false;ticketLast='';ticketDraft='';ticketPending=null;$('userTicketContent').replaceChildren();}
+function ticketAlive(epoch,auth){return epoch===ticketEpoch&&auth===authEpoch&&Boolean(unlockToken)&&page==='tickets'&&!accessDue&&!termsPending&&!suspendedAccount;}
+function ticketNavigate(mode,id=null){ticketEpoch++;ticketMode=mode;ticketSelected=id;ticketLast='';ticketDraft='';ticketPending=null;ticketBusy=false;ticketPolling=false;$('userTicketContent').replaceChildren();refreshUserTickets();}
+function renderTicketList(items){
+ const root=$('userTicketContent');const key=JSON.stringify(items);if(ticketLast===key)return;ticketLast=key;root.replaceChildren();
+ if(state.supportAgent){root.append(el('p','pay-note','Manage tickets in qzu. Control.'));return;}
+ const list=el('div','user-ticket-list');for(const t of items){const row=button('',()=>ticketNavigate('chat',t.id),'user-ticket-row');row.append(svg('ticketIcon','user-ticket-icon'),el('span','user-ticket-title',t.topic+' · #'+t.id.slice(0,6)),el('small',t.closed?'ticket-solved':'ticket-open',t.closed?'Solved':t.assigned?'Open':'Pending'));list.append(row);}
+ root.append(list);
+ if(!items.some(t=>t.mine==='customer'&&!t.closed))root.append(button('New Ticket',()=>ticketNavigate('new'),'primary-button user-ticket-new'));
+ if(!items.length)list.append(el('p','pay-note','Contact support or request a seller.'));
+}
+function renderNewUserTicket(){
+ const root=$('userTicketContent');if(root.querySelector('form'))return;root.replaceChildren();const form=el('form','user-ticket-form'),topic=el('select','access-key-input'),field=el('textarea','edit-input');for(const name of ['General question','Request a Seller','Account issue','Other']){const o=el('option','',name);o.value=name;topic.append(o);}field.placeholder='What do you need?';field.maxLength=2000;field.value=ticketDraft;field.oninput=()=>ticketDraft=field.value;
+ const submit=el('button','primary-button','Create Ticket'),err=el('p','pay-note');submit.type='submit';form.append(svg('ticketIcon','user-ticket-hero'),el('h2','','Create a Ticket'),topic,field,err,submit,button('Back',()=>ticketNavigate('list'),'secondary-button'));root.append(form);
+ form.onsubmit=async e=>{e.preventDefault();if(ticketBusy||!field.value.trim())return;const epoch=ticketEpoch,auth=authEpoch;ticketBusy=true;submit.disabled=true;try{const t=await api('tickets/open',{topic:topic.value,text:field.value.trim(),requestId:crypto.randomUUID()},true);if(ticketAlive(epoch,auth))ticketNavigate('chat',t.id);}catch(e){if(ticketAlive(epoch,auth))err.textContent=errorMessage(e);}finally{if(ticketAlive(epoch,auth)){ticketBusy=false;submit.disabled=false;}}};
+}
+function renderUserTicket(t,epoch,auth){
+ const root=$('userTicketContent');let feed=root.querySelector('.user-ticket-feed'),field=root.querySelector('textarea'),send=root.querySelector('.user-ticket-send'),notice=root.querySelector('.user-ticket-notice');
+ if(!feed){root.replaceChildren();const head=el('div','user-ticket-head');head.append(button('‹',()=>ticketNavigate('list'),'secondary-button'),el('strong','',t.topic+' · #'+t.id.slice(0,6)));feed=el('div','user-ticket-feed');field=el('textarea','edit-input');field.placeholder='Message…';field.maxLength=2000;field.value=ticketDraft;field.oninput=()=>ticketDraft=field.value;notice=el('p','pay-note user-ticket-notice');
+ const composer=el('form','user-ticket-compose');send=el('button','primary-button user-ticket-send','Send');composer.append(field,send);root.append(head,feed,notice,composer);
+ composer.onsubmit=async e=>{e.preventDefault();const text=field.value.trim();if(!text||ticketBusy)return;ticketBusy=true;send.disabled=true;if(!ticketPending||ticketPending.text!==text)ticketPending={text,requestId:crypto.randomUUID()};try{const data=await api('tickets/send',{id:t.id,...ticketPending},true);if(ticketAlive(epoch,auth)){if(field.value.trim()===text){field.value='';ticketDraft='';}ticketPending=null;renderUserTicket(data,epoch,auth);feed.scrollTop=feed.scrollHeight;}}catch(e){if(ticketAlive(epoch,auth))notice.textContent=errorMessage(e);}finally{if(ticketAlive(epoch,auth)){ticketBusy=false;send.disabled=field.disabled;}}};
+ }
+ const key=JSON.stringify(t.messages);if(ticketLast!==key){ticketLast=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','pay-ticket-bubble '+(m.mine?'mine':'other'));if(!m.mine){const name=el('span','user-ticket-name',m.role==='admin'?'qzu-Support':m.role==='seller'||m.role==='verified-seller'?'Seller':m.role==='system'?'Ticket':'Customer');if(m.role==='admin'||m.role==='verified-seller')name.append(svg(m.role==='admin'?'adminBadge':'sellerBadge','admin-badge'));b.append(name);}b.append(el('p','',m.text),el('small','pay-ticket-time',fmtTime(m.at)));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
+ field.disabled=Boolean(t.closed);send.disabled=field.disabled||ticketBusy;notice.textContent=t.closed?'Solved · Ticket closed':t.assigned?'Open':'Waiting for Support';root.querySelector('.user-ticket-compose').hidden=Boolean(t.closed);
+}
+async function refreshUserTickets(){
+ if(!unlockToken||page!=='tickets'||accessDue||termsPending||suspendedAccount||ticketPolling||ticketBusy||document.hidden)return;
+ if(ticketMode==='new'){renderNewUserTicket();return;}
+ const epoch=ticketEpoch,auth=authEpoch;ticketPolling=true;try{const result=ticketMode==='chat'?await api('tickets/state',{id:ticketSelected},true):await api('tickets');if(!ticketAlive(epoch,auth)||ticketBusy)return;if(ticketMode==='chat')renderUserTicket(result,epoch,auth);else renderTicketList(result.items);}
+ catch(e){if(ticketAlive(epoch,auth)&&!$('userTicketContent').childElementCount)$('userTicketContent').append(el('p','pay-note',errorMessage(e)),button('Retry',()=>ticketNavigate('list'),'secondary-button'));}
+ finally{if(epoch===ticketEpoch)ticketPolling=false;}
+}
+setInterval(refreshUserTickets,5000);
