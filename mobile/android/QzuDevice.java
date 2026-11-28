@@ -2,6 +2,7 @@ package cc.qzu.app;
 
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
@@ -28,6 +29,13 @@ import java.security.spec.ECGenParameterSpec;
 @CapacitorPlugin(name = "QzuDevice")
 public class QzuDevice extends Plugin {
     private static final String ALIAS = "cc.qzu.app.device.v1";
+
+    @PluginMethod public void deviceInfo(PluginCall call) {
+        JSObject info = new JSObject();
+        info.put("model", Build.MANUFACTURER + " " + Build.MODEL);
+        info.put("osVersion", Build.VERSION.RELEASE);
+        call.resolve(info);
+    }
 
     private synchronized KeyStore.Entry key() throws Exception {
         KeyStore store = KeyStore.getInstance("AndroidKeyStore");

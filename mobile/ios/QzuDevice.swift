@@ -15,10 +15,25 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "roomVault", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setBadge", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "testLocalNotification", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "deviceInfo", returnType: CAPPluginReturnPromise)
     ]
     private let tag = Data("cc.qzu.app.device.v1".utf8)
     private let queue = DispatchQueue(label: "cc.qzu.device")
+
+    @objc func deviceInfo(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            var info = utsname()
+            uname(&info)
+            let model = withUnsafeBytes(of: info.machine) { bytes in
+                String(bytes: bytes.prefix { $0 != 0 }, encoding: .utf8)
+            }
+            call.resolve([
+                "model": model ?? UIDevice.current.model,
+                "osVersion": UIDevice.current.systemVersion
+            ])
+        }
+    }
 
     private func signingKey() throws -> SecKey {
         let query: [String: Any] = [

@@ -5,11 +5,19 @@ const button=(label,fn,cls='')=>{const b=el('button',label,'cc-button '+cls);b.t
 const date=x=>x?new Date(x).toLocaleString():'—';
 const input=(placeholder,type='text')=>{const n=el('input');n.type=type;n.placeholder=placeholder;n.setAttribute('aria-label',placeholder);n.autocomplete='off';return n;};
 const select=(options)=>{const n=el('select');for(const [value,label] of options){const o=el('option',label);o.value=value;n.append(o);}return n;};
-const statusLabels={help:'Needs help',inspection:'In review',review:'In review',solved:'Resolved',closed:'Closed',active:'Active',confirmed:'Verified',completed:'Completed',accepted:'Accepted',submitted:'Submitted',pending:'Pending',unassigned:'Unassigned',assigned:'Assigned',open:'Open',expired:'Expired',rejected:'Rejected',suspended:'Suspended',revoked:'Revoked',success:'Success'};
-const status=(value)=>el('span',statusLabels[value]||String(value??'Unknown'), 'cc-status '+(['help','expired','rejected','suspended','revoked'].includes(value)?'red':['solved','active','confirmed','accepted','success','completed'].includes(value)?'green':['pending','inspection','review','submitted','unassigned'].includes(value)?'yellow':'neutral'));
+const statusLabels={help:'Needs help',inspection:'In review',review:'In review',solved:'Resolved',closed:'Closed',active:'Active',confirmed:'Verified',completed:'Completed',accepted:'Accepted',submitted:'Submitted',pending:'Pending',unassigned:'Unassigned',assigned:'Assigned',open:'Open',expired:'Expired',rejected:'Rejected',suspended:'Suspended',revoked:'Revoked',retired:'Retired',success:'Success',unused:'Unused',redeemed:'Redeemed'};
+const status=(value)=>el('span',statusLabels[value]||String(value??'Unknown'), 'cc-status '+(['help','expired','rejected','suspended','revoked'].includes(value)?'red':['solved','active','confirmed','accepted','success','completed','redeemed'].includes(value)?'green':['pending','inspection','review','submitted','unassigned','unused'].includes(value)?'yellow':'neutral'));
 const caseNames={report:'Report',support:'Support',ticket:'User ticket','payment-ticket':'Payment ticket'};
 const caseRoute=(type,id)=>'cases/'+encodeURIComponent(type)+'/'+encodeURIComponent(id);
 const plans=[['1W','1 Week'],['1M','1 Month'],['1Y','1 Year'],['LT','Lifetime']];
+const planName=value=>({week:'1 week',month:'1 month',year:'1 year',lifetime:'Lifetime',legacy:'Legacy',seller:'Seller',admin:'Administrator',support:'Support'})[value]||value||'—';
+const number=new Intl.NumberFormat();
+const currency=(cents,code)=>Number.isFinite(cents)?new Intl.NumberFormat(undefined,{style:'currency',currency:code}).format(cents/100):'—';
+const keyState=key=>key.state==='revoked'?'revoked':key.redeemed?'redeemed':'unused';
+const evidenceSource=source=>({'reporter-submitted':'Reporter submitted','server-confirmed':'Server confirmed','server-stored':'Server stored'})[source]||'Source unavailable';
+const chatTypeLabel=value=>({direct:'Direct chat','encrypted direct':'Encrypted direct chat',group:'Group chat',support:'Support chat',room:'Room',world:'World chat',public:'Public chat',unknown:'Type unavailable'})[value]||'Type unavailable';
+const platformName=value=>({ios:'iOS',android:'Android',web:'Web',desktop:'Desktop'})[value]||value;
+const deviceName=device=>[platformName(device?.platform),device?.model].filter(Boolean).join(' · ')||'Unavailable';
 const sections=[
  ['Workspace',['Overview','Chats','Announcements']],
  ['Inbox',['Tickets','Support','Payment tickets','Reports','Feedback']],
@@ -20,7 +28,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  root.classList.add('cc-root');root.replaceChildren();
  const groupFor=tab=>sections.find(([,tabs])=>tabs.includes(tab))?.[0];
  let revision=0,current=groupFor(initialTab)?initialTab:location.pathname==='/control/monitoring'?'Monitoring':'Overview';
- let query='',scope='all',cursor='',auditType='',auditOutcome='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false,updateOverview=null;
+ let query='',scope='all',cursor='',keyPages=[],auditType='',auditOutcome='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false,updateOverview=null;
  const header=el('header','','cc-header'),identity=el('div','','cc-identity'),brand=el('h1','qzu.'),server=el('p',location.origin,'cc-muted'),connection=el('span','Connecting…','cc-connection');
  brand.append(el('span',' Control','cc-accent'));identity.append(brand,server);
  const adminAvatar=el('span','','cc-chat-avatar cc-chat-admin-avatar');
@@ -57,7 +65,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  header.insertBefore(lookup,session);
  const alive=token=>!closed&&isActive()&&token===revision;
  function stop(){closed=true;revision++;clearInterval(inboxTimer);if(objectURL)URL.revokeObjectURL(objectURL);root.replaceChildren();}
- function navigate(tab,nextScope='all',nextQuery=''){if(mobile&&tab==='Chats'&&mobileChat){stop();mobileChat();return;}current=tab;query=nextQuery;cursor='';scope=nextScope;if(tab!=='Accounts')lookupField.value='';if(!mobile&&location.pathname==='/control/monitoring'&&tab!=='Monitoring')history.replaceState(null,'','/control');else if(!mobile&&tab==='Monitoring')history.replaceState(null,'','/control/monitoring');load();}
+ function navigate(tab,nextScope='all',nextQuery=''){if(mobile&&tab==='Chats'&&mobileChat){stop();mobileChat();return;}current=tab;query=nextQuery;cursor='';keyPages=[];scope=nextScope;if(tab!=='Accounts')lookupField.value='';if(!mobile&&location.pathname==='/control/monitoring'&&tab!=='Monitoring')history.replaceState(null,'','/control');else if(!mobile&&tab==='Monitoring')history.replaceState(null,'','/control/monitoring');load();}
  function updateCount(tab,count){const n=tabs.get(tab).lastElementChild;n.textContent=count>0?String(count):'';n.hidden=!count;}
  function routeFor(view,archived=false){
   const route=view==='Payment tickets'?'payment-tickets':view.toLowerCase();
@@ -66,6 +74,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   if(!['Accounts','Keys','Audit'].includes(view))return route;
   const filters=new URLSearchParams({q:query});
   if(cursor)filters.set(view==='Audit'?'before':'after',cursor);
+  if(view==='Keys')filters.set('scope',scope);
   if(view==='Audit'){
    if(auditType)filters.set('type',auditType);
    if(auditOutcome)filters.set('outcome',auditOutcome);
@@ -100,13 +109,41 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  function toast(message,kind='error'){if(closed||!isActive())return;const key=kind+':'+message,t=Date.now();for(const [k,v] of recentNotices)if(t-v>=5000)recentNotices.delete(k);if(recentNotices.has(key))return;recentNotices.set(key,t);const n=el('div','','cc-toast '+kind);n.append(el('span',message),button('Dismiss',()=>n.remove(),'cc-secondary'));toastHost.append(n);while(toastHost.children.length>3)toastHost.firstElementChild.remove();setTimeout(()=>n.remove(),5000);}
  function error(e){toast(e?.message||'Request failed.');}
  function modalConfirm(message){return new Promise(resolve=>{const d=el('dialog','','cc-modal');const finish=v=>{d.close();d.remove();resolve(v);};d.append(el('h3','Confirm action'),el('p',message),button('Cancel',()=>finish(false),'cc-secondary'),button('Confirm',()=>finish(true),'cc-danger'));d.addEventListener('cancel',e=>{e.preventDefault();finish(false);});root.append(d);d.showModal();});}
- function details(rows){const d=el('dl','','cc-details');for(const [k,v] of rows){d.append(el('dt',k),el('dd',String(v??'—')));}return d;}
+ function details(rows,cls=''){const d=el('dl','','cc-details '+cls);for(const [k,v] of rows){const value=el('dd');if(v instanceof Node)value.append(v);else value.textContent=String(v??'—');d.append(el('dt',k),value);}return d;}
  function card(title,children=[]){const n=el('article','','cc-card');n.append(el('h3',title),...children);return n;}
  function action(label,run,cls=''){return button(label,async e=>{const b=e.currentTarget;if(b.disabled)return;b.disabled=true;try{await run();}catch(e){error(e);}finally{if(b.dataset.locked!=='1')b.disabled=false;}},cls);}
- function secret(title,value){const box=card(title,[el('p','Save this secret privately. It is displayed only here.'),el('code',value,'cc-secret'),action('Copy',()=>navigator.clipboard.writeText(value))]);main.prepend(box);}
- function search(placeholder){const form=el('form','','cc-search'),field=input(placeholder);field.value=query;field.maxLength=128;const b=el('button','Search','cc-button');form.append(field,b);form.addEventListener('submit',e=>{e.preventDefault();query=field.value.trim();cursor='';load();});return form;}
- function confirmAction(title,fn,{plan=false}={}){
-  const box=card(title);const reason=input('Reason (required)');reason.maxLength=500;const picker=select(plans);if(plan)box.append(picker);box.append(reason,action('Confirm',async()=>{if(!reason.value.trim())throw Error('Enter a reason.');await fn(reason.value.trim(),picker.value);await load();},'cc-danger'),button('Cancel',()=>box.remove(),'cc-secondary'));main.prepend(box);
+ function secret(title,keys){
+  const dialog=el('dialog','','cc-modal cc-key-secrets'),heading=el('h3',title),list=el('ul','','cc-key-secret-list');
+  dialog.setAttribute('aria-label',title);
+  for(const key of keys){
+   const item=el('li');
+   item.append(el('code',key.key,'cc-secret'),el('small','Key ID '+key.id,'cc-muted'));
+   list.append(item);
+  }
+  const actions=el('div','','cc-actions');
+  actions.append(action(keys.length===1?'Copy key':'Copy all keys',async()=>{
+   await navigator.clipboard.writeText(keys.map(key=>key.key).join('\n'));
+   toast(keys.length===1?'Key copied':'Keys copied','success');
+  }),button('Done',()=>dialog.close(),'cc-secondary'));
+  dialog.append(heading,el('p','Save these activation secrets privately. This is their only display.','cc-muted'),list,actions);
+  dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+  root.append(dialog);dialog.showModal();
+ }
+ function search(placeholder){const form=el('form','','cc-search'),field=input(placeholder);field.value=query;field.maxLength=128;const b=el('button','Search','cc-button cc-secondary');form.setAttribute('role','search');form.append(field,b);form.addEventListener('submit',e=>{e.preventDefault();query=field.value.trim();cursor='';keyPages=[];load();});return form;}
+ function confirmReason(title,description,run){
+  const dialog=el('dialog','','cc-modal'),reason=input('Reason (required)'),actions=el('div','','cc-actions');
+  dialog.setAttribute('aria-label',title);
+  reason.maxLength=500;
+  const confirm=action(title,async()=>{
+   if(!reason.value.trim())throw Error('Enter a reason.');
+   await run(reason.value.trim(),()=>dialog.close());
+  },'cc-danger');
+  const cancel=button('Cancel',()=>{if(!confirm.disabled)dialog.close();},'cc-secondary');
+  actions.append(cancel,confirm);
+  dialog.append(el('h3',title),el('p',description,'cc-muted'),reason,actions);
+  dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+  dialog.addEventListener('cancel',e=>{if(confirm.disabled)e.preventDefault();});
+  root.append(dialog);dialog.showModal();reason.focus();
  }
  function displayAction(event){
   const names={
@@ -116,7 +153,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    'tickets/action':'Updated ticket','tickets/send':'Replied to ticket',
    'payment-tickets/release':'Released access key','payment-tickets/verify':'Checked payment',
    'cases/claim':'Claimed case','cases/unassign':'Released assignment','cases/note':'Added an internal note',
-   note:'Added an internal note','accounts/view':'Viewed account'
+   note:'Added an internal note','accounts/view':'Viewed account','reports/evidence-view':'Viewed reported chat','reports/evidence-attachment':'Viewed report attachment'
   };
   const name=String(event.action||event.event||'Activity');
   const fallback=name.replace(/[-_/]+/g,' ');
@@ -197,7 +234,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    const facts=details([['Status',statusLabels[data.status]||data.status],['Assigned to',data.assignedToMe?'You':data.assignee||'Unassigned']]);
    body.replaceChildren(facts);
    const actions=el('div','','cc-actions');
-   if(data.accountId)actions.append(button('Open account',()=>openAccount(data.accountId,back),'cc-secondary'));
+   if(data.accountId&&type!=='report')actions.append(button('Open account',()=>openAccount(data.accountId,back),'cc-secondary'));
    if(data.canClaim)actions.append(action('Claim case',()=>change('claim')));
    if(data.canUnassign)actions.append(action('Release assignment',()=>change('unassign'),'cc-secondary'));
    if(actions.childElementCount)body.append(actions);
@@ -234,7 +271,27 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   else void refresh();
   return {panel,refresh};
  }
- function accountState(account){return account.suspended?'suspended':account.access_revoked?'revoked':account.access.active?'active':'expired';}
+ function accountState(account){return account.accessStatus||(account.suspended?'suspended':account.access_revoked?'revoked':account.access?.active?'active':'expired');}
+ function accountDevice(account){
+  const device=account.device;
+  const panel=card('Registered device');
+  if(!device||!device.platform&&!device.fingerprint){
+   panel.append(el('p','No device has been recorded for this account.','cc-muted'));
+   return panel;
+  }
+  panel.append(details([
+   ['Platform',platformName(device.platform)],['Model',device.model],['OS version',device.osVersion],['App version',device.appVersion],
+   ['First registered',date(device.registeredAt)],['Last seen',date(device.lastSeenAt)],
+   ['Details source',({'app-reported':'App reported','signed-session':'Signed device session'})[device.source]]
+  ],'cc-detail-facts'));
+  if(device.platform==='ios'&&/^i(?:Phone|Pad|Pod)\d+,\d+$/.test(device.model||'')){
+   panel.append(el('p','iOS reports the Apple model identifier.','cc-muted'));
+  }
+  if(device.fingerprint){
+   panel.append(el('h4','Qzu device fingerprint'),recordId(device.fingerprint,'fingerprint'),el('p','Identifies the app’s registered device.','cc-muted'));
+  }
+  return panel;
+ }
  function accountActions(account,reload){
   const controls=el('div','','cc-actions');
   if(account.access_plan==='admin')return controls;
@@ -267,16 +324,34 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   try{
    const {account,cases=[],activity=[],audit=[]}=await api('accounts/'+encodeURIComponent(id));
    if(!alive(token))return;
-   loading.remove();
-   const summary=card('Account',[status(accountState(account)),recordId(id,'account ID'),details([
-    ['Access plan',account.access_plan],['Access ends',date(account.paid_until)],['Last activity',date(account.last_activity)],
-    ['Messaging restriction ends',date(account.restricted_until)],['Suspension ends',date(account.suspended_until)],
-    ['Recovery configured',account.recovery_created?'Yes':'No'],['Activation key ID',account.key_id],['Reports',account.reports]
-   ])]);
+   const summary=card('Account record');
+   summary.classList.add('cc-record-panel');
+   summary.firstElementChild.after(status(accountState(account)));
+   summary.append(recordId(account.id,'account ID'),details([
+    ['Name',account.name],['Access plan',planName(account.access_plan)],['Access ends',date(account.paid_until)],
+    ['Last activity',date(account.last_activity)],['Reports received',number.format(account.reports??0)]
+   ],'cc-detail-facts'));
+   const access=card('Access and restrictions',[details([
+    ['Access registered',date(account.registeredAccessAt)],
+    ['Messaging restriction',account.restricted_until?'Until '+date(account.restricted_until):'None'],
+    ['Suspension',account.suspended?(account.suspended_until?'Until '+date(account.suspended_until):'Indefinite'):'None'],
+    ['Recovery configured',account.recovery_created?'Yes':'No']
+   ],'cc-detail-facts')]);
+   if(account.key?.id||account.key_id){
+    const keyId=account.key?.id||account.key_id;
+    access.append(el('h4','Activation key ID'),recordId(keyId,'key ID'));
+    if(account.key?.fingerprint)access.append(details([['Key fingerprint',account.key.fingerprint]],'cc-detail-facts'));
+    access.append(button('Find activation key',()=>navigate('Keys','all',keyId),'cc-secondary cc-compact-button cc-fit'));
+   }
    const controls=accountActions(account,()=>openAccount(id,back));
-   if(controls.childElementCount)summary.append(controls);
+   if(controls.childElementCount)access.append(controls);
    const related=card('Related cases');
    if(!cases.length)related.append(el('p','No related cases.','cc-muted'));
+   else{
+    const heading=el('div','','cc-panel-heading');
+    heading.append(related.firstElementChild,el('span',number.format(cases.length),'cc-queue-total'));
+    related.prepend(heading);
+   }
    for(const item of cases){
     const row=el('div','','cc-account-case');
     const name=el('div','','cc-account-case-label');
@@ -285,9 +360,10 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     if(item.canOpen!==false&&Object.hasOwn(caseNames,item.type))row.append(button('Open case',()=>openLinkedCase(item,()=>openAccount(id,back)),'cc-secondary cc-compact-button'));
     related.append(row);
    }
-   const trail=el('aside','','cc-case-sidebar');
-   trail.append(el('h3','Account activity'),timeline(activity),el('h3','Administrative actions'),timeline(audit));
-   main.append(splitDetail([summary,related],trail));
+   const trail=el('aside','','cc-detail-primary');
+   trail.append(card('Account activity',[timeline(activity)]),card('Administrative actions',[timeline(audit)]));
+   loading.remove();
+   main.append(splitDetail([summary,accountDevice(account),access,related],trail));
   }catch(e){
    if(alive(token)){loading.textContent=e.message;main.append(button('Retry',()=>openAccount(id,back),'cc-secondary'));}
   }
@@ -312,6 +388,78 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   }
   return section;
  }
+ function reportAccount(title,id,back,account,description){
+  const panel=card(title,[recordId(id,'account ID')]);
+  if(account)panel.append(details([
+   ['Name',account.name],['Access',statusLabels[account.accessStatus]||account.accessStatus],['Plan',planName(account.plan)],
+   ['Device',deviceName(account.device)],['OS version',account.device?.osVersion],['App version',account.device?.appVersion],
+   ['Device last seen',date(account.device?.lastSeenAt)]
+  ],'cc-detail-facts'));
+  if(account?.device?.fingerprint)panel.append(el('h4','Qzu device fingerprint'),recordId(account.device.fingerprint,'fingerprint'));
+  if(description)panel.append(el('p',description,'cc-muted'));
+  if(id)panel.append(button('Open '+title.toLowerCase(),()=>openAccount(id,back),'cc-secondary cc-compact-button cc-fit'));
+  return panel;
+ }
+ async function openReportEvidence(id,back){
+  const {token}=detailView('Reported chat',back,'Back to report');
+  const loading=el('p','Loading submitted evidence…','cc-muted');
+  loading.setAttribute('role','status');
+  main.append(loading);
+  try{
+   const report=await api('reports/'+encodeURIComponent(id)+'/evidence');
+   if(!alive(token))return;
+   const messages=[...(report.context||[])].sort((a,b)=>a.at-b.at);
+   const stream=card('Submitted messages');
+   if(messages.length){
+    const snapshot=el('ol','','cc-report-stream');
+    for(const message of messages){
+     const flagged=message.reported||Boolean(report.messageId&&message.id===report.messageId);
+     const bubble=el('li','','cc-report-message'+(flagged?' cc-report-message-flagged':''));
+     const head=el('div','','cc-report-message-head');
+     head.append(el('strong',message.sender||'Participant'),el('time',date(message.at),'cc-muted'));
+     if(flagged)head.append(el('span','Reported message','cc-status red'));
+     bubble.append(head,el('p',message.text,'cc-case-note'),el('small',evidenceSource(message.source),'cc-muted'));
+     snapshot.append(bubble);
+    }
+    stream.append(snapshot);
+   }else stream.append(el('p','The report contains no submitted text messages.','cc-muted'));
+   const summary=card('Snapshot details',[
+    el('p','Messages and attachments saved with this report.','cc-muted'),
+    details([['Submitted',date(report.created)],['Chat type',chatTypeLabel(report.chatType)],['Messages',number.format(messages.length)]],'cc-detail-facts'),
+    el('h4','Report ID'),recordId(id,'report ID')
+   ]);
+   if(report.messageId)summary.append(el('h4','Reported message ID'),recordId(report.messageId,'message ID'));
+   const side=el('aside','','cc-detail-primary');
+   side.append(summary);
+   if(report.attachment){
+    const {kind,mime,source,at}=report.attachment;
+    const attachment=card('Submitted attachment',[details([
+     ['Type',kind==='audio'?'Audio':'Image'],['Format',mime],['Source',evidenceSource(source)],['Sent',date(at)]
+    ],'cc-detail-facts')]);
+    if(media){
+     const slot=el('div','','cc-report-attachment');
+     const reveal=action('View submitted attachment',async()=>{
+      const blob=await media(id);
+      if(!alive(token))return;
+      if(objectURL)URL.revokeObjectURL(objectURL);
+      objectURL=URL.createObjectURL(blob);
+      const node=el(kind==='image'?'img':'audio','','cc-evidence');
+      node.src=objectURL;
+      if(kind==='audio')node.controls=true;
+      else node.alt='Submitted report evidence';
+      slot.replaceChildren(node);
+     },'cc-secondary');
+     slot.append(reveal);
+     attachment.append(slot);
+    }
+    side.append(attachment);
+   }
+   loading.remove();
+   main.append(splitDetail([stream],side));
+  }catch(e){
+   if(alive(token)){loading.textContent=e.message||'Submitted evidence unavailable.';main.append(button('Retry',()=>openReportEvidence(id,back),'cc-secondary cc-fit'));}
+  }
+ }
  async function openReportCase(id,back=()=>load()){
   const {token}=detailView('Report details',back),loading=el('p','Loading report…','cc-muted');
   main.append(loading);
@@ -320,38 +468,26 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    if(!alive(token))return;
    const report=investigation.record;
    if(!report)throw Error('Report unavailable.');
-   loading.remove();
    const reopen=()=>openReportCase(id,back);
-   const metadata=card(report.reason,[status(report.resolved?'solved':report.workflow||'inspection'),details([
-    ['Received',date(report.created)],['Reported account',report.target],['Reporter',report.reporter],['Previous reports',report.previousReports]
-   ]),el('p',report.evidence||'No additional details','cc-case-note')]);
-   if(report.reporter&&report.reporter!==report.target)metadata.append(button('Open reporter account',()=>openAccount(report.reporter,reopen),'cc-secondary'));
-   const context=card('Submitted evidence');
-   if(!report.context?.length&&!report.attachment)context.append(el('p','No messages or attachments were included.','cc-muted'));
-   if(report.context?.length){
-    const snapshot=el('div','','cc-snapshot');
-    for(const message of report.context){
-     const bubble=el('div','','cc-bubble '+(message.sender==='Reporter'?'mine':'other')+(message.reported?' flagged':''));
-     bubble.append(el('small',message.sender+' · '+date(message.at)),el('p',message.text),el('small',message.source==='reporter-submitted'?'Reporter submitted':'Server confirmed'));
-     snapshot.append(bubble);
-    }
-    context.append(snapshot);
-   }
-   if(report.attachment&&media){
-    const slot=el('div','','cc-report-attachment');
-    const reveal=action('View submitted attachment',async()=>{
-     const blob=await media(report.id);
-     if(!alive(token))return;
-     if(objectURL)URL.revokeObjectURL(objectURL);
-     objectURL=URL.createObjectURL(blob);
-     const node=el(report.attachment.kind==='image'?'img':'audio');
-     node.src=objectURL;node.className='cc-evidence';
-     if(node.tagName==='AUDIO')node.controls=true;
-     else node.alt='Submitted report evidence';
-     slot.replaceChildren(node);
-    },'cc-secondary');
-    slot.append(reveal);context.append(slot);
-   }
+   const metadata=card(report.reason);
+   metadata.classList.add('cc-record-panel');
+   metadata.append(status(report.resolved?'solved':report.workflow||'inspection'),details([
+    ['Received',date(report.created)],['Chat type',chatTypeLabel(report.chat_type)],
+    ['Previous reports for this account',number.format(report.previousReports??0)],['Moderation decisions',number.format(report.history?.length??0)]
+   ],'cc-detail-facts'),el('h4','Reporter’s statement'),el('p',report.evidence||'No statement included.','cc-case-note'));
+   const account=report.account;
+   const restrictions=[];
+   if(account?.suspended)restrictions.push(account.suspendedUntil?'Suspended until '+date(account.suspendedUntil):'Suspended indefinitely');
+   if(account?.restrictedUntil)restrictions.push('Messaging restricted until '+date(account.restrictedUntil));
+   const parties=el('div','','cc-report-parties');
+   parties.append(reportAccount('Reported account',report.target,reopen,report.reportedAccount,restrictions.join(' · ')),reportAccount('Reporter account',report.reporter,reopen,report.reporterAccount));
+   const messageCount=report.snapshot?.messageCount??report.context?.length??0;
+   const hasAttachment=Boolean(report.snapshot?.hasAttachment??report.attachment);
+   const context=card('Reported chat snapshot',[details([
+    ['Messages included',number.format(messageCount)],['Attachment',hasAttachment?'Included':'None'],['Reported message ID',report.message_id||report.messageId]
+   ],'cc-detail-facts')]);
+   if(messageCount||hasAttachment)context.append(button('View reported chat',()=>openReportEvidence(id,reopen),'cc-fit'));
+   else context.append(el('p','No messages or attachments were included.','cc-muted'));
    const controls=card('Moderation');
    if(report.resolved){
     controls.append(details([['Decision',report.action],['Resolved',date(report.resolved)],['Moderator',report.moderator]]));
@@ -382,7 +518,15 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     controls.append(note,progress,choice,resolveReport);
    }
    const activity=mountCaseActivity('report',id,token,{back:reopen,initial:investigation,onChange:()=>reopen()});
-   main.append(splitDetail([metadata,context,controls],activity.panel));
+   const side=el('aside','','cc-detail-primary');
+   side.append(activity.panel);
+   const history=(report.history||[]).filter(item=>item.report_id!==report.id);
+   if(history.length){
+    const events=history.map(item=>({action:'Moderation decision',detail:item.action,note:item.notes,at:item.created,actor:item.actor}));
+    side.append(card('Prior moderation decisions',[timeline(events)]));
+   }
+   loading.remove();
+   main.append(splitDetail([metadata,parties,context,controls],side));
   }catch(e){
    if(alive(token)){loading.textContent=e.message;main.append(button('Retry',()=>openReportCase(id,back),'cc-secondary'));}
   }
@@ -427,18 +571,195 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   };
   updateOverview(data.work||{});
   queue.append(queueHeading,queueRows,empty);
-  const metrics=el('div','','cc-metrics cc-overview-metrics');
-  for(const [label,value] of [
-   ['Active accounts',data.active],['Total accounts',data.accounts],['Admin accounts',data.admins],
-   ['Unused access keys',data.keys],['Verified USD revenue','$'+(data.revenue/100).toFixed(2)]
-  ]){
-   const metric=el('article','','cc-metric');
-   metric.append(el('strong',String(value??'—')),el('span',label));
-   metrics.append(metric);
-  }
-  const directory=el('section','','cc-queue');
-  directory.append(el('h3','Account and payment totals'),metrics);
+  const accounts=data.totals?.accounts||{},payments=data.totals?.payments||{},keys=data.totals?.keys||{};
+  const count=value=>Number.isFinite(value)?number.format(value):'—';
+  const directory=el('section','','cc-queue cc-totals');
+  const groups=el('div','','cc-total-groups');
+  const totalGroup=(group,headline,value,rows,tab)=>{
+   const panel=el('article','','cc-total-panel'),header=el('div','','cc-panel-heading'),metric=el('div','','cc-total-headline');
+   header.append(el('h4',group),button('Open '+tab.toLowerCase(),()=>navigate(tab),'cc-secondary cc-compact-button'));
+   metric.append(el('strong',value),el('span',headline,'cc-muted'));
+   panel.append(header,metric,details(rows,'cc-total-breakdown'));
+   return panel;
+  };
+  groups.append(totalGroup('Accounts','Total accounts',count(accounts.total??data.accounts),[
+   ['Active',count(accounts.active??data.active)],['Expired',count(accounts.expired)],['Suspended',count(accounts.suspended)],
+   ['Revoked',count(accounts.revoked)],['Retired staff',count(accounts.retired)],['Administrators',count(accounts.admins??data.admins)],['Sellers',count(accounts.sellers)]
+  ],'Accounts'),totalGroup('Payments','Verified USD revenue',currency(payments.verifiedUsdCents??data.revenue,'USD'),[
+   ['Confirmed payments',count(payments.confirmed)],['Submitted payments',count(payments.submitted)],
+   ['Confirmed legacy EUR',currency(payments.confirmedLegacyEurCents,'EUR')]
+  ],'Payments'),totalGroup('Access keys','Unused keys',count(keys.unused??data.keys),[
+   ['Redeemed',count(keys.redeemed)],['Revoked',count(keys.revoked)]
+  ],'Keys'));
+  directory.append(el('h3','Account and payment totals'),groups);
   main.append(queue,directory);
+ }
+ function openKey(key){
+  const back=()=>load();
+  const {token}=detailView('Access key details',back,'Back to keys');
+  const state=keyState(key),account=key.accountId||key.account;
+  const summary=card('Key record',[status(state),el('h4','Key ID'),recordId(key.id,'key ID'),details([
+   ['Plan',planName(key.plan)],['Issued',date(key.created)],['Redeemed',date(key.redeemed)],
+   ['Source',key.generated?'Administrator issued':'Payment or legacy'],['Key fingerprint',key.fingerprint]
+  ],'cc-detail-facts')]);
+  const linked=card('Linked account');
+  if(account)linked.append(recordId(account,'account ID'),button('Open account',()=>openAccount(account,()=>openKey(key)),'cc-secondary cc-compact-button cc-fit'));
+  else linked.append(el('p','No linked account.','cc-muted'));
+  main.append(summary,linked);
+  if(state==='unused'&&key.generated&&key.state==='confirmed'){
+   const actions=el('div','','cc-actions');
+   const replace=action('Replace unused key',async()=>{
+    if(!await modalConfirm('Replace this key? Its current activation secret will stop working.')||!alive(token))return;
+    const result=await api('keys/replace',{id:key.id});
+    if(!alive(token))return;
+    openKey({...key,fingerprint:result.key.slice(-8)});
+    secret('Replacement key',[result]);
+   },'cc-secondary');
+   const revoke=button('Revoke unused key',()=>{
+    confirmReason('Revoke unused key','Revoking this key permanently disables activation.',async(reason,close)=>{
+     await api('keys/revoke',{id:key.id,reason});
+     close();toast('Key revoked','success');
+     if(alive(token))openKey({...key,state:'revoked'});
+    });
+   },'cc-danger');
+   actions.append(replace,revoke);
+   main.append(card('Manage key',[actions]));
+  }
+ }
+ function purgeUsedKeys(token){
+  const title='Remove used keys and linked accounts',phrase='REMOVE USED KEYS AND ACCOUNTS';
+  const dialog=el('dialog','','cc-modal cc-purge-dialog'),body=el('div','','cc-purge-body'),actions=el('div','','cc-actions');
+  dialog.setAttribute('aria-label',title);
+  const message=el('p','','cc-muted');message.setAttribute('role','status');
+  const countLabel=preview=>details([
+   ['Used keys to remove',number.format(preview.keys??0)],['Linked accounts to delete',number.format(preview.accounts??0)],
+   ['Payment records to keep',number.format(preview.retainedPayments??0)]
+  ],'cc-detail-facts');
+  const field=input('Confirmation phrase');field.maxLength=phrase.length;
+  const remove=el('button','Remove used keys and accounts','cc-button cc-danger');remove.type='submit';remove.disabled=true;
+  const cancel=button('Cancel',()=>dialog.close(),'cc-secondary');
+  let preview=null,busy=false;
+  const form=el('form','','cc-purge-body');
+  const fieldLabel=el('label');fieldLabel.append(el('span','Type this phrase to confirm'),el('code',phrase),field);
+  field.addEventListener('input',()=>{remove.disabled=busy||field.value!==phrase;});
+  form.addEventListener('submit',async e=>{
+   e.preventDefault();
+   if(busy||!preview||field.value!==phrase||!alive(token))return;
+   busy=true;remove.disabled=cancel.disabled=field.disabled=true;
+   message.textContent='Removing keys and linked accounts…';
+   try{
+    const result=await api('keys/purge-used',{confirmation:field.value,previewToken:preview.previewToken});
+    if(!alive(token))return;
+    dialog.close();
+    toast(number.format(result.removedKeys)+' keys removed · '+number.format(result.deletedAccounts)+' accounts deleted · '+number.format(result.retainedPayments)+' payment records kept','success');
+    cursor='';keyPages=[];await load();
+   }catch(errorValue){
+    message.textContent=errorValue.message||'Removal failed. Refresh the preview before trying again.';
+    preview=null;
+    form.hidden=true;
+    actions.append(button('Refresh preview',e=>{e.currentTarget.remove();void refreshPreview();},'cc-secondary'));
+   }finally{
+    busy=false;cancel.disabled=field.disabled=false;
+   }
+  });
+  actions.append(cancel);
+  form.append(fieldLabel,remove);form.hidden=true;
+  dialog.append(el('h3',title),el('p','Permanently delete used keys and eligible linked accounts. Payment records are kept.','cc-muted'),body,form,message,actions);
+  dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+  dialog.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
+  root.append(dialog);dialog.showModal();
+  async function refreshPreview(){
+   message.textContent='Preparing removal preview…';
+   body.replaceChildren();
+   try{
+    const result=await api('keys/purge-used/preview',{});
+    if(!dialog.open||!alive(token))return;
+    preview=result;
+    body.replaceChildren(countLabel(result));
+    form.hidden=!result.keys;
+    field.value='';remove.disabled=true;
+    message.textContent=result.keys?'':'There are no used keys eligible for removal.';
+   }catch(errorValue){
+    if(!dialog.open||!alive(token))return;
+    message.textContent=errorValue.message||'Preview unavailable.';
+    actions.append(button('Retry',e=>{e.currentTarget.remove();void refreshPreview();},'cc-secondary'));
+   }
+  }
+  void refreshPreview();
+ }
+ function renderKeys(data,token){
+  const picker=select(plans),quantity=input('Quantity','number'),generate=el('button','Generate keys','cc-button');
+  quantity.min='1';quantity.max='100';quantity.step='1';quantity.value='1';quantity.required=true;
+  const form=el('form','','cc-key-generate');
+  const planField=el('label'),quantityField=el('label');
+  picker.setAttribute('aria-label','Key plan');
+  planField.append(el('span','Plan'),picker);
+  quantityField.append(el('span','Quantity'),quantity);
+  form.append(planField,quantityField,generate);
+  form.addEventListener('submit',async e=>{
+   e.preventDefault();
+   if(generate.disabled||!alive(token))return;
+   generate.disabled=true;
+   try{
+    const result=await api('keys/generate',{plan:picker.value,count:quantity.valueAsNumber});
+    if(!alive(token))return;
+    secret('New access keys',result.keys);
+    await load();
+   }catch(errorValue){error(errorValue);}finally{generate.disabled=false;}
+  });
+  const issuing=card('Generate access keys',[form]);
+  const tally=data.counts||{};
+  const selectors=el('div','','cc-key-filters');
+  selectors.setAttribute('role','group');selectors.setAttribute('aria-label','Filter access keys');
+  for(const [value,label] of [['all','All keys'],['unused','Unused'],['redeemed','Redeemed'],['revoked','Revoked']]){
+   const count=value==='all'?Object.values(tally).reduce((sum,n)=>sum+n,0):tally[value]??0;
+   const chip=button('',()=>{scope=value;cursor='';keyPages=[];load(null,'Filter '+label.toLowerCase());},'cc-secondary cc-key-filter');
+   chip.setAttribute('aria-label','Filter '+label.toLowerCase());
+   chip.setAttribute('aria-pressed',String(scope===value));
+   chip.append(el('span',label),el('strong',number.format(count)));
+   selectors.append(chip);
+  }
+  const inventory=el('section','','cc-key-inventory');
+  const inventoryHead=el('div','','cc-key-inventory-head');
+  inventoryHead.append(el('h3','Key inventory'),search('Key ID, fingerprint or account ID'),selectors);
+  inventory.append(inventoryHead);
+  if(data.items.length){
+   const wrap=el('div','','cc-key-table-wrap'),table=el('table','','cc-key-table'),head=el('thead'),body=el('tbody'),headerRow=el('tr');
+   table.setAttribute('aria-label','Access key results');
+   for(const heading of ['Key reference','Status','Plan','Issued','Account','Details']){
+    const cell=el('th',heading);cell.scope='col';headerRow.append(cell);
+   }
+   head.append(headerRow);
+   for(const key of data.items){
+    const row=el('tr'),reference=el('td'),state=el('td'),created=el('td'),linked=el('td'),open=el('td');
+    reference.append(el('code',key.fingerprint?'QZU-••••-'+key.fingerprint:key.id.slice(0,8),'cc-key-ref'));
+    if(key.fingerprint)reference.append(el('small','ID '+key.id.slice(0,8),'cc-muted'));
+    state.append(status(keyState(key)));
+    const createdDate=new Date(key.created),time=el('time',createdDate.toLocaleDateString());time.dateTime=createdDate.toISOString();created.append(time);
+    const account=key.accountId||key.account;
+    linked.append(account?button(account.slice(0,8),()=>openAccount(account),'cc-key-account cc-compact-button'):el('span','—','cc-muted'));
+    if(account)linked.firstElementChild.setAttribute('aria-label','Open account '+account);
+    const view=button('View',()=>openKey(key),'cc-secondary cc-compact-button');
+    view.setAttribute('aria-label','View key '+key.id);
+    open.append(view);
+    row.append(reference,state,el('td',planName(key.plan)),created,linked,open);
+    body.append(row);
+   }
+   table.append(head,body);
+   wrap.append(table);inventory.append(wrap);
+  }else inventory.append(el('p','No matching keys.','cc-muted cc-key-empty'));
+  if(keyPages.length||data.nextCursor){
+   const pages=el('div','','cc-key-pages');
+   const previous=button('Previous page',()=>{cursor=keyPages.pop();load(null,'Previous page');},'cc-secondary cc-compact-button');
+   const next=button('Next page',()=>{keyPages.push(cursor);cursor=data.nextCursor;load(null,'Next page');},'cc-secondary cc-compact-button');
+   previous.disabled=!keyPages.length;next.disabled=!data.nextCursor;
+   pages.append(el('span','Page '+number.format(keyPages.length+1),'cc-muted'),previous,next);inventory.append(pages);
+  }
+  const danger=el('details','','cc-key-maintenance');
+  danger.append(el('summary','Key maintenance'),el('p','Review eligible used keys and linked accounts before bulk removal.','cc-muted'),button('Remove all used keys',()=>purgeUsedKeys(token),'cc-danger cc-fit'));
+  const keyTools=el('div','','cc-key-tools');
+  keyTools.append(issuing,danger);
+  main.append(keyTools,inventory);
  }
  function queuePicker(label,choices){
   const field=select(choices);
@@ -692,12 +1013,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     }),'No matching accounts.'));
     if(data.items.length===100)main.append(button('Next page',()=>{cursor=data.items.at(-1).id;load();},'cc-secondary'));
    }else if(view==='Keys'){
-    main.append(button('Sellers',()=>navigate('Sellers'),'cc-secondary'),search('Key ID, fingerprint or account ID'));const picker=select(plans),count=input('Quantity (1–100)','number');count.min='1';count.max='100';count.value='1';
-    main.append(card('Generate access keys',[picker,count,action('Generate',async()=>{const result=await api('keys/generate',{plan:picker.value,count:Number(count.value)});await load();secret('New access keys',result.keys.map(k=>k.key+' · '+k.id).join('\n'));})]));
-    for(const k of data.items){const state=k.state==='revoked'?'revoked':k.redeemed?'redeemed':'unused';const n=card(k.fingerprint?'QZU-••••-'+k.fingerprint:k.id,[status(state),details([['ID',k.id],['Plan',k.plan],['Created',date(k.created)],['Activated',date(k.redeemed)],['Account',k.account]])]);
-     if(!k.redeemed&&k.generated&&k.state==='confirmed'){n.append(button('Replace unused key',()=>{const box=card('Replace key?',[el('p','The previous secret will stop working.'),action('Replace',async()=>{const result=await api('keys/replace',{id:k.id});await load();secret('Replacement key',result.key);},'cc-danger'),button('Cancel',()=>box.remove(),'cc-secondary')]);main.prepend(box);}),button('Revoke',()=>confirmAction('Revoke unused key',reason=>api('keys/revoke',{id:k.id,reason})),'cc-secondary'));}
-     main.append(n);
-    }
+    renderKeys(data,token);
    }else if(view==='Payments'){
     if(!archived)main.append(queuePicker('Payment queue',[['all','All payments'],['review','Needs review']]));
     for(const p of data.items){
@@ -810,8 +1126,8 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    }
    if(Array.isArray(data.items)&&!data.items.length&&['Feedback','Payments','Sellers'].includes(view))main.append(el('p',view==='Payments'&&scope!=='all'?'Nothing in this queue.':'No records yet.','cc-muted'));
    if(focusQueue){
-    const picker=focusQueue===true?main.querySelector('.cc-queue-picker'):[...main.querySelectorAll('select')].find(control=>control.getAttribute('aria-label')===focusQueue);
-    picker?.focus({preventScroll:true});
+    const control=focusQueue===true?main.querySelector('.cc-queue-picker'):[...main.querySelectorAll('select,button')].find(node=>(node.getAttribute('aria-label')||node.textContent)===focusQueue&&!node.disabled);
+    (control||main.querySelector('.cc-key-pages button:not(:disabled)'))?.focus({preventScroll:true});
    }
   }catch(e){if(alive(token)){main.replaceChildren(el('h2',current),button('Retry',load));error(e);}}
  }

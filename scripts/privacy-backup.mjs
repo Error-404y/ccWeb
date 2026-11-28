@@ -8,7 +8,7 @@ const target=resolve(process.argv[2]);
 if(!existsSync(source)||source===target)throw Error('Invalid backup source or destination.');
 const fd=openSync(target,'wx',0o600);closeSync(fd);
 const excluded=new Set([
-  'mobile_support_rooms','push_devices','encryption_prekeys','contact_deletions',
+  'mobile_support_rooms','push_devices','device_profiles','encryption_prekeys','contact_deletions',
   'feedback_inbox','feedback_events',
   'abuse_reports','report_media','report_collaboration','moderation_actions',
   'payment_cases','payment_case_messages','payment_tickets','payment_ticket_messages',
