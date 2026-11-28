@@ -1350,11 +1350,11 @@ function renderSettings() {
   $('sellerProfileSettings').hidden=!state.seller;$('sellerDirectorySettings').hidden=!state.seller;$('sellerProfileStatus').textContent=state.sellerVerified?'Verified':'Unverified';
   $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
   $('userInterfaceHeading').hidden=!state.supportAgent;
-  $('adminInboxCount').textContent=state.supportAgent?String((state.supportRequests||[]).length):'';
+  $('adminInboxCount').textContent=state.supportAgent?String(new Set([...(state.supportRequests||[]),...(state.supportDeletions||[])].map(r=>r.id)).size):'';
   $('adminFeedbackCount').textContent=state.supportAgent?String(state.feedbackCount||0):'';
   if(category==='admin-feedback'&&state.supportAgent){if(feedbackLoadedCount!==state.feedbackCount&&!feedbackLoading)loadAdminFeedback();}
   else if(feedbackLoadedCount!==null||feedbackLoading){clearAdminFeedback();}
-  $('supportRequestCount').textContent = state.supportAgent ? String((state.supportRequests || []).length) : '';
+  $('supportRequestCount').textContent = state.supportAgent ? String(new Set([...(state.supportRequests||[]),...(state.supportDeletions||[])].map(r=>r.id)).size) : '';
   if(category==='support-requests')renderSupportRequests();
   else $('supportRequestsList').replaceChildren();
   if (!invisibleSaving) $('invisibleMode').checked = Boolean(state.invisible);
@@ -1419,7 +1419,7 @@ function clearVolatile() {
   acknowledgedRead.clear();
   sequence++;
   state.rooms = [];
-  state.supportRequests = [];
+  state.supportRequests = [];state.supportDeletions=[];
   state.contacts = [];
   state.invite = null;
   selected = null;
@@ -1740,12 +1740,14 @@ async function loadAdminFeedback(older=false){
 $('feedbackOlder').addEventListener('click',()=>loadAdminFeedback(true));
 function renderSupportRequests() {
   const list=$('supportRequestsList');
-  const requests=state.supportAgent ? state.supportRequests || [] : [];
-  const key=JSON.stringify([requests,privacyMode]);
+  const requests=state.supportAgent ? (state.supportRequests || []).filter(r=>!r.deletionRequested) : [];
+  const deletions=state.supportAgent?state.supportDeletions||[]:[];
+  const key=JSON.stringify([requests,deletions,privacyMode]);
   if(list.dataset.key===key && list.childElementCount)return;
   list.dataset.key=key;
   list.replaceChildren();
-  if(!requests.length){list.append(el('p','support-help-notes','No pending requests.'));return;}
+  if(!requests.length&&!deletions.length){list.append(el('p','support-help-notes','No pending requests.'));return;}
+  for(const request of deletions){const item=el('div','request-item');item.append(el('strong','','Deletion requested · '+request.id.slice(0,4).toUpperCase()),el('span','',fmtTime(request.at)),button('Approve deletion',()=>show('Delete conversation?',[el('p','','Permanently delete this conversation for both participants.'),button('Delete for both',async()=>{try{await api('support/delete',{id:request.id,confirmed:true});closeModal();await refresh();}catch(e){modalError(e);}},'primary-button danger-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));list.append(item);}
   for(const request of requests){
     const item=el('div','request-item');
     const label='Contact '+request.id.slice(0,4).toUpperCase();
