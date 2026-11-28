@@ -189,3 +189,31 @@ test('ticket creator and actual message actor are visible to admins, not custome
  assert.equal(db.prepare("SELECT count(*) n FROM access_audit WHERE action IN ('user-ticket-create','user-ticket-accept')").get().n,2);
  }finally{db.close();}
 });
+
+test('mobile chat header includes the authoritative admin and seller verification badge alongside the name',()=>{
+ const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8'),app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),css=readFileSync(new URL('../public/style.css',import.meta.url),'utf8');
+ assert.match(html,/<div class="thread-name-line"><button id="profileName"[^>]*><span id="threadName">Chat<\/span><\/button><svg id="threadBadge"[^>]*hidden>/);
+ assert.equal((html.match(/id="threadBadge"/g)||[]).length,1);
+ assert.ok(app.includes("current?.peerRole==='admin'||current?.peerRole==='verified-seller'"));
+ assert.ok(css.includes('#threadBadge:not([hidden])'));assert.ok(css.includes('#threadBadge[hidden]'));
+});
+test('desktop saved contacts use authenticated role and name without relying on editable nicknames',()=>{
+ const db=setup();try{
+ const chats=new Chats(()=>start);chats.contacts=contactStore(db,()=>start);
+ const admin=createAccount(db),customer=createAccount(db),verified=createAccount(db),browser=signer();
+ const d=desktopMessenger(db,chats,id=>id===admin.id,()=>start);
+ d.bind(admin.id,browser.record('desktop:'+admin.id));const p=d.requireIdentity(admin.id);
+ chats.profileRole=id=>id===verified.id?'verified-seller':d.role(id);
+ chats.profileName=id=>id===verified.id?'Example seller':null;
+ chats.contacts.add(p.principal,customer.id,'qzu-Support','Contact');
+ chats.contacts.add(p.principal,verified.id,'Seller nickname','Contact');
+ const contacts=d.state(admin.id).contacts;
+ assert.equal(contacts.find(c=>c.nickname==='qzu-Support').peerRole,null);
+ const seller=contacts.find(c=>c.nickname==='Seller nickname');assert.equal(seller.peerRole,'verified-seller');assert.equal(seller.peerName,'Example seller');
+ }finally{db.close();}
+});
+test('desktop messenger retains encrypted send and view-once routes with contact search, add and chat header',()=>{
+ const js=readFileSync(new URL('../public/desktop-messenger.js',import.meta.url),'utf8'),css=readFileSync(new URL('../public/control.css',import.meta.url),'utf8');
+ for(const feature of ["Search contacts","+ Add contact","Saved contacts","Connection request","cc-chat-verified","scrollPositions","cc-chat-composer","QzuCrypto.encrypt(context,text)","api('chats/once/send'","api('chats/confirm'","Contact identity changed"])assert.ok(js.includes(feature),feature);
+ assert.ok(css.includes('.cc-chat-verified.seller'));assert.ok(css.includes('.cc-chat-composer'));
+});
