@@ -807,7 +807,7 @@ app.get('/downloads/' + apkName, (req, res) => {
   res.download(apkPath, apkName);
 });
 app.get(['/control','/control.html','/control/monitoring'],(req,res)=>desktopRequest(req)?res.sendFile(resolve(root,'public/control.html')):res.status(403).type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu. Control</title><h1>Desktop only</h1><p>Open qzu. Control on a Windows or Mac computer.</p></html>'));
-app.get(['/control.js','/control.css','/desktop-messenger.js','/e2ee.js'],(req,res)=>res.sendFile(resolve(root,'public',req.path.slice(1))));
+app.get(['/control.js','/control.css','/desktop-messenger.js','/e2ee.js','/metadata.js'],(req,res)=>res.sendFile(resolve(root,'public',req.path.slice(1))));
 app.use((req, res, next) => {
   if (!mobileOnly) return next();
   if (req.path === '/') return res.type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu.</title><h1>qzu.</h1><p>Mobile app only.</p></html>');
