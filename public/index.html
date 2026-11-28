@@ -231,8 +231,14 @@
           <section class="panel settings-panel shop-panel" data-settings-category="shop" aria-labelledby="sellerShopTitle" hidden>
             <h1 id="sellerShopTitle">Shop</h1>
             <div class="seller-catalog-profile"><h2 id="sellerShopName"></h2><button id="sellerShopProfile" class="seller-catalog-edit" type="button">Edit profile</button></div>
-            <button id="sellerShopAdd" class="primary-button" type="button" disabled>Add item</button>
-            <button id="sellerShopRefresh" class="seller-catalog-edit" type="button">Refresh listings</button>
+            <section id="sellerShopAvailability" class="shop-availability" aria-label="Shop availability" hidden>
+              <div><strong id="sellerShopAvailabilityStatus" role="status"></strong><p id="sellerShopAvailabilityHint"></p></div>
+              <button id="sellerShopTogglePause" class="secondary-button" type="button"></button>
+            </section>
+            <div class="seller-catalog-actions shop-manage-actions">
+              <button id="sellerShopAdd" class="primary-button" type="button" disabled>Add item</button>
+              <button id="sellerShopRefresh" class="seller-catalog-edit" type="button">Refresh listings</button>
+            </div>
             <div id="sellerShopItems" class="seller-catalog-content"></div>
           </section>
           <div class="panel settings-panel" data-settings-category="privacy" hidden>

@@ -2836,3 +2836,21 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .group-shop-setting { display: flex; align-items: center; gap: 9px; }
 .group-shop-setting input { accent-color: var(--accent); }
 .group-role-badge { display: inline-block; width: 1em; height: 1em; margin-inline-start: 5px; vertical-align: -0.12em; }
+
+.message-listing {
+  display: grid;
+  gap: 8px;
+  min-width: min(190px, 54vw);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sub);
+  color: var(--ink);
+}
+.message-listing-label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.message-listing-label svg { width: 14px; height: 14px; flex: none; }
+.message-listing-summary { display: grid; gap: 3px; overflow-wrap: anywhere; }
+.message-listing-summary span { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.message-listing-link { min-height: 44px; border: 1px solid var(--line); border-radius: 8px; color: var(--accent); font-size: 13px; font-weight: 650; }
+.message-listing-link:hover { background: var(--hover); }
+.message-listing-unavailable { margin: 0; color: var(--muted); font-size: 13px; }

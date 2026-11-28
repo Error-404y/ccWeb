@@ -79,6 +79,10 @@ const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN suppor
 const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.adminAccount=id=>desktopChats.role(id)==='admin'?desktopChats.principal(id).admin:chats.profileRole(id)==='admin'?id:null;chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
 chats.groupRole=id=>isTicketAdmin(id)?'admin':sellers.role(id)==='verified-seller'?'verified-seller':null;
 chats.activeSeller=id=>sellers.isActive(id);
+chats.groupShopItem=(owner,id)=>{
+  const item=catalog.publicItem(owner,id);
+  return item?{id:item.id,name:item.name,priceMinor:item.priceMinor,currency:item.currency}:null;
+};
 const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id),name:id=>sellers.name(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
 const notifyHelp=(id,actor)=>push.notify(helpTickets.recipients(id).filter(x=>x!==actor));
 function supportRecord(admin, id) {
@@ -437,7 +441,7 @@ app.post('/api/control/chats/receipts',(req,res)=>{const p=desktopChats.requireI
 app.get('/api/control/sellers',(req,res)=>res.json({items:sellers.list(chats)}));
 app.get('/api/control/shop-reviews',(req,res)=>res.json({items:catalog.queue().map(item=>({...item,seller:sellers.name(item.owner)}))}));
 app.post('/api/control/shop-reviews/review',(req,res)=>{
-  const {notified}=catalog.review(req.body?.id,req.body?.approve);
+  const {notified}=catalog.review(req.body?.id,req.body?.approve,req.body?.note);
   if(notified.length)push.notify(notified);
   res.json({ok:true});
 });
@@ -605,7 +609,7 @@ app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(complia
 app.use('/api',(req,res,next)=>{
   if(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
   const closingGroupInvites=req.path==='/group/invite'&&['status','close'].includes(req.body?.action);
-  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&!closingGroupInvites&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/description','/group/settings','/group/invite','/group/shop/connect','/contacts/open','/invite','/tickets/open','/tickets/send'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
+  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&!closingGroupInvites&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/description','/group/settings','/group/invite','/group/shop/connect','/group/shop/share','/contacts/open','/invite','/tickets/open','/tickets/send'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
   if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
   if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
@@ -621,6 +625,11 @@ function saveSellerListing(req,res,managed=false) {
 app.post('/api/sellers/catalog',guard('seller-catalog-write',40,60000),(req,res)=>saveSellerListing(req,res));
 app.post('/api/sellers/catalog/manage',guard('seller-catalog-write',40,60000),(req,res)=>saveSellerListing(req,res,true));
 app.post('/api/sellers/catalog/manage/preview',guard('seller-catalog-preview',40,60000),(req,res)=>res.json({item:catalog.preview(req.account.id,req.body)}));
+app.post('/api/sellers/catalog/manage/availability',guard('seller-shop-availability',15,60000),(req,res)=>{
+  const {paused,notified}=catalog.setPaused(req.account.id,req.body?.paused);
+  if(notified.length)push.notify(notified);
+  res.json({paused});
+});
 app.post('/api/sellers/catalog/remove',guard('seller-catalog-write',40,60000),(req,res)=>res.json(catalog.remove(req.account.id,req.body?.id)));
 app.post('/api/sellers/catalog/manage/remove',guard('seller-catalog-write',40,60000),(req,res)=>res.json(catalog.remove(req.account.id,req.body?.id,true)));
 app.get('/api/sellers/catalog/contact/:id',guard('seller-catalog-contact',40,60000),(req,res)=>{
@@ -838,7 +847,7 @@ function stateData(a, paged) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, queuedTextSends:true, encryptedOnce:true, sellerListingsV2:true, shopReview:true, sellerListingPreview:true, groupTimers:true, groupDetails:true, groupSettings:true, reportFollowups:true, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, queuedTextSends:true, encryptedOnce:true, sellerListingsV2:true, shopReview:true, shopAvailability:true, groupListingShare:true, sellerListingPreview:true, groupTimers:true, groupDetails:true, groupSettings:true, reportFollowups:true, live: true },
     prekeyCount:prekeys.count(a.id),
     official:official.snapshot(a.id,{paged}),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
@@ -1033,8 +1042,18 @@ app.get('/api/group/shop/:id',guard('group-shop',40,60000),(req,res)=>{
   const room=chats.requireRoom(user,req.params.id), seller=chats.linkedGroupShop(room,user);
   if(!seller)return res.status(404).json({error:'Group shop unavailable.'});
   const contact=customerAccount(req.account)?contacts.between(user,seller):null;
-  const listings=contact?catalog.forContact(user,seller,contact.id):catalog.list(seller);
+  const listings=contact?catalog.forContact(user,seller,contact.id):catalog.forGroup(seller);
   res.json({...listings,contactId:contact?.id||null,name:sellers.name(seller),verified:sellers.role(seller)==='verified-seller',own:user===seller});
+});
+app.post('/api/group/shop/share',guard('group-shop-share',25,60000),(req,res)=>{
+  const user=req.account.id;
+  const room=chats.requireRoom(user,req.body?.id);
+  if(chats.linkedGroupShop(room,user)!==user)return res.status(403).json({error:'Only the seller who linked this shop can share listings.'});
+  const item=catalog.publicItem(user,req.body?.itemId);
+  if(!item)return res.status(404).json({error:'This listing is unavailable to share.'});
+  const result=chats.send(user,room.id,'Shared a shop item',null,{requestId:req.body?.requestId},item.id);
+  if(!result.duplicate)notifyRoom(user,room.id);
+  res.json(typeof result==='string'?{id:result}:result);
 });
 app.post('/api/group/shop/connect',guard('group-shop-connect',10,60000),(req,res)=>{
   const user=req.account.id;

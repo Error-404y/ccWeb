@@ -395,13 +395,13 @@ try {
       'x-qzu-signature':sign('sha256',Buffer.from(envelope),sellerKeys.privateKey).toString('base64'),
       'x-qzu-time':timestamp,'x-qzu-nonce':nonce};
   }
-  async function sellerRequest(path, data) {
+  async function sellerRequest(path, data, expected=200) {
     const method=data===undefined?'GET':'POST';
     const body = JSON.stringify(data);
     const headers = {'Content-Type':'application/json','X-QZU':'1','X-QZU-Unlock':sellerUnlock,
       ...sellerDeviceHeaders(method,path,body||'',sellerUnlock)};
     const response = await fetch(origin + path,{method,body,headers});
-    assert.equal(response.status,200,path);
+    assert.equal(response.status,expected,path);
     const value = await response.json();
     if (value.token) sellerUnlock=value.token;
     return value;
@@ -481,6 +481,19 @@ try {
   await comparison.getByText(/11[.,]50/).waitFor();
   assert.deepEqual(await comparison.getByRole('row',{name:'Quantity 1 2'}).getByRole('cell').allTextContents(),['1','2']);
   assert.equal(await comparison.getByRole('rowheader',{name:'Fulfillment',exact:true}).count(),0);
+  await reviewPage.getByRole('button',{name:'Return to seller',exact:true}).click();
+  await reviewPage.getByRole('textbox',{name:'Note to seller (optional)',exact:true}).fill('Please clarify pickup details.');
+  await reviewPage.getByRole('button',{name:'Return listing',exact:true}).click();
+  await reviewPage.getByText('No listings waiting for review.',{exact:true}).waitFor();
+  await shopOwner.getByRole('button',{name:'Refresh listings',exact:true}).click();
+  const returned=shopOwner.locator('.seller-shop-section').filter({has:shopOwner.getByRole('heading',{name:'Returned for edits',exact:true})});
+  await returned.getByText('Staff left a note',{exact:true}).waitFor();
+  await returned.getByRole('button',{name:'Edit Desk print',exact:true}).click();
+  await shopOwner.getByRole('dialog').getByText('Please clarify pickup details.',{exact:true}).waitFor();
+  await shopOwner.getByRole('button',{name:'Submit for review',exact:true}).click();
+  await shopOwner.getByRole('heading',{name:'Waiting for review',exact:true}).waitFor();
+  await reviewPage.reload();
+  await reviewPage.getByRole('navigation').getByRole('button',{name:/^Shop reviews/}).click();
   await reviewPage.getByRole('button',{name:'Publish listing',exact:true}).click();
   await reviewPage.getByRole('dialog').getByRole('button',{name:'Confirm',exact:true}).click();
   await reviewPage.getByText('No listings waiting for review.',{exact:true}).waitFor();
@@ -496,7 +509,10 @@ try {
   await shopOwner.getByRole('button',{name:'Save settings',exact:true}).click();
   await shopOwner.getByRole('button',{name:'Open seller shop',exact:true}).waitFor();
   assert.equal((await shopStaff.request.post(origin+'/api/control/sellers/verify',{data:{id:sellerFixture.id,verified:true}})).status(),200);
-  await shopOwner.context().close();
+  await sellerRequest('/api/group/shop/share',{id:sellerGroup,itemId:draftItem.id},404);
+  await shopOwner.getByRole('button',{name:'Open seller shop',exact:true}).click();
+  await shopOwner.getByRole('button',{name:'Share Studio print to group',exact:true}).click();
+  await shopOwner.locator('#messages .message-listing').getByText('Studio print',{exact:true}).waitFor();
 
   const buyer = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
   buyer.setDefaultTimeout(10000);
@@ -547,8 +563,8 @@ try {
   await buyer.getByRole('link',{name:'Notifications',exact:true}).click();
   await buyer.getByRole('button',{name:/Seller stock alerts/}).click();
   await buyer.locator('dialog').getByText('Studio print',{exact:true}).waitFor();
-  await buyer.context().close();
-  const visitor=await browser.newPage();
+  const visitor=await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
+  visitor.setDefaultTimeout(10000);
   await visitor.goto(origin);
   await visitor.locator('dialog input').first().waitFor();
   for(const field of await visitor.locator('dialog input').all())await field.fill('951786');
@@ -566,17 +582,43 @@ try {
   await sellerRequest('/api/message',{id:sellerGroup,text:'Welcome to the workshop'});
   await visitor.evaluate(()=>refresh());
   await visitor.locator('#contacts').getByText('Print workshop',{exact:true}).click();
-  await visitor.locator('#messages .message-author').getByRole('img',{name:'Verified Seller',exact:true}).waitFor();
-  await visitor.getByRole('button',{name:'Open seller shop',exact:true}).click();
+  await visitor.locator('#messages .message-row').filter({hasText:'Welcome to the workshop'}).getByRole('img',{name:'Verified Seller',exact:true}).waitFor();
+  const sharedListing=visitor.locator('#messages .message-listing');
+  await sharedListing.getByText('Studio print',{exact:true}).waitFor();
+  await sharedListing.getByText(/12[.,]50/).waitFor();
+  await sharedListing.getByRole('button',{name:'View item',exact:true}).click();
   const groupShop=visitor.locator('dialog:has(.seller-catalog)');
   await groupShop.getByText('Studio print',{exact:true}).waitFor();
+  assert.equal(await groupShop.getByText('Desk print',{exact:true}).count(),0);
+  await groupShop.getByRole('button',{name:'View full shop',exact:true}).click();
+  await groupShop.getByText('Desk print',{exact:true}).waitFor();
   assert.equal(await groupShop.getByText('Private draft',{exact:true}).count(),0);
+  await groupShop.getByRole('button',{name:'Message seller',exact:true}).waitFor();
+  await visitor.locator('#modalClose').click();
+  await shopOwner.evaluate(()=>navigate('/settings/shop'));
+  await shopOwner.getByRole('button',{name:'Pause shop',exact:true}).click();
+  await shopOwner.getByText('Shop paused',{exact:true}).waitFor();
+  await shopOwner.getByRole('table',{name:'Items for sale',exact:true}).getByText('Studio print',{exact:true}).waitFor();
+  await sharedListing.getByText('Item unavailable',{exact:true}).waitFor();
+  await visitor.getByRole('button',{name:'Open seller shop',exact:true}).click();
+  await groupShop.getByText('Temporarily unavailable',{exact:true}).waitFor();
+  assert.equal(await groupShop.getByText('Studio print',{exact:true}).count(),0);
+  const buyerContact=(await call(buyer.context(),'state',undefined,buyerToken)).contacts.find(row=>row.peerSeller);
+  const pausedView=await call(buyer.context(),'sellers/catalog/contact/'+buyerContact.id,undefined,buyerToken);
+  assert.equal(pausedView.paused,true);
+  assert.deepEqual(pausedView.items,[]);
+  await visitor.locator('#modalClose').click();
+  await shopOwner.getByRole('button',{name:'Reopen shop',exact:true}).click();
+  await shopOwner.getByText('Shop open',{exact:true}).waitFor();
+  await sharedListing.getByRole('button',{name:'View item',exact:true}).click();
   await groupShop.getByRole('button',{name:'Message seller',exact:true}).click();
   await visitor.getByRole('heading',{name:'Request sent',exact:true}).waitFor();
   assert.ok((await sellerRequest('/api/state')).requests.find(request=>!request.group&&request.incoming));
   await sellerRequest('/api/group/settings',{id:sellerGroup,description:'',posting:'everyone',shopLinked:false});
   assert.equal((await visitorContext.request.get(origin+'/api/'+linkedShop,{headers:headers(visitorToken)})).status(),404);
   await visitorContext.close();
+  await shopOwner.context().close();
+  await buyer.context().close();
   await shopStaff.close();
   console.log('Seller Shop workspace, publishing, buyer discovery, inquiry drafts and stock alerts passed.');
 

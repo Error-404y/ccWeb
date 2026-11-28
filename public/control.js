@@ -267,7 +267,10 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
      badge.setAttribute('role','img');badge.setAttribute('aria-label',seller?'Verified Seller':'Verified Admin');
      author.append(badge);
     }
-    row.append(author,el('p',message.deleted?'Message deleted':message.kind==='text'?message.text:'Attachment'));
+    const item=message.shopItem;
+    const text=message.deleted?'Message deleted':item?item.name+' · '+currency(item.priceMinor,item.currency):
+      Object.hasOwn(message,'shopItem')?'Shop listing unavailable':message.kind==='text'?message.text:'Attachment';
+    row.append(author,el('p',text));
     return row;
    }));
   }
@@ -335,14 +338,32 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    const actions=el('div','','cc-actions');
    for(const [label,approve] of [['Publish listing',true],['Return to seller',false]]){
     actions.append(action(label,async()=>{
-     if(!await modalConfirm(approve?'Approve this listing for the seller’s shop?':'Return this submission for edits?')||!alive(token))return;
-     await api('shop-reviews/review',{id:item.id,approve});
+     let note='';
+     if(approve){if(!await modalConfirm('Approve this listing for the seller’s shop?'))return;}
+     else{note=await shopReturnNote(item.name);if(note===null)return;}
+     if(!alive(token))return;
+     await api('shop-reviews/review',{id:item.id,approve,note});
      toast(approve?'Listing published':'Listing returned','success');
      if(alive(token))await load();
     },approve?'':'cc-secondary'));
    }
    row.append(actions);main.append(row);
   }
+ }
+ function shopReturnNote(name){
+  return new Promise(resolve=>{
+   const dialog=el('dialog','','cc-modal cc-shop-return');
+   const heading=el('h3','Return listing for edits');heading.id='cc-shop-return-title';
+   dialog.setAttribute('aria-labelledby',heading.id);
+   const field=el('textarea');field.maxLength=300;field.rows=4;field.placeholder='Please clarify pickup details.';
+   const label=el('label');label.append(el('span','Note to seller (optional)'),field);
+   const actions=el('div','','cc-actions');
+   const finish=note=>{dialog.close();dialog.remove();resolve(note);};
+   dialog.addEventListener('cancel',event=>{event.preventDefault();finish(null);});
+   actions.append(button('Cancel',()=>finish(null),'cc-secondary'),button('Return listing',()=>finish(field.value.trim())));
+   dialog.append(heading,el('p',name,'cc-muted'),label,actions);
+   root.append(dialog);dialog.showModal();field.focus();
+  });
  }
  function timeline(entries,empty='No activity recorded.'){
   if(!entries?.length)return el('p',empty,'cc-muted');
