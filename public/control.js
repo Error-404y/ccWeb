@@ -27,9 +27,9 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    server.textContent=(info.environment==='production'?'Production':'Development')+' · '+location.host+' · v'+info.version+' · Admin '+info.adminId.slice(0,8);
    connection.textContent='Connected';connection.dataset.state='online';
    updateCount('Payment tickets',info.paymentTickets);updateCount('Support',info.supportRequests);updateCount('Tickets',info.userTickets);
-   if(listView&&['Payment tickets','Support','Tickets'].includes(current)){
+   if(listView&&['Payment tickets','Support','Tickets','Sellers'].includes(current)){
     const token=revision,tab=current,data=await api(tab==='Payment tickets'?'payment-tickets':tab.toLowerCase());
-    if(alive(token)&&listView&&tab===current&&JSON.stringify(data)!==listSignature&&!main.querySelector('textarea:focus, input:focus, button:disabled')&&![...main.querySelectorAll('textarea')].some(n=>n.value.trim()))load(data);
+    if(alive(token)&&listView&&tab===current&&JSON.stringify(data)!==listSignature&&!main.querySelector('textarea:focus, input:focus, button:disabled, dialog[open]')&&![...main.querySelectorAll('textarea')].some(n=>n.value.trim()))load(data);
    }
   }catch(e){if(!closed){if(e.status===401){stop();onExit();return;}connection.textContent='Connection unavailable';connection.dataset.state='offline';}}
   finally{pollingInbox=false;}
@@ -118,7 +118,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    accept.hidden=Boolean(t.closed||t.assigned);const editable=!t.closed&&t.canReply;field.disabled=!editable;send.hidden=!editable;seller.hidden=!editable;assign.hidden=!editable||Boolean(t.seller);share.hidden=!editable;close.hidden=!editable;notice.textContent=t.closed?'Ticket closed and archived.':t.assigned&&!editable?'Assigned to another administrator.':'';
   }
   try{const d=await api('sellers');if(alive(token)){for(const p of d.items.filter(p=>p.active)){const o=el('option','Seller '+p.account.slice(0,8)+(p.verified?' ✓':''));o.value=p.account;seller.append(o);}}}catch(e){if(alive(token))notice.textContent=e.message;}
-  async function poll(){if(!alive(token)||polling||document.hidden)return;polling=true;try{if(!busy){const t=await api('tickets/state',{id});if(!busy)render(t);}}catch(e){if(alive(token))notice.textContent=e.message;}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}poll();
+  async function poll(){if(!alive(token)||polling)return;polling=true;try{if(!busy&&!document.hidden){const t=await api('tickets/state',{id});if(!busy)render(t);}}catch(e){if(alive(token))notice.textContent=e.message;}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}poll();
  }
  async function load(prefetched=null){
   listView=false;const token=++revision;if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
@@ -136,6 +136,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    }else if(view==='Sellers'){
      const controls=el('div','','cc-actions');controls.append(action('Generate Seller key',async()=>{const result=await api('sellers/generate',{});if(!alive(token))return;const d=el('dialog','','cc-seller-dialog');d.append(el('h2','Seller key generated'),el('p','Save this one-time activation secret privately.','cc-muted'),el('code',result.key,'cc-secret'),action('Copy key',()=>navigator.clipboard.writeText(result.key)),button('Done',()=>{d.close();d.remove();},'cc-secondary'));main.append(d);d.addEventListener('close',()=>d.remove());d.showModal();}),button('View Seller Accounts',()=>load(),'cc-secondary'));main.append(controls);
      for(const p of data.items){const n=card('Seller · '+p.account.slice(0,8),[status(p.active?'active':'revoked'),details([['Account',p.account],['Created',date(p.created)],['Current connection code',p.code],['Next rotation',date(p.rotates)],['Verification',p.verified?'Verified':'Not verified']])]);if(p.verified)n.append(el('span','✓ Verified Seller','cc-seller-mark'));if(p.code)n.append(action('Copy connection code',()=>navigator.clipboard.writeText(p.code),'cc-secondary'));n.append(action(p.verified?'Revoke verification':'Verify Seller',async()=>{await api('sellers/verify',{id:p.account,verified:!p.verified});if(alive(token))await load();},p.verified?'cc-danger':''));main.append(n);}
+    listView=true;
    }else if(view==='Monitoring'){renderMonitoring(data,token);}else if(view==='Overview'){
     const metrics=el('div','','cc-metrics');for(const [label,val] of [['Accounts',data.accounts],['Active',data.active],['Admin accounts',data.admins],['Unused keys',data.keys],['Open reports',data.reports],['Open feedback',data.feedback],['Pending payments',data.payments],['Open payment tickets',data.paymentTickets],['Assigned support requests',data.supportRequests],['Verified revenue','$'+(data.revenue/100).toFixed(2)]]){const n=el('div','','cc-metric');n.append(el('strong',String(val)),el('span',label));metrics.append(n);}main.append(metrics,card('Inbox shortcuts',[button('Open payment tickets',()=>navigate('Payment tickets')),button('Support requests',()=>navigate('Support'),'cc-secondary')]));
     if(pair)main.append(card('Desktop pairing',[el('p','Link a browser with a one-time code. Your admin PIN is required.'),button('Pair desktop',pair),action('Sign out all linked browsers',async()=>{await api('logout',{});main.prepend(el('p','Desktop sessions revoked.','cc-muted'));},'cc-secondary')]));
