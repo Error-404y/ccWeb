@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.14.1';
+const installedVersion = window.QZU_APP_VERSION || '0.15.0';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -3348,7 +3348,7 @@ function showInvoice(secret,initial,renewal){
    const activate=button(renewal?'Apply access':'Activate account',async()=>{if(busy)return;setBusy(true);activate.disabled=true;try{
     if(renewal){await api('access/renew',{key:invoice.activationKey});completeInvoice(true,secret);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}
     else{const result=await api('session',{accessKey:invoice.activationKey});if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Activation unavailable.');completeInvoice(false,secret);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();}
-   }catch(e){if(active())errorLine.textContent=errorMessage(e);}finally{setBusy(false);activate.disabled=false;}},'primary-button pay-primary');controls.append(activate);
+   }catch(e){if(active())errorLine.textContent=errorMessage(e);}finally{setBusy(false);activate.disabled=false;}},'primary-button pay-primary');controls.append(activate);if(invoice.coin&&record?.ticketStatus==='completed')controls.append(button('Open new ticket',()=>showPaymentTicket(secret,renewal,true),'pay-link'));
   }else if(invoice.redeemed){completeInvoice(renewal,secret);controls.append(button('Continue',()=>{delete modal.dataset.checkout;stopCheckout();modalLocked=false;if(renewal){closeModal();refresh().catch(()=>{});}else getSession();}));}
   else if(['pending','submitted','expired'].includes(invoice.state)&&secret.startsWith('QZO-')){
    if(legacy){details.append(el('p','pay-warning','Do not send a new payment to this old order. If already paid, submit its original transaction ID for review. Create a new USD order from All plans.'));}
@@ -3424,7 +3424,7 @@ function showPaymentTicket(secret,renewal,fresh=false){
   }
   if(!t.txid&&t.state!=='confirmed'&&!t.closed){const form=el('form','pay-ticket-system'),tx=el('input','access-key-input');tx.placeholder=t.coin==='SOL'?'Transaction signature':'Transaction ID';tx.maxLength=88;tx.autocomplete='off';tx.value=checkoutOrder(renewal,secret)?.txDraft||'';tx.setAttribute('aria-label','Transaction ID');tx.addEventListener('input',()=>{try{updateCheckoutOrder(renewal,secret,{txDraft:tx.value});}catch{}});
    const submit=el('button','primary-button','Submit transaction');form.append(tx,submit);form.addEventListener('submit',async e=>{e.preventDefault();if(busy)return;setBusy(true);submit.disabled=true;try{render(await request('transaction',{txid:tx.value.trim()}));notice.textContent='';}catch(e){notice.textContent=errorMessage(e);}finally{setBusy(false);submit.disabled=false;}});list.append(form);
-  }else if(t.txid&&!t.closed&&t.state==='submitted'&&!t.confirmations){list.append(button('Change transaction ID',()=>{const tx=prompt('Transaction ID',t.txid);if(!tx||busy)return;setBusy(true);request('transaction',{txid:tx.trim()}).then(render).catch(e=>notice.textContent=errorMessage(e)).finally(()=>setBusy(false));},'pay-link'));}
+  }else if(t.txid&&!t.closed&&t.state==='submitted'&&!t.confirmations){list.append(button('Change transaction ID',()=>{if(list.querySelector('.pay-ticket-correct'))return;const form=el('form','pay-ticket-system pay-ticket-correct'),input=el('input','access-key-input');input.value=t.txid;input.maxLength=88;input.setAttribute('aria-label','Correct transaction ID');const submit=el('button','primary-button','Update');form.append(input,submit);form.addEventListener('submit',async e=>{e.preventDefault();if(busy)return;setBusy(true);try{render(await request('transaction',{txid:input.value.trim()}));form.remove();}catch(e){notice.textContent=errorMessage(e);}finally{setBusy(false);}});list.append(form);input.focus();},'pay-link'));}
   if(t.activationKey&&!t.redeemed){
    const b=el('div','pay-ticket-bubble other');b.append(el('small','pay-ticket-agent','qzu-Support'),el('p','','Payment verified. Your key is ready.'),el('p','access-address',t.activationKey),button('Copy key',()=>navigator.clipboard.writeText(t.activationKey).catch(()=>{}),'pay-proof-link'));
    const activate=button(renewal?'Apply access':'Activate account',async()=>{if(busy)return;setBusy(true);activate.disabled=true;try{if(renewal){await api('access/renew',{key:t.activationKey});completeInvoice(true,secret);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}else{const result=await api('session',{accessKey:t.activationKey});if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Activation unavailable.');completeInvoice(false,secret);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();}}catch(e){if(active())notice.textContent=errorMessage(e);}finally{setBusy(false);activate.disabled=false;}},'primary-button');b.append(activate);list.append(b);
