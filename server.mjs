@@ -299,7 +299,7 @@ app.post('/api/control/announcements/delete',(req,res)=>res.json(official.remove
 app.get('/api/control/tickets',(req,res)=>res.json({items:helpTickets.list(req.account.id,true,req.query.archived==='1')}));
 app.post('/api/control/tickets/state',(req,res)=>res.json(helpTickets.view(req.body?.id,req.account.id,true)));
 app.post('/api/control/tickets/send',(req,res)=>{const b=req.body||{},t=helpTickets.send(b.id,req.account.id,true,b.text,b.requestId);notifyHelp(t.id,req.account.id);res.json(t);});
-app.post('/api/control/tickets/action',(req,res)=>{const b=req.body||{},code=b.action==='share'?sellers.ensureCode(b.seller,chats)?.code:null,t=helpTickets.adminAction(b.id,req.account.id,b.action,b.seller,code);notifyHelp(t.id,req.account.id);res.json(t);});
+app.post('/api/control/tickets/action',(req,res)=>{const b=req.body||{},code=b.action==='share'?sellers.ensureCode(b.seller,chats)?.code:null,t=helpTickets.adminAction(b.id,req.account.id,b.action,b.seller,code);if(b.action!=='delete')notifyHelp(t.id,req.account.id);res.json(t);});
 app.use('/api/control',(req,res)=>res.status(404).json({error:'Unknown control endpoint.'}));
 app.post('/api/access/recover',paymentRate('recover',5),(req,res)=>{
  if(!req.deviceId||req.account||req.body?.confirmed!==true)return res.status(403).json({error:'Unregistered mobile device and confirmation required.'});
