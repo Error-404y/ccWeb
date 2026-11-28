@@ -164,6 +164,7 @@ function navigate(path, push = true) {
   if (push) history.pushState(null, '', path);
   const nextPage = routeName(location.pathname);
   if (page !== nextPage) {
+    closeInlineAttachments();
     rememberRoom();
     if(nextPage==='chat')restoreDraft(selected);else resetOnce();
     closeModal();
@@ -648,6 +649,7 @@ async function getSession() {
 
 function lock(reopen = true) {
   if (isPublicCheckout()) return;
+  closeInlineAttachments();
   if (!playBuild && modal.dataset.checkout === 'renewal') {
     const saved = savedInvoice(true);
     checkoutReturn = saved ? () => showInvoice(saved, null, true) : showRenewal;
@@ -792,6 +794,7 @@ if (native) {
 
 function selectRoom(id, open = true) {
   if (selected !== id) {
+    closeInlineAttachments();
     rememberRoom();
     if (mediaRoom) closeModal();
     resetOnce();
@@ -946,6 +949,7 @@ function renderChat() {
   const isAdmin = Boolean(current?.admin);
   const readOnly = Boolean(current?.readOnly);
   $('composer').hidden = !current || readOnly;
+  if(!current||readOnly||current.support||!unlockToken)closeInlineAttachments();
   renderEncryptionNotice(current);
   $('adminComposer').hidden = !readOnly;
   $('deleteChat').hidden = readOnly;
@@ -1816,6 +1820,7 @@ $('qzuInfoOpen').addEventListener('click', () => {
 });
 $('qzuInfoBack').addEventListener('click', () => $('backToChats').click());
 $('backToChats').addEventListener('click', () => {
+  closeInlineAttachments();
   if(recordingCleanup)clearMedia();
   rememberRoom();
   resetOnce();
@@ -1868,6 +1873,7 @@ function updateSendButton() {
 }
 
 async function sendMessage() {
+  closeInlineAttachments();
   const id = selected;
   const text = $('message').value.trim();
   const room = state.rooms.find(room => room.id === id);
@@ -2695,20 +2701,29 @@ voiceControl.addEventListener('pointerup',event=>endVoiceGesture(event));
 voiceControl.addEventListener('pointercancel',event=>endVoiceGesture(event,true));
 voiceControl.addEventListener('lostpointercapture',event=>endVoiceGesture(event,true));
 voiceControl.addEventListener('click',event=>{if(event.detail===0){const room=currentMediaRoom();if(room)recordVoice(room);}});
+function closeInlineAttachments(focus=false){
+  const panel=$('inlineAttachments'),toggle=$('attachmentMenu');
+  if(panel.hidden)return;
+  panel.hidden=true;panel.replaceChildren();toggle.classList.remove('inline-open');
+  toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-label','Message options');toggle.replaceChildren(svg('plus'));
+  if(focus)$('message').focus({preventScroll:true});
+}
 function showAttachmentGrid(title,options){
-  const grid=el('div','attachment-grid'),handle=el('div','attachment-handle');
+  const panel=$('inlineAttachments'),toggle=$('attachmentMenu');
+  $('message').blur();panel.replaceChildren();
   for(const control of options){
     const label=control.textContent;
-    const icon=label.includes('Gallery')?'camera':label.includes('Camera')?'camera':label.includes('Voice')?'mic':label.toLowerCase().includes('once')?'viewOnceIcon':label.includes('reading')||label.includes('Timed')?'clock':'chat';
-    control.className='attachment-tile';control.prepend(svg(icon));grid.append(control);
+    const icon=label.includes('Gallery')?'photosIcon':label.includes('Camera')?'camera':label.includes('Voice')?'mic':label.toLowerCase().includes('once')?'viewOnceIcon':label.includes('reading')||label.includes('Timed')?'clock':'chat';
+    const name=label==='Gallery'?'Photos':label==='Voice message'?'Voice':label.includes('once')?'View Once':label.includes('reading')?'Timed Text':label;
+    const tile=el('span','inline-attachment-icon');tile.dataset.icon=icon;tile.append(svg(icon));
+    control.className='inline-attachment-tile';control.setAttribute('aria-label',label);control.replaceChildren(tile,el('span','',name));
+    control.addEventListener('click',()=>closeInlineAttachments(),{capture:true,once:true});panel.append(control);
   }
-  show(title,[handle,grid,button('Close',closeModal,'secondary-button')]);
-  modal.classList.add('attachment-sheet');$('attachmentMenu').classList.add('sheet-open');
-  let y=null;handle.addEventListener('pointerdown',e=>{y=e.clientY;handle.setPointerCapture(e.pointerId);});
-  handle.addEventListener('pointerup',e=>{if(y!==null&&e.clientY-y>25)closeModal();y=null;});
-  haptic();
+  panel.hidden=false;toggle.classList.add('inline-open');toggle.replaceChildren(svg('keyboardIcon'));toggle.setAttribute('aria-expanded','true');toggle.setAttribute('aria-label','Show keyboard');haptic();
 }
+$('message').addEventListener('focus',()=>closeInlineAttachments());
 $('attachmentMenu').addEventListener('click', () => {
+  if(!$('inlineAttachments').hidden){closeInlineAttachments(true);return;}
   const room = state.rooms.find(room => room.id === selected);
   if (!room || room.admin) return;
   if (room.encryption || (native && directRoom(room))) {
