@@ -783,13 +783,23 @@ function updateLink(value) {
 const releaseDirectory = resolve(process.env.QZU_RELEASE_DIR || resolve(root, 'data/releases'));
 const apkName = 'qzu-' + version + '.apk';
 const apkPath = resolve(releaseDirectory, apkName);
+function androidDownloadLink() {
+  return existsSync(apkPath)?'/downloads/'+apkName:updateLink(process.env.QZU_ANDROID_UPDATE_URL);
+}
 function androidUpdateLink() {
-  return updateLink(process.env.QZU_ANDROID_UPDATE_URL) || (publicOrigin && existsSync(apkPath) ? updateLink(publicOrigin + '/downloads/' + apkName) : null);
+  return publicOrigin&&androidDownloadLink()?updateLink(publicOrigin+'/download'):updateLink(process.env.QZU_ANDROID_UPDATE_URL);
+}
+if(production&&publicOrigin){
+  const announceAndroidRelease=()=>{
+    if(existsSync(apkPath))void push.announceRelease(version).catch(()=>console.warn('Android update notification sweep failed.'));
+  };
+  setTimeout(announceAndroidRelease,15000).unref();
+  setInterval(announceAndroidRelease,60000).unref();
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Seller listings go through staff review. Groups have owner-controlled deletion timers, and Control shows device change alarms.',
-  changes: ['Seller Shop workspace, review queue and a quiet update dot','Group join approval, separate deletion timers and visible staff entry','Readable device model names and reviewable signing-key change alarms','Audited key reveal, individual key deletion and seller name tools'],
+  notes: 'Android downloads and update alerts.',
+  changes: ['Android download page and update alerts'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
@@ -922,7 +932,7 @@ app.get('/api/official/history',guard('official-history',30,60000),(req,res)=>{
 });
 app.post('/api/push/register',guard('push-register',10,60000),(req,res)=>{
   if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
-  res.json(push.register(req.account.id,req.body?.platform,req.body?.token));
+  res.json(push.register(req.account.id,req.body?.platform,req.body?.token,req.body));
 });
 app.post('/api/push/test',guard('push-test',3,60000),async(req,res)=>res.json(await push.test(req.account.id)));
 app.post('/api/push/remove',guard('push-remove',10,60000),(req,res)=>{push.remove(req.account.id);res.json({ok:true});});
@@ -1149,6 +1159,15 @@ app.post('/delete-account',express.urlencoded({extended:false,limit:'2kb'}),(req
 app.get('/downloads/' + apkName, (req, res) => {
   if (!existsSync(apkPath)) return res.sendStatus(404);
   res.download(apkPath, apkName);
+});
+app.get('/download.css', (req,res)=>res.sendFile(resolve(root,'public/download.css')));
+app.get('/download', (req,res)=>{
+  const link=androidDownloadLink();
+  res.set('Cache-Control','no-store');
+  const html=readFileSync(resolve(root,'public/download.html'),'utf8')
+    .replace('__VERSION__',()=>link?'Version '+escapePrivacy(version):'')
+    .replace('__DOWNLOAD__',()=>link?'<a class="download" href="'+escapePrivacy(link)+'">Download for Android</a>':'<p>Download unavailable.</p>');
+  res.type('html').send(html);
 });
 app.get(['/control','/control.html','/control/monitoring'],(req,res)=>desktopRequest(req)?res.sendFile(resolve(root,'public/control.html')):res.status(403).type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu. Control</title><h1>Desktop only</h1><p>Open qzu. Control on a Windows or Mac computer.</p></html>'));
 app.get(['/control.js','/control.css','/desktop-messenger.js','/e2ee.js','/metadata.js','/ui-simplicity.js','/media.js','/media.css'],(req,res)=>res.sendFile(resolve(root,'public',req.path.slice(1))));

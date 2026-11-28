@@ -19,7 +19,8 @@ VERSION="$(node -p "require('./package.json').version")"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 APK="release-output/qzu-$VERSION.apk"
 if [[ "${QZU_USE_EXISTING_APK:-0}" != 1 ]]; then
-  npm run release:android
+  QZU_ANDROID_KEYSTORE="${QZU_ANDROID_KEYSTORE:-$HOME/.qzu-signing/google-play.jks}" \
+    QZU_ANDROID_ALIAS="${QZU_ANDROID_ALIAS:-qzu-play}" npm run release:android
 fi
 [[ -f "$APK" ]] || { echo "Signed APK missing."; exit 1; }
 SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
@@ -29,7 +30,7 @@ TOOLS="$(dirname "$TOOLS")"
 SIGNATURE="$("$TOOLS/apksigner" verify --verbose --print-certs "$APK")"
 printf '%s\n' "$SIGNATURE"
 CERT="$(printf '%s\n' "$SIGNATURE" | awk '/Signer #1 certificate SHA-256 digest:/ {print $NF}')"
-[[ "$CERT" == 3903cec62a53267e380f0ace3eec630ad056e970c8fc2fb233b0051c122e8ae8 ]] || { echo "Unexpected release certificate."; exit 1; }
+[[ "$CERT" == abe77befae643bd3d3923266697f2e92b7107c1b05cb301d282daa2032d969d7 ]] || { echo "APK signer does not match the direct Android release."; exit 1; }
 BADGING="$("$TOOLS/aapt" dump badging "$APK")"
 PACKAGE="$(printf '%s\n' "$BADGING" | sed -n '1p')"
 EXPECTED_CODE="$(node -e 'const [a,b,c]=process.argv[1].split(".").map(Number);console.log(1+a*1000000+b*1000+c)' "$VERSION")"

@@ -4750,14 +4750,13 @@ async function installUpdate(release) {
 
 function showUpdatePrompt(release) {
   const logo = svg('logo', 'wordmark update-wordmark');
-  const description = el('p', 'update-description', 'Version '+release.latest+' is available. Installed: '+installedVersion+'.');
-  const changes=el('ul','update-changes');for(const change of release.changes||[release.notes])if(change)changes.append(el('li','',change));
+  const description = el('p', 'update-description', 'Version '+release.latest+' is available.');
   const actions = el('div', 'update-actions');
-  actions.append(button('Remind me later', () => { deferUpdate(release.latest); closeModal(); }, 'secondary-button update-later'));
-  if (updateDownload(release)) actions.append(button('Install now', () => installUpdate(release), 'primary-button update-install'));
+  if (updateDownload(release)) actions.append(button('Update now', () => installUpdate(release), 'primary-button update-install'));
   else actions.classList.add('update-single');
-  const details=[logo,description,changes];if(!updateDownload(release))details.push(el('p','access-mini','No install link is available for this device yet.'));
-  show('Update available', [...details,actions]);
+  actions.append(button('Later', () => { deferUpdate(release.latest); closeModal(); }, 'secondary-button update-later'));
+  const details=[logo,description];if(!updateDownload(release))details.push(el('p','access-mini','Download unavailable.'));
+  show('Update qzu.?', [...details,actions]);
   modal.classList.add('update-sheet');
   $('modalClose').hidden = true;
 }
@@ -4771,9 +4770,9 @@ function maybePromptUpdate() {
     const epoch = authEpoch;
     api('version').then(release => {
       if (epoch === authEpoch && unlockToken) pendingUpdate = newerVersion(release.latest) ? release : null;
-    }).catch(() => {}).finally(() => { updateChecking = false; });
+    }).catch(() => {}).finally(() => { updateChecking = false; maybePromptUpdate(); });
   }
-  if (!pendingUpdate || !newerVersion(pendingUpdate.latest) || reminderUntil(pendingUpdate.latest) > now || modal.open || $('message').value.trim() || mediaRoom) return;
+  if (!pendingUpdate || !updateDownload(pendingUpdate) || !newerVersion(pendingUpdate.latest) || reminderUntil(pendingUpdate.latest) > now || modal.open || $('message').value.trim() || mediaRoom) return;
   showUpdatePrompt(pendingUpdate);
 }
 
@@ -4799,6 +4798,16 @@ function getPushPlugin(){
   if(!pushPlugin)pushPlugin=window.Capacitor.registerPlugin('PushNotifications');
   return pushPlugin;
 }
+if(native&&!playBuild&&window.Capacitor.getPlatform()==='android'){
+  getPushPlugin()?.addListener('pushNotificationActionPerformed',({notification})=>{
+    const data=notification?.data;
+    if(data?.kind!=='app-update'||!newerVersion(data.version))return;
+    updateReminders.delete(data.version);
+    try{localStorage.removeItem('qzu-update-later-'+data.version);}catch{}
+    nextUpdateCheck=0;
+    maybePromptUpdate();
+  }).catch(()=>{});
+}
 async function registerPrivatePush(interactive=false,requestPermission=interactive){
   if(pushRegisterJob)return pushRegisterJob;
   const job=registerPrivatePushOnce(interactive,requestPermission);pushRegisterJob=job;
@@ -4812,11 +4821,14 @@ async function registerPrivatePushOnce(interactive,requestPermission){
       const job=pushRegistration;
       if(!job||job.epoch!==authEpoch||!unlockToken||pushOptedOut())return;
       pushRegistration=null;
-      try{await api('push/register',{platform:window.Capacitor.getPlatform(),token:value});await refresh();if(job.interactive)info('Private notifications','Enabled. Message content is never included.');}
+      try{await api('push/register',{platform:window.Capacitor.getPlatform(),token:value,distribution:playBuild?'google-play':'direct',version:installedVersion});await refresh();if(job.interactive)info('Private notifications','Enabled. Message content is never included.');}
       catch(error){pushEpoch=-1;pushRetryAt=Date.now()+15000;if(job.interactive)showError(error);}
     });
     await plugin.addListener('registrationError',()=>{const job=pushRegistration;pushRegistration=null;pushEpoch=-1;pushRetryAt=Date.now()+15000;if(job?.interactive&&job.epoch===authEpoch)info('Private notifications','Registration failed. Check device configuration.');});
-    await plugin.addListener('pushNotificationReceived',()=>{if(unlockToken&&!document.hidden)refresh().catch(()=>{});});
+    await plugin.addListener('pushNotificationReceived',({data}={})=>{
+      if(!playBuild&&data?.kind==='app-update'){nextUpdateCheck=0;maybePromptUpdate();return;}
+      if(unlockToken&&!document.hidden)refresh().catch(()=>{});
+    });
     pushListenersReady=true;
   }
   if(window.Capacitor.getPlatform()==='android')await plugin.createChannel({id:'qzu_messages',name:'Messages',description:'New private messages',importance:5,visibility:0,vibration:true,sound:'default'}).catch(()=>{});

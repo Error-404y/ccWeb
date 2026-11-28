@@ -44,7 +44,7 @@ function installIcons() {
 
 rmSync('mobile-dist', { recursive: true, force: true });
 cpSync('public', 'mobile-dist', { recursive: true });
-for(const legal of ['privacy.html','privacy.css','terms.html','delete-account.html','control.html'])rmSync('mobile-dist/'+legal,{force:true});
+for(const legal of ['privacy.html','privacy.css','terms.html','delete-account.html','control.html','download.html','download.css'])rmSync('mobile-dist/'+legal,{force:true});
 if(distribution==='google-play')writeFileSync('mobile-dist/app.js',playAssets(readFileSync('mobile-dist/app.js','utf8')));
 mkdirSync('mobile-dist/vendor', { recursive: true });
 cpSync('node_modules/jsqr/dist/jsQR.js', 'mobile-dist/vendor/jsqr.js');
