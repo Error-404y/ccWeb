@@ -4,8 +4,12 @@ import {openAccounts,createAccount,setLogin,findAccount} from '../lib/accounts.m
 import {initDevices,findDeviceAccount} from '../lib/devices.mjs';
 import {initAccess,createSupportKey,rotateSupportKey,releaseSupportKey,invoiceRow,invoiceStatus,submitPayment,approvePayment,redeemAccess,applyRenewal} from '../lib/access.mjs';
 import {initPayments,createCryptoInvoice,inspectTransaction,verifyCryptoInvoice,COINS} from '../lib/crypto-payments.mjs';
-import {initControl,issueRecovery,recoverAccount,createControlSessions,desktopControlAllowed,accountAction} from '../lib/control.mjs';
+import {initControl,issueRecovery,recoverAccount,createControlSessions,desktopControlAllowed,accountAction,archiveControlRecord,controlPayments} from '../lib/control.mjs';
 import {complianceStore} from '../lib/compliance.mjs';
+import {feedbackStore} from '../lib/feedback.mjs';
+import {initPaymentTickets,paymentTickets} from '../lib/payment-tickets.mjs';
+import {Chats} from '../lib/chats.mjs';
+import {randomUUID} from 'node:crypto';
 const now=Date.UTC(2026,10,28);
 function setup(){const db=openAccounts(':memory:');initDevices(db);initAccess(db);initPayments(db);initControl(db);complianceStore(db);return db;}
 test('crypto checkout quotes USD plan, unique amount, and rejects wrong outputs or insufficient confirmations',()=>{
@@ -48,7 +52,7 @@ test('desktop admin keys do not consume or transfer mobile slots, and reject nor
  let time=now;const key=createSupportKey(db,now),sessions=createControlSessions(db,()=>time);
  assert.throws(()=>sessions.login('QZU-'+ 'A'.repeat(48)));
  assert.throws(()=>sessions.login('QZU-ADMIN-'+ 'A'.repeat(48)));
- const {token,id}=sessions.login(key,'');assert.equal(sessions.check(token).id,id);
+ const {token,id}=sessions.login(key,'');assert.equal(sessions.check(token).id,id);assert.deepEqual(sessions.activeDesktopIds(),[id]);
  const slot=db.prepare('SELECT redeemed,account FROM support_keys').get();
  assert.equal(slot.redeemed,null);assert.equal(slot.account,id);
  const a=redeemAccess(db,key,now+1,'admin-device');assert.equal(a.id,id);assert.equal(sessions.check(token),null);
@@ -68,4 +72,30 @@ test('Control Center accepts desktop Windows and macOS browser identifiers and r
  assert.equal(desktopControlAllowed('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)','?1'),false);
  assert.equal(desktopControlAllowed('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)','','"Android"'),false);
  assert.equal(desktopControlAllowed(''),false);
+});
+
+test('archive only accepts terminal records, separates lists and restores without deleting records',()=>{
+ const db=setup();try{
+ const c=complianceStore(db,()=>now),f=feedbackStore(db,()=>now);initPaymentTickets(db);const t=paymentTickets(db,()=>now);
+ const a=createAccount(db,'reporter'),b=createAccount(db,'reported'),r=c.report(a.id,b.id,'room','Other','Test',null,[],'unknown');
+ const item=f.submit('Feedback',true),o=createCryptoInvoice(db,'week','BTC',100000,null,now,null,true),ticket=t.open(o.id);
+ for(const [category,id] of [['reports',r.id],['feedback',item.id],['payment-tickets',ticket.id],['payments',o.id]])assert.throws(()=>archiveControlRecord(db,category,id,'admin',false,now));
+ c.resolve(r.id,'dismiss','admin','solved');f.status(true,item.id,'solved','admin');t.send(ticket.id,'customer',{text:'test',requestId:randomUUID()},o.id);t.reject(ticket.id,'admin','Incorrect payment');
+ for(const [category,id] of [['reports',r.id],['feedback',item.id],['payment-tickets',ticket.id]])archiveControlRecord(db,category,id,'admin',false,now);
+ assert.equal(c.list(true).length,0);assert.equal(c.list(true,true)[0].id,r.id);
+ assert.equal(f.list(true).length,0);assert.equal(f.list(true,Number.MAX_SAFE_INTEGER,true)[0].id,item.id);
+ assert.equal(t.list().length,0);assert.equal(t.list(true)[0].id,ticket.id);assert.equal(t.view(ticket.id,o.id,o.orderKey).messages.length,1);
+ for(const [category,id] of [['reports',r.id],['feedback',item.id],['payment-tickets',ticket.id]])archiveControlRecord(db,category,id,'admin',true,now);
+ assert.equal(c.list(true).length,1);assert.equal(f.list(true).length,1);assert.equal(t.list().length,1);
+ db.prepare("UPDATE access_invoices SET state='rejected' WHERE id=?").run(o.id);
+ archiveControlRecord(db,'payments',o.id,'admin',false,now);assert.equal(controlPayments(db).length,0);assert.equal(controlPayments(db,true)[0].id,o.id);
+ }finally{db.close();}
+});
+test('solved and rejected support cases archive only for assigned admin and reopen on new customer message',()=>{
+ const db=setup();try{
+ const chats=new Chats(()=>now);chats.attachSupportStore(db);const id=chats.openMobileSupport('customer','agent',true);
+ chats.send('customer',id,'Help');assert.throws(()=>chats.finishSupport('agent',id,'archive'));assert.throws(()=>chats.finishSupport('other',id,'solve'));
+ chats.finishSupport('agent',id,'solve');chats.finishSupport('agent',id,'archive');assert.equal(chats.finishedSupport('agent').length,0);assert.equal(chats.finishedSupport('agent',true)[0].messages[0].text,'Help');
+ chats.send('customer',id,'More help');assert.equal(chats.finishedSupport('agent',true).length,0);assert.equal(chats.supportRequests('agent',true)[0].id,id);
+ }finally{db.close();}
 });
