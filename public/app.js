@@ -888,10 +888,13 @@ function renderChat() {
   $('qzuInfoChannel').hidden = !infoOpen;
   renderOfficial(infoOpen);
   $('chatPage').classList.toggle('thread-open', Boolean((current || infoOpen) && mobileOpen));
-  const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
-  $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole,c.peerName]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.peerName, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
+  // Keep old histories available, but group only devices belonging to the same verified admin account.
+  const adminGroups=new Map();for(const r of rooms){if(r.peerRole==='admin'&&r.peerAdmin){const group=adminGroups.get(r.peerAdmin)||[];group.push(r);adminGroups.set(r.peerAdmin,group);}}
+  const visibleRooms=rooms.filter(r=>!r.peerAdmin||r.peerRole!=='admin'||(adminGroups.get(r.peerAdmin).find(x=>x.encryption&&!x.support)||adminGroups.get(r.peerAdmin)[0])===r);
+  const visibleSaved=savedContacts.filter(c=>!rooms.some(r=>r.contact?.id===c.id)&&!(c.peerRole==='admin'&&c.peerAdmin&&(adminGroups.has(c.peerAdmin)||savedContacts.find(x=>x.peerAdmin===c.peerAdmin)?.id!==c.id)));
+  const total=visibleRooms.length+visibleSaved.length;$('chatCount').textContent=total?String(total):'';
+  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole,c.peerName,c.peerAdmin]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.peerName, r.peerAdmin, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -905,8 +908,9 @@ function renderChat() {
       box.append(a);
       list.append(box);
     }
-    for (const r of rooms) {
-      const last = r.messages.at(-1);
+    for (const r of visibleRooms) {
+      const histories=r.peerAdmin?adminGroups.get(r.peerAdmin)||[r]:[r];
+      const last = histories.flatMap(x=>x.messages).sort((a,b)=>b.at-a.at)[0];
       const classes = 'contact' + (r.admin ? ' admin-contact' : '') + (r.id === selected ? ' active' : '');
       const b = el('button', classes);
       b.type = 'button';
@@ -926,11 +930,12 @@ function renderChat() {
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
       content.append(name, el('span', 'contact-preview' + (r.contact?.warning || identityChanged(r) ? ' contact-warning' : ''), preview));
       b.append(svg(r.peerRole==='admin'||r.support&&!r.supportAgent ? 'supportAvatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
-      const count=unreadCount(r);if(count){const badge=el('span','unread-badge',count>99?'99+':String(count));badge.setAttribute('aria-label',count+' unread messages');b.append(badge);}
+      const count=histories.reduce((n,x)=>n+unreadCount(x),0);if(count){const badge=el('span','unread-badge',count>99?'99+':String(count));badge.setAttribute('aria-label',count+' unread messages');b.append(badge);}
       b.addEventListener('click', () => selectRoom(r.id));
+      if(histories.length>1){const history=button('Other conversation history',()=>show('Support conversation history',[...histories.map(x=>button((x.encryption?'Encrypted chat':'Previous support chat')+' · '+fmtTime(x.messages.at(-1)?.at||x.created),()=>{closeModal();selectRoom(x.id);},'secondary-button')),button('Close',closeModal,'secondary-button')]),'support-history-link');history.setAttribute('aria-label','Open separate support conversation history');list.append(b,history);continue;}
       list.append(b);
     }
-    for (const contact of savedContacts.filter(c=>!rooms.some(r=>r.contact?.id===c.id))) {
+    for (const contact of visibleSaved) {
       const row = el('button','contact saved-contact');
       row.type='button';
       const content=el('div','contact-body');
