@@ -847,8 +847,8 @@ $('manageContacts').addEventListener('click',()=>{
   show('Contacts',[list,button('Close',closeModal)]);
 });
 let lastBadge=-1,activityTimer=null;
-function syncBadge(count){if(!native||window.Capacitor.getPlatform()!=='ios'||lastBadge===count)return;lastBadge=count;devicePlugin.setBadge({count}).catch(()=>{lastBadge=-1;});}
-function showActivityBanner(){const banner=$('activityBanner');banner.textContent='New message';banner.hidden=false;clearTimeout(activityTimer);activityTimer=setTimeout(()=>{banner.hidden=true;},2400);}
+function syncBadge(count){if(pushOptedOut())count=0;if(!native||window.Capacitor.getPlatform()!=='ios'||lastBadge===count)return;lastBadge=count;devicePlugin.setBadge({count}).catch(()=>{lastBadge=-1;});}
+function showActivityBanner(){if(pushOptedOut())return;const banner=$('activityBanner');banner.textContent='New message';banner.hidden=false;clearTimeout(activityTimer);activityTimer=setTimeout(()=>{banner.hidden=true;},2400);}
 function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m.unread===true).length;}
 function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+(state.official?.unread?1:0);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
 function renderChat() {
@@ -1312,7 +1312,9 @@ function renderSettings() {
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
   $('backgroundPin').checked=backgroundPin;$('backgroundPin').disabled=!native||!unlockToken||backgroundPinSaving;
-  $('pushStatus').textContent=state.push?.registered&&!pushOptedOut()?'On':native&&window.Capacitor.getPlatform()==='ios'?'In-app':pushAvailable()?(pushOptedOut()?'Off':'Permission / setup'):'Unavailable';
+  $('privateNotifications').checked=!pushOptedOut();
+  $('privateNotifications').disabled=!unlockToken||Boolean(pushRemovalJob||pushRegisterJob);
+  $('pushStatus').textContent=pushOptedOut()?'Message notifications are off.':state.push?.registered?'Message notifications are enabled.':native&&window.Capacitor.getPlatform()==='ios'?'In-app alerts enabled. Remote delivery depends on Apple push configuration.':'Allow notifications in your device settings if prompted.';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
@@ -2991,7 +2993,7 @@ $('updateCenter').addEventListener('click', async () => {
   } catch (error) { showError(error); }
 });
 let pushPlugin=null,pushListenersReady=false,pushRetryAt=0,pushRegisterJob=null,pushRemovalJob=null;
-function pushOptedOut(){try{localStorage.removeItem('qzu-push-opt-out');}catch{}return false;}
+function pushOptedOut(){try{return localStorage.getItem('qzu-push-opt-out')==='1';}catch{return false;}}
 function shouldPromptPush(){try{return localStorage.getItem('qzu-push-permission-requested')!=='1';}catch{return false;}}
 function notePushPrompt(){try{localStorage.setItem('qzu-push-permission-requested','1');}catch{}}
 function pushAvailable(){return Boolean(state.push?.available&&(!state.push.platforms||state.push.platforms.includes(window.Capacitor?.getPlatform?.())));}
@@ -3036,18 +3038,25 @@ function restorePushRegistration(){
     pushEpoch=authEpoch;registerPrivatePush(false,shouldPromptPush()).catch(()=>{pushEpoch=-1;pushRetryAt=Date.now()+15000;});
   }
 }
-$('privateNotifications').addEventListener('click',()=>{
+$('privateNotifications').addEventListener('change',async event=>{
   if(!unlockToken)return;
-  const registered=state.push?.registered;
-  const controls=[el('p','','Only generic activity alerts. No sender, chat or message details.')];if(native&&window.Capacitor.getPlatform()==='android'&&!pushOptedOut())controls.push(el('p','','Message notifications are enabled by default. Allow notifications in Android settings if prompted.'));
-  if(native&&window.Capacitor.getPlatform()==='ios'){
-    controls.push(el('p','','Internal notifications work in the app. Remote notifications require Apple Push Notification service.'),button('Enable iOS notification permissions',async()=>{try{const count=state.rooms.reduce((n,r)=>n+unreadCount(r),0);const result=await devicePlugin.setBadge({count,requestPermission:true});info('Notifications',result.granted?'Enabled.':'Permission not granted.');}catch(error){modalError(error);}}),button('Test local notification',async event=>{const control=event.currentTarget,epoch=authEpoch;control.disabled=true;control.textContent='Scheduling test…';let timer;try{const result=await Promise.race([devicePlugin.testLocalNotification(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Native notification test timed out. Rebuild the iOS app.')),12000);})]);if(!result?.scheduled)throw Error('Native test was not confirmed. Install the latest iOS build.');if(epoch===authEpoch&&unlockToken)info('Notifications','Local test scheduled for 5 seconds. Stay here or return to the Home Screen. Alerts: '+(result.alerts?'enabled':'disabled')+' · Sounds: '+(result.sounds?'enabled':'disabled')+' · Badges: '+(result.badges?'enabled':'disabled')+'.');}catch(error){if(epoch===authEpoch)modalError(error);}finally{clearTimeout(timer);control.disabled=false;control.textContent='Test local notification';}},'secondary-button'));
-  }
-  if(registered&&!pushOptedOut())controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'));
-  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{if(pushRemovalJob)await pushRemovalJob;try{localStorage.removeItem('qzu-push-opt-out');}catch{}pushRetryAt=0;await registerPrivatePush(true);}catch(error){modalError(error);}}));}
-  else if(!native||window.Capacitor.getPlatform()!=='ios')controls.push(el('p','','Push delivery is not configured yet.'));
-  if(state.push?.diagnostic)controls.push(el('p','','Last push result: '+state.push.diagnostic.result));
-  controls.push(button('Close',closeModal,'secondary-button'));show('Private notifications',controls);
+  const toggle=event.currentTarget,enabled=toggle.checked;
+  try{if(enabled)localStorage.removeItem('qzu-push-opt-out');else localStorage.setItem('qzu-push-opt-out','1');}catch{}
+  toggle.disabled=true;pushRetryAt=0;
+  try{
+    if(!enabled){$('activityBanner').hidden=true;syncBadge(0);await disablePrivatePush();}
+    else{
+      if(pushRemovalJob)await pushRemovalJob;
+      pushEpoch=-1;lastBadge=-1;
+      if(native&&window.Capacitor.getPlatform()==='ios'){
+        const count=state.rooms.reduce((n,r)=>n+unreadCount(r),0);
+        await devicePlugin.setBadge({count,requestPermission:true});
+      }
+      if(pushAvailable()&&getPushPlugin())await registerPrivatePush(false,true);
+    }
+    await refresh();
+  }catch(error){$('pushStatus').textContent='Notification setting saved. Device registration will retry.';}
+  finally{toggle.disabled=false;toggle.checked=!pushOptedOut();updateNavigation();}
 });
 const backgroundChoices = ['plain', 'grid', 'dots'];
 function applyChatBackground(value) {
@@ -3359,7 +3368,7 @@ function showInvoice(secret, initial, renewal) {
 
 $('accessSettings').addEventListener('click', () => {
   const access = state.access;
-  if (!access || access.plan !== 'monthly') {
+  if (!access || !['monthly','week','month','year'].includes(access.plan)) {
     info('qzu-Access', 'Lifetime or existing account access.');
     return;
   }
