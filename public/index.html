@@ -83,7 +83,7 @@
               <span id="officialUnread" class="official-unread" role="status" aria-label="New official information" hidden></span><svg class="official-chevron" aria-hidden="true"><use href="#chevron"/></svg>
             </button>
           </div>
-          <button id="supportOpen" class="contact support-entry" type="button" hidden><svg class="avatar" aria-hidden="true"><use href="#supportAvatar"/></svg><span class="contact-body"><span class="contact-name">qzu-Support <svg class="admin-badge" role="img" aria-label="Verified support"><use href="#adminBadge"/></svg></span><span class="contact-preview">Start a support chat</span></span><svg class="official-chevron" aria-hidden="true"><use href="#chevron"/></svg></button>
+          <button id="supportOpen" class="contact support-entry" type="button" hidden><svg class="avatar" aria-hidden="true"><use href="#supportAvatar"/></svg><span class="contact-body"><span class="contact-name">qzu-Support <svg class="admin-badge" role="img" aria-label="Verified support"><use href="#adminBadge"/></svg></span><span class="contact-preview">Contact support</span></span><svg class="official-chevron" aria-hidden="true"><use href="#chevron"/></svg></button>
           <div id="contacts" class="contacts"></div>
           <footer class="side-footer"><a class="settings-link" href="/settings"><svg><use href="#settings"/></svg><span>Settings</span></a></footer>
         </aside>
@@ -96,12 +96,11 @@
             <button id="backToChats" class="icon-button mobile-back" aria-label="Back to chats"><svg><use href="#back"/></svg></button>
             <button id="profileAvatar" type="button" class="profile-avatar" aria-label="Contact information"><svg class="avatar"><use id="threadAvatar" href="#avatar"/></svg></button>
             <div class="thread-title">
-              <div class="thread-name-wrap"><div class="thread-name-line"><button id="profileName" class="profile-name" type="button"><span id="threadName">Chat</span></button><svg id="threadBadge" class="admin-badge" role="img" aria-label="Verified Admin" hidden><use href="#adminBadge"/></svg></div><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span><button id="encryptionStatus" class="encryption-status" type="button" hidden></button></div>
+              <div class="thread-name-wrap"><div class="thread-name-line"><span class="profile-name" id="threadName">Chat</span><svg id="threadBadge" class="admin-badge" role="img" aria-label="Verified Admin" hidden><use href="#adminBadge"/></svg></div><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span><button id="encryptionStatus" class="encryption-status" type="button" hidden></button></div>
             </div>
             <div class="expiry" title="Chat expires"><svg><use href="#clock"/></svg><span id="chatTimer">30:00</span></div>
             <button id="groupInvite" class="icon-button" aria-label="Group invite" title="Group invite" hidden><svg><use href="#plus"/></svg></button>
             <button id="chatOptions" class="icon-button" aria-label="Chat options" title="Chat options" hidden>⋯</button>
-            <button id="deleteChat" class="icon-button" aria-label="Delete chat" title="Delete chat"><svg><use href="#trash"/></svg></button>
           </header>
           <progress id="expiryProgress" class="expiry-progress" max="1800000" value="1800000" aria-label="Remaining chat lifetime" hidden></progress>
           <section id="qzuInfoChannel" class="official-channel" aria-label="Official qzu information" hidden>
@@ -110,10 +109,13 @@
               <svg class="avatar" aria-hidden="true"><use href="#adminAvatar"/></svg>
               <div class="thread-title"><div class="thread-name-wrap"><div class="thread-name-line"><h2>qzu.</h2><svg class="admin-badge" role="img" aria-label="Verified qzu"><use href="#adminBadge"/></svg></div><span class="presence-label">Official information</span></div></div>
             </header>
-            <div class="official-channel-content">
+            <div class="official-channel-content" tabindex="0" aria-label="Announcements">
               <div class="official-channel-intro"><svg class="wordmark" aria-hidden="true"><use href="#logo"/></svg><h1>Official information</h1><p>Important notices from qzu.</p></div>
               <article class="official-post"><div class="official-post-title"><strong>qzu.</strong><svg class="admin-badge" role="img" aria-label="Verified qzu"><use href="#adminBadge"/></svg></div><h2>Stay safe</h2><p>We never ask for your PIN, activation key or personal information in chats.</p><p>Keep your credentials private.</p></article>
+              <button id="officialEarlier" class="secondary-button official-page-link" type="button" hidden>Earlier posts</button>
               <div id="officialPosts"></div>
+              <button id="officialLater" class="secondary-button official-page-link" type="button" hidden>More announcements</button>
+              <p id="officialPageError" role="status"></p>
             </div>
             <form id="officialComposer" class="official-composer" hidden><label for="officialMessage">Publish to everyone</label><div><textarea id="officialMessage" maxlength="2000" rows="2" placeholder="Write an announcement…" aria-label="Announcement"></textarea><button id="officialSend" class="primary-button" type="submit" disabled>Publish</button></div></form>
             <footer id="officialReadOnly" class="admin-composer"><div class="read-only-bar"><svg aria-hidden="true"><use href="#lock"/></svg><span>Read-only channel</span></div></footer>
@@ -175,8 +177,8 @@
             <div id="userInterfaceHeading" class="settings-section-heading" hidden>User Interface</div><div class="settings-section-heading">General</div><div class="settings-group">
             <a class="settings-row settings-category-link" href="/settings/account"><svg><use href="#key"/></svg><span>Account</span><svg class="chevron"><use href="#chevron"/></svg></a>
             <a class="settings-row settings-category-link" href="/settings/privacy"><svg><use href="#lock"/></svg><span>Privacy &amp; Security</span><svg class="chevron"><use href="#chevron"/></svg></a>
-            <a class="settings-row settings-category-link" href="/settings/appearance"><svg><use href="#moon"/></svg><span>Appearance</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/notifications"><svg><use href="#info"/></svg><span>Notifications</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/motion"><svg><use href="#terminal"/></svg><span>Motion &amp; Experience</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/connections"><svg><use href="#avatar"/></svg><span>Connections</span><svg class="chevron"><use href="#chevron"/></svg></a>
-            </div><div class="settings-section-heading">qzu.</div><div class="settings-group"><a class="settings-row settings-category-link" href="/settings/updates"><svg><use href="#clock"/></svg><span>Update Center</span><svg class="chevron"><use href="#chevron"/></svg></a>
+            <a class="settings-row settings-category-link" href="/settings/appearance"><svg><use href="#moon"/></svg><span>Appearance</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/notifications"><svg><use href="#info"/></svg><span>Notifications</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/connections"><svg><use href="#avatar"/></svg><span>Connections</span><svg class="chevron"><use href="#chevron"/></svg></a>
+            </div><div class="settings-section-heading">qzu.</div><div class="settings-group"><button class="settings-row" id="updateCenter" type="button"><svg><use href="#clock"/></svg><span>Update center</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <a class="settings-row settings-category-link" href="/settings/help"><svg><use href="#chat"/></svg><span>Help &amp; Support</span><svg class="chevron"><use href="#chevron"/></svg></a>
             <a class="settings-row settings-category-link" href="/settings/about"><svg><use href="#info"/></svg><span>About qzu.</span><svg class="chevron"><use href="#chevron"/></svg></a>
             </div><div id="adminInterface" hidden><div class="settings-section-heading">Admin Interface</div>
@@ -185,11 +187,11 @@
               <a class="settings-row settings-category-link" id="adminInboxLink" href="/settings/support-requests"><svg><use href="#chat"/></svg><span>View inbox</span><strong id="adminInboxCount"></strong><svg class="chevron"><use href="#chevron"/></svg></a>
               <a class="settings-row settings-category-link" href="/settings/admin-feedback"><svg><use href="#info"/></svg><span>View feedback</span><strong id="adminFeedbackCount"></strong><svg class="chevron"><use href="#chevron"/></svg></a>
             </div>
-            <button class="settings-row logout-row" id="adminLogout" hidden type="button"><svg><use href="#key"/></svg><span>Admin logout</span><svg class="chevron"><use href="#chevron"/></svg></button><button class="settings-row logout-row" id="logout"><svg><use href="#back"/></svg><span>Delete account</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row logout-row" id="adminLogout" hidden type="button"><svg><use href="#key"/></svg><span>Admin logout</span><svg class="chevron"><use href="#chevron"/></svg></button>
           </div>
           <div class="panel settings-panel" data-settings-category="account" hidden>
             <h1>Account</h1>
-            <button class="settings-row" id="deleteAccount" type="button"><svg><use href="#key"/></svg><span>Delete account</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row logout-row" id="deleteAccount" type="button"><svg><use href="#key"/></svg><span>Delete account</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="sellerProfileSettings" type="button" hidden><svg><use href="#avatar"/></svg><span>Seller profile</span><strong id="sellerProfileStatus"></strong><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="recoverySettings" type="button"><svg><use href="#key"/></svg><span>Account recovery</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="accessSettings"><svg><use href="#key"/></svg><span>qzu-Access</span><small id="accessSettingsSummary" class="access-settings-summary"></small><svg class="chevron"><use href="#chevron"/></svg></button>
@@ -216,7 +218,6 @@
           </div>
           <div class="panel settings-panel" data-settings-category="notifications" hidden><h1>Notifications</h1>            <div class="settings-row"><svg><use href="#lock"/></svg><span>Message notifications</span><label class="privacy-switch"><input id="privateNotifications" type="checkbox" aria-label="Message notifications" checked><span></span></label></div>
 <p id="pushStatus" class="background-pin-note" role="status">Notification delivery also depends on your device permissions.</p></div>
-          <div class="panel settings-panel" data-settings-category="motion" hidden><h1>Motion &amp; Experience</h1><div class="settings-row"><svg><use href="#terminal"/></svg><span>Motion style</span><strong>Balanced</strong></div><p class="background-pin-note">Animations respect your device’s reduced-motion preference.</p></div>
           <div class="panel settings-panel" data-settings-category="connections" hidden><h1>Connections</h1>            <button class="settings-row" id="manageContacts"><svg><use href="#avatar"/></svg><span>Manage contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="blockedContacts"><svg><use href="#lock"/></svg><span>Blocked contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
 </div>
@@ -227,17 +228,12 @@
             <button class="settings-row" id="accentSettings"><svg><use href="#moon"/></svg><span>Accent color</span><span id="accentSample" class="accent-sample"></span></button>
 
           </div>
-          <div class="panel settings-panel" data-settings-category="updates" hidden>
-            <h1>Update log</h1>
-            <button class="settings-row" id="updateCenter"><svg><use href="#settings"/></svg><span>Update center</span><svg class="chevron"><use href="#chevron"/></svg></button>
-
-          </div>
           <div class="panel settings-panel" data-settings-category="help" hidden>
             <h1>Help</h1>
-            <button class="settings-row" id="writeSupport" type="button"><svg><use href="#chat"/></svg><span>Write Support</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row" id="writeSupport" type="button"><svg><use href="#chat"/></svg><span>Contact support</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <a class="settings-row settings-category-link" id="supportRequestsLink" href="/settings/support-requests" hidden><svg><use href="#chat"/></svg><span>Inbox (Requests)</span><strong id="supportRequestCount"></strong><svg class="chevron"><use href="#chevron"/></svg></a>
             <ul class="support-help-notes">
-              <li>Contact Support for assistance.</li>
+              <li>Temporary chats end when the server restarts.</li>
               <li>Support manages chat retention and deletion.</li>
             </ul>
           </div>
@@ -259,7 +255,7 @@
           </div>
         </div>
       </section>
-      <nav id="bottomNav" class="bottom-nav" aria-label="Main navigation" hidden><a href="/chat" data-tab="chat"><span class="nav-icon"><svg><use href="#chat"/></svg><span id="navUnread" class="unread-badge" hidden></span></span><span>Chats</span></a><a href="/connect" data-tab="connect"><svg><use href="#qr"/></svg><span>Connect</span></a><a href="/tickets" data-tab="tickets"><svg><use href="#ticketIcon"/></svg><span>Ticket</span></a><a href="/settings" data-tab="settings"><svg><use href="#settings"/></svg><span>Settings</span></a></nav><div id="activityBanner" class="activity-banner" role="status" hidden></div><div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
+      <nav id="bottomNav" class="bottom-nav" aria-label="Main navigation" hidden><a href="/chat" data-tab="chat"><span class="nav-icon"><svg><use href="#chat"/></svg><span id="navUnread" class="unread-badge" hidden></span></span><span>Chats</span></a><a href="/connect" data-tab="connect"><svg><use href="#qr"/></svg><span>Connect</span></a><a href="/tickets" data-tab="tickets"><svg><use href="#ticketIcon"/></svg><span>Tickets</span></a><a href="/settings" data-tab="settings"><svg><use href="#settings"/></svg><span>Settings</span></a></nav><div id="activityBanner" class="activity-banner" role="status" hidden></div><div id="loading" class="loading" role="status"><svg class="wordmark"><use href="#logo"/></svg><span class="spinner"></span></div>
     </main>
     <div id="bootSplash" aria-hidden="true"><div class="boot-grid"></div><div class="boot-center"><i></i><i></i><i></i><svg viewBox="0 0 172 110"><path class="boot-chevron" fill="#bd0000" d="M5 5 85 44 85 64 5 105 5 80 55 54 5 30Z"/><rect class="boot-cursor" x="87" y="86" width="80" height="19" fill="#bd0000"/></svg></div><div class="boot-scan"></div><div class="boot-progress"></div></div>
     <dialog id="modal" aria-labelledby="modalTitle">

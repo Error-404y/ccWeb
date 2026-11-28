@@ -7,7 +7,13 @@ if(!process.argv[2])throw Error('Usage: npm run backup:private -- /private/path/
 const target=resolve(process.argv[2]);
 if(!existsSync(source)||source===target)throw Error('Invalid backup source or destination.');
 const fd=openSync(target,'wx',0o600);closeSync(fd);
-const excluded=new Set(['mobile_support_rooms','push_devices','feedback_inbox','abuse_reports','report_media','moderation_actions','encryption_prekeys','payment_cases','payment_case_messages','payment_tickets','payment_ticket_messages','user_tickets','user_ticket_messages','user_ticket_sellers','contact_deletions']);
+const excluded=new Set([
+  'mobile_support_rooms','push_devices','encryption_prekeys','contact_deletions',
+  'feedback_inbox','feedback_events',
+  'abuse_reports','report_media','report_collaboration','moderation_actions',
+  'payment_cases','payment_case_messages','payment_tickets','payment_ticket_messages',
+  'user_tickets','user_ticket_messages','user_ticket_sellers'
+]);
 const quote=name=>'"'+name.replaceAll('"','""')+'"';
 let input,output;
 try{
@@ -30,5 +36,5 @@ try{
     for(const row of input.prepare('SELECT name,seq FROM sqlite_sequence').all())if(!excluded.has(row.name))put.run(row.name,row.seq);
   }
   output.exec('COMMIT;');input.exec('COMMIT;');output.close();output=null;input.close();input=null;
-  chmodSync(target,0o600);console.log('Private backup created without support chats or push tokens.');
+  chmodSync(target,0o600);console.log('Private backup created. Conversation, ticket, feedback, report and push content was excluded.');
 }catch(error){try{output?.close();}catch{}try{input?.close();}catch{}try{unlinkSync(target);}catch{}throw error;}

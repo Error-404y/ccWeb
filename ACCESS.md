@@ -1,14 +1,20 @@
 # qzu-Access
 
-- EUR 19.99 including 19% tax, first five months included; EUR 2.99 per additional month including 19% tax.
-- No Litecoin node, exchange-rate API or automatic transaction detection is required.
-- The QR contains the fixed public Litecoin receiving address only. The customer enters the EUR equivalent in their wallet, sends the payment, then submits the transaction ID.
-- The 30-minute review countdown begins on submission. Expiration never grants access. Approval may arrive sooner or later. Keep the private QZO order reference to resume.
-- Inspect your own wallet and verify the destination, amount, exchange rate, confirmations and that the transaction is not already used before approval. A public transaction ID alone is not proof of payer ownership; resolve disputes manually. There is no automatic conversion, refund, payment verification or recurring debit.
-- Run npm run access-invoices to list orders and submitted transaction IDs. Run npm run access-approve -- INVOICE_ID only after verifying funds. Run npm run access-reject -- INVOICE_ID to reject an invalid submission.
-- Approval generates a separate random single-use QZU activation key that the customer retrieves on the waiting screen. Never send an order reference or activation key to someone you do not trust.
-- The private developer socket is the only approval interface. The external admin website is not implemented.
-- Existing accounts and previously confirmed keys remain valid. Old unconfirmed automatic-checkout orders may require manual reconciliation by the developer.
-- The optional QZU_PAYMENT_WEBHOOK sends a notification after approval. Existing feedback and reset webhooks remain unchanged.
-- npm run access-create -- 1 creates a complimentary lifetime key.
-- Keep .env and the SQLite database private. The existing account design does not recover accounts after losing the browser cookie. Test before accepting payments.
+## Current checkout
+
+Direct-distribution builds offer fixed-term and lifetime access in USD. Checkout quotes the exact crypto amount for Litecoin, Bitcoin or Solana. Pay the quoted amount through the selected network, then add the transaction ID to the payment ticket. Save the private QZO order reference to reopen the order. Keep QZU activation keys private.
+
+The server checks the transaction against the original quote and the network's confirmation requirement. Staff release the activation key from Control Center after verification. Orders that need attention appear under **Payments** and **Payment tickets**. An unmatched old submission remains available for review after automatic verification ends. Review the existing order before sending another payment.
+
+Google Play builds accept existing activation keys. For an existing account with a timed plan, admins can extend access in Control Center when applicable.
+
+## Legacy EUR orders
+
+Existing EUR orders and previously confirmed keys retain their original terms. Use the saved QZO reference to recover an existing order. Verify the original payment in your wallet before manual approval. Check the destination, amount, confirmations and whether the transaction has already been credited.
+
+- `npm run access-invoices` lists submitted orders.
+- `npm run access-approve -- INVOICE_ID` approves a verified legacy EUR order.
+- `npm run access-reject -- INVOICE_ID` rejects a submitted order.
+- `npm run access-create -- 1` creates a complimentary lifetime key.
+
+The optional `QZU_PAYMENT_WEBHOOK` sends a payment notification. Keep `.env`, the SQLite database and private backups in restricted storage.

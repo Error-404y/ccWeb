@@ -7,18 +7,50 @@ const input=(placeholder,type='text')=>{const n=el('input');n.type=type;n.placeh
 const select=(options)=>{const n=el('select');for(const [value,label] of options){const o=el('option',label);o.value=value;n.append(o);}return n;};
 const status=(value)=>el('span',value==='help'?'Need Additional Help':value==='solved'?'Solved':value==='inspection'?'Under Inspection':value,'cc-status '+(value==='help'||value==='revoked'||value==='expired'||value==='rejected'?'red':value==='solved'||value==='active'||value==='confirmed'?'green':'yellow'));
 const plans=[['1W','1 Week'],['1M','1 Month'],['1Y','1 Year'],['LT','Lifetime']];
-function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{},pair=null,media=null,mobileChat=null}={}){
+const sections=[
+ ['Workspace',['Overview','Chats','Announcements']],
+ ['Inbox',['Tickets','Support','Payment tickets','Reports','Feedback']],
+ ['Management',['Accounts','Keys','Sellers','Payments']],
+ ['Operations',['Monitoring','Audit','Archive']]
+];
+function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{},media=null,mobileChat=null,initialTab=null}={}){
  root.classList.add('cc-root');root.replaceChildren();
- let revision=0,current=location.pathname==='/control/monitoring'?'Monitoring':'Overview',query='',cursor='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false;
+ const groupFor=tab=>sections.find(([,tabs])=>tabs.includes(tab))?.[0];
+ let revision=0,current=groupFor(initialTab)?initialTab:location.pathname==='/control/monitoring'?'Monitoring':'Overview';
+ let query='',scope='all',cursor='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false,updateOverview=null;
  const header=el('header','','cc-header'),identity=el('div','','cc-identity'),brand=el('h1','qzu.'),server=el('p',location.origin,'cc-muted'),connection=el('span','Connecting…','cc-connection');
  brand.append(el('span',' Control','cc-accent'));identity.append(brand,server);const adminProfile=el('span','','cc-admin-profile cc-admin-profile-logo');const adminAvatar=el('span','','cc-chat-avatar cc-chat-admin-avatar');adminAvatar.setAttribute('aria-hidden','true');adminProfile.append(adminAvatar,el('span','qzu-Support ✓'));header.append(adminProfile);header.append(identity,connection,button(mobile?'Close':'Sign out',async()=>{stop();if(!mobile)await api('logout',{}).catch(()=>{});onExit();},'cc-secondary'));
- const layout=el('div','','cc-layout'),nav=el('nav','','cc-nav'),main=el('section','','cc-content');main.setAttribute('aria-label','Control Center content');layout.append(nav,main);root.append(header,layout);
- const tabs=['Chats','Announcements','Tickets','Sellers','Overview','Accounts','Keys','Payments','Payment tickets','Reports','Feedback','Support','Audit','Archive','Monitoring'];
- for(const tab of tabs){const b=button('',()=>navigate(tab),'cc-tab');b.dataset.tab=tab;b.append(el('span',tab),el('span','','cc-count'));nav.append(b);}
+ const layout=el('div','','cc-layout'),nav=el('nav','','cc-nav'),main=el('section','','cc-content');
+ nav.setAttribute('aria-label','Control Center sections');main.setAttribute('aria-label','Control Center content');
+ layout.append(nav,main);root.append(header,layout);
+ const groups=new Map(),tabs=new Map(),sectionPicker=select(sections.map(([label])=>[label,label]));
+ sectionPicker.className='cc-section-picker';
+ sectionPicker.setAttribute('aria-label','Control Center section');
+ sectionPicker.addEventListener('change',()=>navigate(sections.find(([label])=>label===sectionPicker.value)[1][0]));
+ nav.append(sectionPicker);
+ for(const [label,names] of sections){
+  const group=el('div','','cc-nav-group');
+  group.setAttribute('role','group');
+  group.setAttribute('aria-label',label);
+  group.append(el('span',label,'cc-nav-heading'));
+  for(const name of names){
+   const control=button('',()=>navigate(name),'cc-tab');
+   control.append(el('span',name),el('span','','cc-count'));
+   tabs.set(name,control);group.append(control);
+  }
+  groups.set(label,group);nav.append(group);
+ }
  const alive=token=>!closed&&isActive()&&token===revision;
  function stop(){closed=true;revision++;clearInterval(inboxTimer);if(objectURL)URL.revokeObjectURL(objectURL);root.replaceChildren();}
- function navigate(tab){if(mobile&&tab==='Chats'&&mobileChat){stop();mobileChat();return;}current=tab;query='';cursor='';if(!mobile&&location.pathname==='/control/monitoring'&&tab!=='Monitoring')history.replaceState(null,'','/control');else if(!mobile&&tab==='Monitoring')history.replaceState(null,'','/control/monitoring');load();}
- function updateCount(tab,count){const n=[...nav.children].find(b=>b.dataset.tab===tab)?.lastElementChild;if(n){n.textContent=count>0?String(count):'';n.hidden=!count;}}
+ function navigate(tab,nextScope='all'){if(mobile&&tab==='Chats'&&mobileChat){stop();mobileChat();return;}current=tab;query='';cursor='';scope=nextScope;if(!mobile&&location.pathname==='/control/monitoring'&&tab!=='Monitoring')history.replaceState(null,'','/control');else if(!mobile&&tab==='Monitoring')history.replaceState(null,'','/control/monitoring');load();}
+ function updateCount(tab,count){const n=tabs.get(tab).lastElementChild;n.textContent=count>0?String(count):'';n.hidden=!count;}
+ function routeFor(view,archived=false){
+  const route=view==='Payment tickets'?'payment-tickets':view.toLowerCase();
+  if(archived)return route+'?archived=1';
+  if(['Tickets','Payments'].includes(view))return route+'?scope='+encodeURIComponent(scope);
+  if(!['Accounts','Keys','Audit'].includes(view))return route;
+  return route+'?q='+encodeURIComponent(query)+(cursor?(view==='Audit'?'&before=':'&after=')+encodeURIComponent(cursor):'');
+ }
  async function pollInbox(){
   if(closed||!isActive()||document.hidden||pollingInbox)return;
   pollingInbox=true;
@@ -26,10 +58,16 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    const info=await api('inbox');if(closed)return;
    server.textContent=(info.environment==='production'?'Production':'Development')+' · '+(mobile?'Mobile':location.host)+' · v'+info.version+' · Admin '+info.adminId.slice(0,8);
    connection.textContent='Connected';connection.dataset.state='online';
-   updateCount('Payment tickets',info.paymentTickets);updateCount('Support',info.supportRequests);updateCount('Tickets',info.userTickets);
-   if(listView&&['Payment tickets','Support','Tickets','Sellers'].includes(current)){
-    const token=revision,tab=current,data=await api(tab==='Payment tickets'?'payment-tickets':tab.toLowerCase());
-    if(alive(token)&&listView&&tab===current&&JSON.stringify(data)!==listSignature&&!main.querySelector('textarea:focus, input:focus, button:disabled, dialog[open]')&&![...main.querySelectorAll('textarea')].some(n=>n.value.trim()))load(data);
+   const work=info.work||{};
+   updateCount('Payment tickets',work.paymentTickets??info.paymentTickets);
+   updateCount('Support',info.supportRequests);
+   updateCount('Tickets',work.claimableTickets??info.userTickets);
+   updateCount('Reports',work.reports);
+   updateCount('Feedback',work.feedback);
+   updateOverview?.(work);
+   if(listView){
+    const token=revision,data=await api(routeFor(current));
+    if(alive(token)&&listView&&JSON.stringify(data)!==listSignature&&!main.contains(document.activeElement)&&!root.querySelector('dialog[open]'))load(data);
    }
   }catch(e){if(!closed){if(e.status===401){stop();onExit();return;}connection.textContent='Connection unavailable';connection.dataset.state='offline';}}
   finally{pollingInbox=false;}
@@ -49,10 +87,71 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  function confirmAction(title,fn,{plan=false}={}){
   const box=card(title);const reason=input('Reason (required)');reason.maxLength=500;const picker=select(plans);if(plan)box.append(picker);box.append(reason,action('Confirm',async()=>{if(!reason.value.trim())throw Error('Enter a reason.');await fn(reason.value.trim(),picker.value);await load();},'cc-danger'),button('Cancel',()=>box.remove(),'cc-secondary'));main.prepend(box);
  }
+ function renderOverview(data){
+  const queue=el('section','','cc-queue');
+  const queueHeading=el('h3','Needs attention');
+  const queueRows=el('div','','cc-queue-list');
+  const empty=el('p','No open work in your queues.','cc-muted cc-queue-empty');
+  empty.setAttribute('role','status');
+  const items=[
+   ['Open reports','Review reports awaiting a moderation decision.','Reports','all',work=>work.reports],
+   ['Deletion requests','Review customer requests assigned to you.','Support','all',work=>work.deletionRequests],
+   ['Verified payments','Release access for verified payments.','Payment tickets','all',work=>work.paymentReleases],
+   ['Payments to review','Recheck older submissions and review legacy orders.','Payments','review',work=>work.stalePayments+work.legacyPayments],
+   ['Unassigned tickets','Claim a ticket or take over from an unavailable admin.','Tickets','claim',work=>work.claimableTickets],
+   ['My tickets','Continue tickets assigned to you.','Tickets','mine',work=>work.assignedTickets],
+   ['Support requests','Respond to new requests assigned to you.','Support','all',work=>work.supportRequests],
+   ['Other payment tickets','Review questions and ongoing payment cases.','Payment tickets','all',work=>work.paymentTickets-work.paymentReleases],
+   ['Open feedback','Review feedback before it is marked solved.','Feedback','all',work=>work.feedback]
+  ];
+  const counters=items.map(([label,hint,tab,targetScope,total])=>{
+   const row=button('',()=>navigate(tab,targetScope),'cc-queue-row cc-secondary');
+   const summary=el('span','','cc-queue-text'),count=el('strong','—','cc-queue-count'),arrow=el('span','›','cc-queue-arrow');
+   summary.append(el('strong',label),el('small',hint));arrow.setAttribute('aria-hidden','true');
+   row.append(summary,count,arrow);queueRows.append(row);
+   row.addEventListener('blur',()=>{row.hidden=row.dataset.pending!=='true';});
+   return {row,count,total};
+  });
+  updateOverview=work=>{
+   let hasWork=false;
+   for(const {row,count,total} of counters){
+    const value=total(work);
+    const label=Number.isFinite(value)?String(value):'—';
+    if(count.textContent!==label)count.textContent=label;
+    const pending=value>0;
+    row.dataset.pending=String(pending);
+    row.hidden=!pending&&document.activeElement!==row;
+    if(pending)hasWork=true;
+   }
+   empty.hidden=hasWork;
+  };
+  updateOverview(data.work||{});
+  queue.append(queueHeading,queueRows,empty);
+  const metrics=el('div','','cc-metrics cc-overview-metrics');
+  for(const [label,value] of [
+   ['Active accounts',data.active],['Total accounts',data.accounts],['Admin accounts',data.admins],
+   ['Unused access keys',data.keys],['Verified USD revenue','$'+(data.revenue/100).toFixed(2)]
+  ]){
+   const metric=el('article','','cc-metric');
+   metric.append(el('strong',String(value??'—')),el('span',label));
+   metrics.append(metric);
+  }
+  const directory=el('section','','cc-queue');
+  directory.append(el('h3','Account and payment totals'),metrics);
+  main.append(queue,directory);
+ }
+ function queuePicker(label,choices){
+  const field=select(choices);
+  field.setAttribute('aria-label',label);
+  field.value=scope;
+  field.addEventListener('change',()=>{scope=field.value;load(null,true);});
+  field.className='cc-queue-picker';
+  return field;
+ }
  async function openPaymentTicket(id){
   listView=false;const token=++revision;main.replaceChildren(el('h2','Payment Ticket'),button('‹ Back',load,'cc-secondary'));
   const n=el('div','','cc-ticket'),summary=el('div','','cc-muted'),chat=el('div','','cc-snapshot cc-ticket-chat'),field=el('textarea'),feedback=el('p','','cc-muted');
-  field.placeholder='Write a reply';field.maxLength=2000;let last='',busy=false,polling=false,pending=null,mutation=0;
+  field.placeholder='Write a reply';field.maxLength=2000;field.disabled=true;let last='',busy=false,polling=false,pending=null,mutation=0;
   const actions=el('div','','cc-actions');
   const send=action('Send reply',async()=>{if(busy||!field.value.trim())return;const text=field.value.trim(),requestId=pending?.text===text?pending.requestId:crypto.randomUUID();pending={text,requestId};busy=true;mutation++;try{const t=await api('payment-tickets/send',{id,text,requestId});if(alive(token)){field.value='';pending=null;render(t);}}finally{busy=false;}});
   const verify=action('Verify transaction',async()=>{if(busy)return;busy=true;mutation++;try{render(await api('payment-tickets/verify',{id}));}finally{busy=false;}});
@@ -60,12 +159,14 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   const close=action('Close ticket',async()=>{if(busy)return;busy=true;mutation++;try{render(await api('payment-tickets/close',{id}));}finally{busy=false;}},'cc-secondary');
   const review=action('Start review',async()=>{if(busy)return;busy=true;mutation++;try{render(await api('payment-tickets/review',{id}));}finally{busy=false;}},'cc-secondary');
   const reject=button('Reject ticket',()=>{const box=card('Reject ticket',[el('p','This closes the chat, not the payment order. A customer can open another ticket.')]);const reason=el('textarea');reason.placeholder='Reason for rejection';reason.maxLength=500;box.append(reason,action('Confirm rejection',async()=>{if(busy||!reason.value.trim())return;busy=true;mutation++;try{render(await api('payment-tickets/reject',{id,reason:reason.value.trim()}));box.remove();}finally{busy=false;}},'cc-danger'),button('Cancel',()=>box.remove(),'cc-secondary'));n.append(box);},'cc-danger');
+  for(const control of [review,verify,release,reject,close,send])control.hidden=true;
   actions.append(review,verify,release,reject,close);n.append(summary,chat,feedback,field,send,actions);main.append(n);
   function render(t){
    if(!alive(token))return;summary.textContent=t.plan+' · $'+t.usd+' · '+t.coin+' · '+t.amount+' '+t.coin+' · '+t.state+(t.txid?' · '+t.txid:'');
    const fp=JSON.stringify([t.messages.map(m=>m.id),t.state,t.released,t.redeemed,t.closed,t.confirmations,t.txid,t.status,t.reason]);
    if(fp!==last){last=fp;const bottom=chat.scrollHeight-chat.scrollTop-chat.clientHeight<80,top=chat.scrollTop;chat.replaceChildren();for(const m of t.messages){const b=el('div','','cc-bubble '+(m.actor==='customer'?'other':'mine'));b.append(el('small',(m.actor==='customer'?'Customer':'Support · '+m.actor.slice(0,8))+' · '+date(m.at)));if(m.text)b.append(el('p',m.text));if(m.hasProof)b.append(action('View proof',async()=>{const data=await api('payment-tickets/proof',{id,message:m.id});if(alive(token)&&b.isConnected){const image=el('img');image.src='data:image/png;base64,'+data.data;image.alt='Submitted payment proof';image.className='cc-evidence';b.append(image);}}));chat.append(b);}if(t.released)chat.append(el('p','Verified key delivered to customer.','cc-muted'));if(t.reason)chat.append(el('p','Rejected: '+t.reason,'cc-error'));chat.scrollTop=bottom?chat.scrollHeight:top;}
-   review.hidden=t.closed||t.status==='review';reject.hidden=t.closed||t.state==='confirmed'||t.confirmations>0;verify.hidden=t.closed||t.state!=='submitted';release.hidden=t.closed||t.released||t.state!=='confirmed';close.hidden=t.closed||!t.released;field.disabled=t.closed;send.hidden=t.closed;feedback.textContent=t.closed?'This ticket is closed.':t.status==='review'?'Under review': 'Open ticket';
+   review.hidden=t.closed||t.status==='review';reject.hidden=t.closed||t.state==='confirmed'||t.confirmations>0;verify.hidden=t.closed||t.state!=='submitted';release.hidden=t.closed||t.released||t.state!=='confirmed';close.hidden=t.closed||!t.released;field.disabled=t.closed;send.hidden=t.closed;
+   feedback.textContent=t.closed?'This ticket is closed.':t.needsReview?'Payment needs review. Automatic checks have ended.':t.status==='review'?'Under review':'Open ticket';
   }
   async function poll(){if(!alive(token)||polling)return;polling=true;try{if(!busy){const observed=mutation,t=await api('payment-tickets/state',{id});if(alive(token)&&!busy&&observed===mutation)render(t);}}catch(e){if(alive(token)){if(e.message==='Ticket unavailable.'){revision++;main.replaceChildren(el('h2','Ticket unavailable'),button('Back to tickets',load,'cc-secondary'));}else feedback.textContent=e.message;}}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}
   poll();
@@ -101,34 +202,98 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  }
  function renderAnnouncements(initial,token){
   const feed=el('div','','cc-announcements-feed'),draft=el('textarea');
-  let posts=initial.posts,busy=false,fp='';
+  let snapshot=initial,posts=initial.posts,hasOlder=Boolean(initial.hasOlder),pages=1,busy=false,fingerprint='';
   draft.placeholder='Write an announcement…';draft.maxLength=2000;
-  const send=action('Publish to everyone',async()=>{if(busy||!draft.value.trim())return;busy=true;try{await api('announcements/publish',{text:draft.value.trim()});draft.value='';}finally{busy=false;}await poll();});
-  function draw(){if(!alive(token))return;const next=JSON.stringify(posts);if(fp===next)return;fp=next;feed.replaceChildren();for(const p of posts){const row=el('article','','cc-announcement'),head=el('div','','cc-announcement-head'),menu=el('details','','cc-announcement-menu');const trigger=el('summary','⋯');trigger.setAttribute('aria-label','Announcement options');menu.append(trigger,action('Delete for all',async()=>{if(busy||!await modalConfirm('Permanently delete this announcement for everyone?'))return;busy=true;try{await api('announcements/delete',{id:p.id});posts=posts.filter(x=>x.id!==p.id);draw();}finally{busy=false;}await poll();},'cc-danger'));head.append(el('strong','qzu-Support'),el('span','✓','cc-admin-mark'),el('small',date(p.at),'cc-muted'),menu);row.append(head,el('p',p.text));feed.append(row);}if(!posts.length)feed.append(el('p','No announcements yet.','cc-muted'));}
-  async function poll(){if(!alive(token)||busy||document.hidden)return;busy=true;try{const d=await api('announcements');if(!alive(token))return;posts=d.posts;draw();}catch(e){if(alive(token))error(e);}finally{busy=false;}}
-  main.append(feed,draft,send);draw();async function tick(){if(!alive(token))return;await poll();if(alive(token))setTimeout(tick,5000);}setTimeout(tick,5000);
+  draft.setAttribute('aria-label','Announcement text');
+  const send=action('Publish to everyone',async()=>{
+   const text=draft.value.trim();
+   if(!text||!await modalConfirm('Publish this announcement to all accounts?')||!alive(token))return;
+   busy=true;
+   try{await api('announcements/publish',{text});if(draft.value.trim()===text)draft.value='';}
+   finally{busy=false;}
+   await poll();
+  });
+  const older=action('Load earlier announcements',async()=>{
+   if(busy||!posts.length)return;
+   busy=true;
+   try{
+    const page=await api('announcements?before='+posts[0].id);
+    if(!alive(token))return;
+    if(page.deletedRevision!==snapshot.deletedRevision){await reload(true);return;}
+    posts=[...page.posts,...posts];hasOlder=Boolean(page.hasOlder);pages++;
+    draw();
+   }finally{busy=false;}
+  },'cc-secondary');
+  function draw(){
+   if(!alive(token))return;
+   older.hidden=!hasOlder;
+   const next=JSON.stringify(posts);
+   if(fingerprint===next)return;
+   fingerprint=next;feed.replaceChildren();
+   for(const p of [...posts].reverse()){
+    const row=el('article','','cc-announcement'),head=el('div','','cc-announcement-head'),menu=el('details','','cc-announcement-menu');
+    const trigger=el('summary','⋯');trigger.setAttribute('aria-label','Announcement options');
+    menu.append(trigger,action('Delete for all',async()=>{
+     if(!await modalConfirm('Permanently delete this announcement for everyone?')||!alive(token))return;
+     busy=true;
+     try{await api('announcements/delete',{id:p.id});posts=posts.filter(x=>x.id!==p.id);draw();}
+     finally{busy=false;}
+     await poll();
+    },'cc-danger'));
+    head.append(el('strong','qzu-Support'),el('span','✓','cc-admin-mark'),el('small',date(p.at),'cc-muted'),menu);
+    row.append(head,el('p',p.text));feed.append(row);
+   }
+   if(!posts.length)feed.append(el('p','No announcements yet.','cc-muted'));
+  }
+  async function reload(force=false){
+   const next=await api('announcements');
+   if(!alive(token)||!force&&JSON.stringify(next)===JSON.stringify(snapshot))return;
+   let current=next.posts,more=Boolean(next.hasOlder);
+   for(let i=1;i<pages&&more;i++){
+    const page=await api('announcements?before='+current[0].id);
+    if(!alive(token)||page.deletedRevision!==next.deletedRevision)return;
+    current=[...page.posts,...current];more=Boolean(page.hasOlder);
+   }
+   snapshot=next;posts=current;hasOlder=more;draw();
+  }
+  async function poll(){
+   if(!alive(token)||busy||document.hidden||feed.querySelector('details[open]'))return;
+   busy=true;try{await reload();}catch(e){if(alive(token))error(e);}finally{busy=false;}
+  }
+  main.append(card('New announcement',[draft,send]),feed,older);draw();
+  async function tick(){if(!alive(token))return;await poll();if(alive(token))setTimeout(tick,15000);}
+  setTimeout(tick,15000);
  }
  async function openUserTicket(id){
   listView=false;const token=++revision;main.replaceChildren(el('h2','Ticket'),button('‹ Back',()=>load(),'cc-secondary'));
   const info=el('p','','cc-muted'),feed=el('div','','cc-ticket-chat cc-snapshot'),field=el('textarea'),controls=el('div','','cc-actions'),seller=select([['','Choose a seller']]),notice=el('p','','cc-muted');field.placeholder='Write a reply…';field.maxLength=2000;
-  let current=null,busy=false,polling=false,fp='',pending=null,available=[],lastPollError='';
-  const act=(label,path,data,cls='')=>action(label,async()=>{if(busy)return;busy=true;try{const t=await api(path,data());if(alive(token))render(t);}finally{busy=false;}},cls);
+  field.setAttribute('aria-label','Ticket reply');seller.setAttribute('aria-label','Seller');
+  let current=null,busy=false,polling=false,fp='',pending=null,available=[],lastPollError='',mutation=0;
+  const act=(label,path,data,cls='')=>action(label,async()=>{if(busy)return;busy=true;mutation++;try{const t=await api(path,data());if(alive(token))render(t);}finally{busy=false;}},cls);
   const accept=act('Accept ticket','tickets/action',()=>({id,action:'accept'})),assign=act('Add seller','tickets/action',()=>({id,action:'assign',seller:seller.value})),share=act('Share seller code','tickets/action',()=>({id,action:'share',seller:seller.value}),'cc-secondary');
-  const adminPicker=select([['','Choose administrator']]);const transfer=act('Transfer ticket','tickets/action',()=>({id,action:'transfer',seller:adminPicker.value}),'cc-secondary');transfer.disabled=true;adminPicker.addEventListener('change',()=>{transfer.disabled=!adminPicker.value;});
+  const adminPicker=select([['','Choose administrator']]);adminPicker.setAttribute('aria-label','Transfer to administrator');
+  const transfer=act('Transfer ticket','tickets/action',()=>({id,action:'transfer',seller:adminPicker.value}),'cc-secondary');transfer.disabled=true;adminPicker.addEventListener('change',()=>{transfer.disabled=!adminPicker.value;});
   const remove=act('Remove seller','tickets/action',()=>({id,action:'remove',seller:seller.value}),'cc-secondary');
   const erase=action('Delete archived ticket',async()=>{if(busy||!await modalConfirm('Permanently delete this archived ticket?'))return;busy=true;try{await api('tickets/action',{id,action:'delete'});toast('Ticket deleted','success');if(alive(token))await load();}finally{busy=false;}},'cc-danger');erase.hidden=true;
   const close=action('Close & archive',async()=>{if(busy||!await modalConfirm('Close this ticket and archive it?'))return;busy=true;try{await api('tickets/action',{id,action:'close'});if(alive(token)){toast('Ticket closed and archived','success');await load();}}finally{busy=false;}},'cc-danger');
-  const send=action('Send reply',async()=>{if(busy||!field.value.trim())return;const text=field.value.trim();if(!pending||pending.text!==text)pending={text,requestId:crypto.randomUUID()};busy=true;try{const t=await api('tickets/send',{id,...pending});if(alive(token)){if(field.value.trim()===text)field.value='';pending=null;render(t);}}finally{busy=false;}});
+  const send=action('Send reply',async()=>{if(busy||!field.value.trim())return;const text=field.value.trim();if(!pending||pending.text!==text)pending={text,requestId:crypto.randomUUID()};busy=true;mutation++;try{const t=await api('tickets/send',{id,...pending});if(alive(token)){if(field.value.trim()===text)field.value='';pending=null;render(t);}}finally{busy=false;}});
   controls.append(accept,seller,assign,share,remove,adminPicker,transfer,close,erase);seller.addEventListener('change',updateSellerControls);
   function lock(b,v){b.dataset.locked=v?'1':'0';b.disabled=v;}
-  function updateSellerControls(){const editable=current&&!current.closed&&current.canReply,selected=seller.value,members=current?.sellers||[];lock(assign,!editable||!selected||!available.includes(selected)||members.includes(selected));lock(share,!editable||!selected||!available.includes(selected));lock(remove,!editable||!selected||!members.includes(selected));}updateSellerControls();main.append(info,feed,notice,field,send,controls);
-  function render(t){if(!alive(token))return;current=t;info.textContent=t.topic+' · '+(t.closed?'Solved':t.assigned?'Open':'Waiting for admin')+' · Customer '+(t.owner||'—')+' · Assigned admin '+(t.admin||'Unassigned');
-   const key=JSON.stringify(t.messages);if(key!==fp){fp=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80,top=feed.scrollTop;feed.replaceChildren();for(const m of t.messages){const b=el('div','','cc-bubble '+(m.mine?'mine':'other')),name=m.role==='admin'?'qzu-Support ✓':m.role==='verified-seller'?(m.name||'Seller')+' ✓':m.role==='seller'?(m.name||'Seller'):m.role==='system'?'Ticket':'Customer';b.append(el('small',name+(m.actor?' · '+m.actor.slice(0,8):'')+' · '+date(m.at),m.role==='admin'?'cc-admin-mark':m.role==='verified-seller'?'cc-seller-mark':''),el('p',m.text));feed.append(b);}feed.scrollTop=bottom?feed.scrollHeight:top;}
-   accept.hidden=Boolean(t.closed||t.assigned);const editable=!t.closed&&t.canReply;field.disabled=!editable;send.hidden=!editable;seller.hidden=!editable;assign.hidden=!editable;share.hidden=!editable;remove.hidden=!editable;adminPicker.hidden=!editable;transfer.hidden=!editable;close.hidden=!editable;erase.hidden=!t.closed;updateSellerControls();notice.textContent=t.closed?'Ticket closed and archived.':t.assigned&&!editable?'Assigned to another administrator.':editable&&!available.length?'No available sellers.':'';
+  function updateSellerControls(){const editable=current&&!current.closed&&current.canReply,selected=seller.value,members=current?.sellers||[];lock(assign,!editable||!selected||!available.includes(selected)||members.includes(selected));lock(share,!editable||!selected||!available.includes(selected));lock(remove,!editable||!selected||!members.includes(selected));}
+  for(const control of [field,send,...controls.children])control.hidden=true;
+  info.textContent='Loading ticket…';updateSellerControls();main.append(info,feed,notice,field,send,controls);
+  function render(t){if(!alive(token))return;current=t;info.textContent=t.topic+' · '+(t.closed?'Closed':t.assigned?'Open':'Waiting for admin')+' · Customer '+(t.owner||'—')+' · Assigned admin '+(t.admin||'Unassigned');
+   const key=JSON.stringify(t.messages);if(key!==fp){fp=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80,top=feed.scrollTop;feed.replaceChildren();for(const m of t.messages){const b=el('div','','cc-bubble '+(m.mine?'mine':'other')),name=m.role==='admin'?'qzu-Support ✓':m.role==='verified-seller'?(m.name||'Seller')+' ✓':m.role==='seller'?(m.name||'Seller'):m.role==='system'?'Ticket':'Customer';b.append(el('small',name+(m.actor?' · '+m.actor.slice(0,8):'')+' · '+date(m.at),m.role==='admin'?'cc-admin-mark':m.role==='verified-seller'?'cc-seller-mark':''),el('p',m.text));feed.append(b);}if(t.transcriptExpired)feed.append(el('p','The conversation was deleted after the seven-day retention period.','cc-muted'));feed.scrollTop=bottom?feed.scrollHeight:top;}
+   accept.hidden=!t.claimable;accept.textContent=t.claimable&&t.admin?'Reclaim ticket':'Accept ticket';
+   const editable=!t.closed&&t.canReply;field.hidden=!editable;field.disabled=!editable;
+   send.hidden=seller.hidden=assign.hidden=share.hidden=remove.hidden=adminPicker.hidden=transfer.hidden=close.hidden=!editable;
+   erase.hidden=!t.closed;updateSellerControls();
+   notice.textContent=t.closed?'Ticket closed and archived.':t.claimable&&t.admin?'The assigned admin is unavailable. Reclaim the ticket to reply.':t.assigned&&!editable?'Assigned to another administrator.':editable&&!available.length?'No available sellers.':'';
   }
-  try{const d=await api('sellers');if(alive(token)){available=d.items.filter(p=>p.active).map(p=>p.account);for(const p of d.items.filter(p=>p.active)){const o=el('option',(p.name||'Seller')+' · '+p.account.slice(0,8)+(p.verified?' ✓':''));o.value=p.account;seller.append(o);}}updateSellerControls();}catch(e){if(alive(token))error(e);}
-  try{const admins=await api('ticket-admins');if(alive(token))for(const a of admins.items){const o=el('option','Admin '+a.id.slice(0,8));o.value=a.id;adminPicker.append(o);}}catch(e){if(alive(token))error(e);}
-  async function poll(){if(!alive(token)||polling)return;polling=true;try{if(!busy&&!document.hidden){const t=await api('tickets/state',{id});lastPollError='';if(!busy)render(t);}}catch(e){if(alive(token)&&lastPollError!==e.message){lastPollError=e.message;error(e);}}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}poll();
+  api('sellers').then(d=>{if(!alive(token))return;for(const p of d.items.filter(p=>p.active)){available.push(p.account);const o=el('option',(p.name||'Seller')+' · '+p.account.slice(0,8)+(p.verified?' ✓':''));o.value=p.account;seller.append(o);}renderCurrent();}).catch(e=>{if(alive(token))error(e);});
+  api('ticket-admins').then(admins=>{if(alive(token))for(const a of admins.items){const o=el('option','Admin '+a.id.slice(0,8));o.value=a.id;adminPicker.append(o);}}).catch(e=>{if(alive(token))error(e);});
+  function renderCurrent(){if(current)render(current);}
+  async function poll(){if(!alive(token)||polling)return;polling=true;try{if(!busy&&!document.hidden){const observed=mutation,t=await api('tickets/state',{id});lastPollError='';if(!busy&&observed===mutation)render(t);}}catch(e){if(alive(token)&&lastPollError!==e.message){lastPollError=e.message;error(e);}}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}poll();
  }
  async function openSupportCase(id,archived=false){
   listView=false;const token=++revision;main.replaceChildren(el('h2','Support conversation'),button('‹ Back to inbox',()=>load(),'cc-secondary'));
@@ -143,27 +308,48 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   async function refresh(){const d=await api('support'+(archived?'?archived=1':''));if(!alive(token))return;const p=d.requests.find(r=>r.id===id),r=d.rooms.find(r=>r.id===id),f=d.finished.find(r=>r.id===id),t=p||r||f;if(!t){await load();return;}meta.textContent='#'+id.slice(0,8)+' · '+(p?'Pending request':r?'Active conversation':f.status);accept.hidden=reject.hidden=!p;solve.hidden=!r;field.hidden=send.hidden=!r;const messages=r?.messages||f?.messages||(p?.preview?[{mine:false,text:p.preview,at:p.at}]:[]);const key=JSON.stringify(messages);if(key!==fp){fp=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80,top=feed.scrollTop;feed.replaceChildren();for(const m of messages){const b=el('div','','cc-bubble '+(m.mine?'mine':'other'));b.append(el('small',(m.mine?'qzu-Support ✓':'Customer')+' · '+date(m.at)),el('p',m.text));feed.append(b);}feed.scrollTop=bottom?feed.scrollHeight:top;}}
   async function poll(){if(!alive(token))return;try{if(!busy&&!document.hidden){await refresh();lastError='';}}catch(e){if(alive(token)&&lastError!==e.message){lastError=e.message;error(e);}}finally{if(alive(token))setTimeout(poll,4000);}}poll();
  }
- async function load(prefetched=null){
-  listView=false;const token=++revision;if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
-  for(const b of nav.children){b.classList.toggle('selected',b.dataset.tab===current);b.setAttribute('aria-current',b.dataset.tab===current?'page':'false');}
+ async function load(prefetched=null,focusQueue=false){
+  listView=false;updateOverview=null;const token=++revision;if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
+  sectionPicker.value=groupFor(current);
+  for(const [label,group] of groups)group.classList.toggle('current',label===sectionPicker.value);
+  for(const [name,control] of tabs){
+   control.classList.toggle('selected',name===current);
+   if(name===current)control.setAttribute('aria-current','page');
+   else control.removeAttribute('aria-current');
+  }
   main.replaceChildren(el('h2',current),el('p','Loading…','cc-muted'));
   try{
    const archived=current==='Archive',view=archived?archiveTab:current;
-   const route=view==='Payment tickets'?'payment-tickets':view.toLowerCase();
-   const url=route+(archived?'?archived=1':['Accounts','Keys','Audit'].includes(view)?'?q='+encodeURIComponent(query)+(cursor?(view==='Audit'?'&before=':'&after=')+encodeURIComponent(cursor):''):'');
    if(view==='Chats'){main.replaceChildren(el('h2','Chats'));await window.QzuDesktopMessenger(main,api,()=>alive(token),{error,confirm:modalConfirm});return;}
-   const data=await (prefetched&&typeof prefetched==='object'&&('items' in prefetched||'requests' in prefetched)?prefetched:api(url));if(!alive(token))return;listSignature=JSON.stringify(data);main.replaceChildren(el('h2',current),button('Refresh',()=>load(),'cc-secondary'));
-   if(archived){const sub=el('div','','cc-actions cc-archive-tabs');for(const name of ['Reports','Feedback','Payment tickets','Payments','Support','Tickets'])sub.append(button(name,()=>{archiveTab=name;load();},name===archiveTab?'':'cc-secondary'));main.append(sub,el('p','Finished records only. Restoring returns them to the working list. Existing privacy retention still applies.','cc-muted'));}
+   const data=await (prefetched&&typeof prefetched==='object'&&('items' in prefetched||'requests' in prefetched)?prefetched:api(routeFor(view,archived)));
+   if(!alive(token))return;
+   listSignature=JSON.stringify(data);
+   const heading=el('div','','cc-view-heading');heading.append(el('h2',current));
+   if(view!=='Monitoring')heading.append(button('Refresh',()=>load(),'cc-secondary'));
+   main.replaceChildren(heading);
+   if(archived){
+    const sub=el('div','','cc-actions cc-archive-tabs');
+    for(const name of ['Reports','Feedback','Payment tickets','Payments','Support','Tickets']){
+     const control=button(name==='Tickets'?'Closed user tickets':name,()=>{archiveTab=name;load();},name===archiveTab?'':'cc-secondary');
+     control.setAttribute('aria-pressed',String(name===archiveTab));sub.append(control);
+    }
+    const explanation=view==='Tickets'?'Closed tickets remain listed after their transcripts are deleted.':'Use Restore to return a record to its working list. Retention limits still apply.';
+    main.append(sub,el('p',explanation,'cc-muted'));
+   }
    if(view==='Announcements'){renderAnnouncements(data,token);}else if(view==='Tickets'){
-     for(const t of data.items){const n=card(t.topic+' · #'+t.id.slice(0,8),[status(t.closed?'solved':t.assigned?'active':'inspection'),details([['Created by',t.owner],['Assigned admin',t.admin||'Unassigned'],['Created',date(t.created)],['Updated',date(t.updated)],['Assigned sellers',(t.sellers||[]).join(', ')||'None']]),button('Open ticket',()=>openUserTicket(t.id))]);main.append(n);}listView=!archived;
+    if(!archived)main.append(queuePicker('Ticket queue',[['all','All open tickets'],['claim','Unassigned and reclaimable'],['mine','Assigned to me']]));
+    for(const t of data.items){
+     const label=t.closed?'Closed':t.claimable?(t.admin?'Ready to reclaim':'Unassigned'):'Assigned';
+     const badge=el('span',label,'cc-status '+(t.claimable?'yellow':'green'));
+     main.append(card(t.topic+' · #'+t.id.slice(0,8),[badge,details([['Created by',t.owner],['Assigned admin',t.admin||'Unassigned'],['Created',date(t.created)],['Updated',date(t.updated)],['Assigned sellers',(t.sellers||[]).join(', ')||'None']]),button(t.closed?'View archived ticket':'Open ticket',()=>openUserTicket(t.id))]));
+    }
+    listView=!archived;
    }else if(view==='Sellers'){
-     const controls=el('div','','cc-actions');controls.append(action('Generate Seller key',async()=>{const result=await api('sellers/generate',{});if(!alive(token))return;const d=el('dialog','','cc-seller-dialog');d.append(el('h2','Seller key generated'),el('p','Save this one-time activation secret privately.','cc-muted'),el('code',result.key,'cc-secret'),action('Copy key',()=>navigator.clipboard.writeText(result.key)),button('Done',()=>{d.close();d.remove();},'cc-secondary'));main.append(d);d.addEventListener('close',()=>d.remove());d.showModal();}),button('View Seller Accounts',()=>load(),'cc-secondary'));main.append(controls);
+     const controls=el('div','','cc-actions');controls.append(action('Generate Seller key',async()=>{const result=await api('sellers/generate',{});if(!alive(token))return;const d=el('dialog','','cc-seller-dialog');d.append(el('h2','Seller key generated'),el('p','Save this one-time activation secret privately.','cc-muted'),el('code',result.key,'cc-secret'),action('Copy key',()=>navigator.clipboard.writeText(result.key)),button('Done',()=>{d.close();d.remove();},'cc-secondary'));main.append(d);d.addEventListener('close',()=>d.remove());d.showModal();}));main.append(controls);
      for(const p of data.items){const n=card((p.name||'Seller')+' · '+p.account.slice(0,8),[status(p.active?'active':'revoked'),details([['Account',p.account],['Created',date(p.created)],['Current connection code',p.code],['Next rotation',date(p.rotates)],['Verification',p.verified?'Verified':'Not verified']])]);if(p.verified)n.append(el('span','✓ Verified Seller','cc-seller-mark'));if(p.code)n.append(action('Copy connection code',()=>navigator.clipboard.writeText(p.code),'cc-secondary'),action('Rotate connection code',async()=>{if(!await modalConfirm('Rotate this seller’s code? The old code stops working immediately.'))return;await api('sellers/rotate',{id:p.account});toast('Connection code rotated','success');if(alive(token))await load();},'cc-secondary'));n.append(action(p.revoked?'Restore seller access':'Suspend seller',async()=>{if(!await modalConfirm(p.revoked?'Restore seller access?':'Suspend this seller’s access?'))return;await api('sellers/access',{id:p.account,suspended:!p.revoked});toast('Seller access updated','success');if(alive(token))await load();},'cc-secondary'));n.append(action(p.verified?'Revoke verification':'Verify Seller',async()=>{await api('sellers/verify',{id:p.account,verified:!p.verified});if(alive(token))await load();},p.verified?'cc-danger':''));main.append(n);}
     listView=true;
    }else if(view==='Monitoring'){renderMonitoring(data,token);}else if(view==='Overview'){
-    const metrics=el('div','','cc-metrics');for(const [label,val] of [['Accounts',data.accounts],['Active',data.active],['Admin accounts',data.admins],['Unused keys',data.keys],['Open reports',data.reports],['Open feedback',data.feedback],['Pending payments',data.payments],['Open payment tickets',data.paymentTickets],['Assigned support requests',data.supportRequests],['Verified revenue','$'+(data.revenue/100).toFixed(2)]]){const n=el('div','','cc-metric');n.append(el('strong',String(val)),el('span',label));metrics.append(n);}main.append(metrics,card('Inbox shortcuts',[button('Open payment tickets',()=>navigate('Payment tickets')),button('Support requests',()=>navigate('Support'),'cc-secondary')]));
-    if(pair)main.append(card('Desktop pairing',[el('p','Link a browser with a one-time code. Your admin PIN is required.'),button('Pair desktop',pair),action('Sign out all linked browsers',async()=>{await api('logout',{});toast('Desktop sessions revoked','success');},'cc-secondary')]));
-    main.append(card('Privacy boundary',[el('p','Only explicitly submitted report snapshots are available. Private encrypted conversations and consumed View Once content cannot be recovered.')]));
+    renderOverview(data);
    }else if(view==='Accounts'){
     main.append(search('Account ID, key ID or fingerprint'));
     for(const a of data.items){const state=a.suspended?'suspended':a.access_revoked?'revoked':a.access.active?'active':'expired';const n=card(a.id,[status(state),details([['Plan',a.access_plan],['Expires',date(a.paid_until)],['Key ID',a.key_id],['Last activity',date(a.last_activity)],['Reports',a.reports],['Recovery configured',a.recovery_created?'Yes':'No']])]);
@@ -179,12 +365,36 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
      main.append(n);
     }
    }else if(view==='Payments'){
-    for(const p of data.items){const n=card(p.id,[status(p.state==='pending'&&p.expires<=Date.now()?'expired':p.state),details([['Plan',p.plan],['Network',p.coin||'LTC (legacy)'],['Price',p.usd_cents==null?'€'+(p.eur_cents/100).toFixed(2):'$'+(p.usd_cents/100).toFixed(2)],['Expires',date(p.expires)],['Transaction',p.txid],['Confirmations',p.confirmations],['Verified',date(p.verified_at)],['Account',p.redeemed_account]])]);if(archived||p.state==='rejected'||(p.state==='pending'&&p.expires<=Date.now())||(p.state==='confirmed'&&p.redeemed))n.append(archiveAction('payments',p.id,archived));main.append(n);}
+    if(!archived)main.append(queuePicker('Payment queue',[['all','All payments'],['review','Needs review']]));
+    for(const p of data.items){
+     const expired=p.state==='pending'&&p.expires<=Date.now();
+     const manual=p.state==='submitted'&&!p.coin;
+     const badge=p.needsReview||manual?el('span',manual?'Legacy manual review':'Needs review','cc-status yellow'):status(expired?'expired':p.state);
+     const n=card(p.id,[badge,details([['Plan',p.plan],['Network',p.coin||'LTC (legacy)'],['Price',p.usd_cents==null?'€'+(p.eur_cents/100).toFixed(2):'$'+(p.usd_cents/100).toFixed(2)],['Expires',date(p.expires)],['Transaction',p.txid],['Confirmations',p.confirmations],['Verified',date(p.verified_at)],['Account',p.redeemed_account]])]);
+     if(manual)n.append(el('p','Review this legacy order in the developer payment CLI.','cc-muted'));
+     if(!archived&&p.coin&&p.state==='submitted')n.append(action('Recheck transaction',async()=>{
+      const result=await api('payments/verify',{id:p.id});
+      if(!alive(token))return;
+      toast(result.verified?'Payment verified':'Payment is still unverified',result.verified?'success':'info');
+      await load();
+     },'cc-secondary'));
+     if(archived||p.state==='rejected'||expired||(p.state==='confirmed'&&p.redeemed))n.append(archiveAction('payments',p.id,archived));
+     main.append(n);
+    }
    }else if(view==='Payment tickets'){
     const open=data.items.filter(t=>!['completed','rejected'].includes(t.status)),done=data.items.filter(t=>['completed','rejected'].includes(t.status));
     for(const [title,items] of [['Open Tickets',open],['Completed Tickets',done]]){
      const group=el('section','','cc-ticket-group');group.append(el('h3',title+' · '+items.length));if(!items.length)group.append(el('p','No tickets.','cc-muted'));
-     for(const t of items){const label=t.status==='review'?'Under review':t.status==='completed'?'Completed':t.status==='rejected'?'Rejected':'Open';const badge=el('span',label,'cc-status '+(t.status==='completed'?'green':t.status==='rejected'?'red':t.status==='review'?'yellow':'neutral'));const n=card('Ticket · '+t.id.slice(0,8),[badge,details([['Plan',t.plan],['Total','$'+(t.usd_cents/100).toFixed(2)+' · '+t.coin],['Opened',date(t.created)],['Payment',t.state],['Updated',date(t.updated)]]),button('Open chat',()=>openPaymentTicket(t.id))]);if(t.status==='rejected')n.append(el('p','Hidden from dashboard 12h after rejection.','cc-muted'));if(['completed','rejected'].includes(t.status))n.append(archiveAction('payment-tickets',t.id,archived));group.append(n);}main.append(group);
+     for(const t of items){
+      const ready=t.state==='confirmed'&&!t.ticket_released&&!t.closed;
+      const label=ready?'Ready to release':t.needsReview?'Payment needs review':t.status==='review'?'Under review':t.status==='completed'?'Completed':t.status==='rejected'?'Rejected':'Open';
+      const badge=el('span',label,'cc-status '+(t.status==='completed'?'green':t.status==='rejected'?'red':ready||t.needsReview||t.status==='review'?'yellow':'neutral'));
+      const n=card('Ticket · '+t.id.slice(0,8),[badge,details([['Plan',t.plan],['Total','$'+(t.usd_cents/100).toFixed(2)+' · '+t.coin],['Opened',date(t.created)],['Payment',t.state],['Updated',date(t.updated)]]),button('Open chat',()=>openPaymentTicket(t.id))]);
+      if(t.status==='rejected')n.append(el('p','Hidden from dashboard 12h after rejection.','cc-muted'));
+      if(['completed','rejected'].includes(t.status))n.append(archiveAction('payment-tickets',t.id,archived));
+      group.append(n);
+     }
+     main.append(group);
     }
     listView=!archived;
    }else if(view==='Reports'){
@@ -212,7 +422,8 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     if(data.items.length===100)main.append(button('Older events',()=>{cursor=String(data.items.at(-1).id);load();},'cc-secondary'));
     if(data.legacy?.length){const history=el('details');history.append(el('summary','Existing audit history'));for(const a of data.legacy)history.append(card(a.action,[details([['Actor',a.actor],['Account',a.account],['Key',a.key_id],['At',date(a.at)],['Reason',a.reason]])]));main.append(history);}
    }
-   if(Array.isArray(data.items)&&!data.items.length&&!['Accounts','Keys'].includes(current))main.append(el('p','No records yet.','cc-muted'));
+   if(Array.isArray(data.items)&&!data.items.length&&!['Accounts','Keys','Payment tickets'].includes(view))main.append(el('p',(view==='Tickets'||view==='Payments')&&scope!=='all'?'Nothing in this queue.':'No records yet.','cc-muted'));
+   if(focusQueue)main.querySelector('.cc-queue-picker')?.focus({preventScroll:true});
   }catch(e){if(alive(token)){main.replaceChildren(el('h2',current),button('Retry',load));error(e);}}
  }
  load();pollInbox();

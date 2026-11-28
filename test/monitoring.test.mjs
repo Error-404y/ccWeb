@@ -37,6 +37,6 @@ test('monitoring endpoint is behind the existing admin gate and desktop route gu
  assert.ok(gate>=0&&endpoint>gate);
  assert.ok(server.slice(gate,endpoint).includes('controlSessions.check(readControl(req))'));
  assert.ok(server.includes("['/control','/control.html','/control/monitoring'],(req,res)=>desktopRequest(req)?"));
- assert.ok(ui.includes("'Archive','Monitoring'"));
+ assert.match(ui,/\['Operations',\['Monitoring','Audit','Archive'\]\]/);
  assert.ok(ui.includes("api('monitoring')"));
 });

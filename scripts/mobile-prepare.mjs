@@ -51,7 +51,6 @@ cpSync('node_modules/jsqr/dist/jsQR.js', 'mobile-dist/vendor/jsqr.js');
 cpSync('node_modules/@capacitor/core/dist/capacitor.js', 'mobile-dist/vendor/capacitor.js');
 writeFileSync('mobile-dist/mobile-config.js', 'window.QZU_API_ORIGIN = ' + JSON.stringify(api.origin) + ';\nwindow.QZU_APP_VERSION = ' + JSON.stringify(JSON.parse(readFileSync('package.json', 'utf8')).version) + ';\nwindow.QZU_DISTRIBUTION = ' + JSON.stringify(distribution) + ';\n');
 let html = readFileSync('mobile-dist/index.html', 'utf8');
-html = html.replace('width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content', 'width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover,interactive-widget=resizes-content');
 html = html.replace('<script src="/app.js" defer></script>', '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; script-src \'self\'; style-src \'self\'; img-src \'self\' data: blob:; connect-src \'self\' ' + api.origin + '; media-src \'self\' blob: data:; object-src \'none\'; base-uri \'none\'"><script src="/vendor/capacitor.js" defer></script><script src="/mobile-config.js" defer></script><script src="/app.js" defer></script>');
 writeFileSync('mobile-dist/index.html', html);
 if (!existsSync(target)) cap('add', target);

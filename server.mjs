@@ -16,12 +16,12 @@ import { feedbackStore } from './lib/feedback.mjs';
 import { prekeyStore } from './lib/prekeys.mjs';
 import { privatePush } from './lib/push.mjs';
 import { loadFirebaseDelivery } from './lib/firebase-push.mjs';
-import { versionedState } from './lib/live.mjs';
+import { createLiveWakeup, versionedState } from './lib/live.mjs';
 import { contactStore } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
-import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey } from './lib/access.mjs';
-import {initControl,createControlSessions,desktopControlAllowed,issueRecovery,recoverAccount,controlOverview,controlAccounts,accountAction,controlPayments,controlAudit,archiveControlRecord} from './lib/control.mjs';
+import { initAccess, accessStatus, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey, PAYMENT_SUBMISSION_GRACE } from './lib/access.mjs';
+import {initControl,createControlSessions,desktopControlAllowed,issueRecovery,recoverAccount,controlOverview,controlWorkload,controlAccounts,accountAction,controlPayments,controlAudit,archiveControlRecord} from './lib/control.mjs';
 import {listAccessKeys,generatePlanKeys,replaceUnusedKey,revokeAccessKey} from './lib/access.mjs';
 import {initPayments,COINS,createCryptoInvoice,existingCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice,verifyNetwork} from './lib/crypto-payments.mjs';
 import {initPaymentTickets,paymentTickets} from './lib/payment-tickets.mjs';
@@ -47,6 +47,7 @@ const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
 const official=officialStore(db),feedback=feedbackStore(db),liveWaiters=new Map();
+const liveWakeup = createLiveWakeup();
 const push=privatePush(db,{url:process.env.QZU_PUSH_RELAY_URL,secret:process.env.QZU_PUSH_RELAY_SECRET,firebase:loadFirebaseDelivery(process.env.QZU_FIREBASE_CREDENTIALS),unread:account=>chats.snapshot(account).reduce((n,room)=>n+room.messages.filter(m=>m.unread).length,0)});
 const compliance=complianceStore(db);const prekeys=prekeyStore(db);chats.prekeys=prekeys;prekeys.sweep();setInterval(()=>prekeys.sweep(),3600000).unref();compliance.sweep();setInterval(()=>compliance.sweep(),3600000).unref();
 let liveTotal=0;
@@ -71,6 +72,12 @@ if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 app.disable('x-powered-by');
 const monitoring=createMonitoring({write:line=>console.log(line)});
 app.use(monitoring.middleware);
+app.use('/api', (req, res, next) => {
+  if (req.method === 'POST') res.once('finish', () => {
+    if (res.statusCode < 400) liveWakeup.changed();
+  });
+  next();
+});
 app.use((req, res, next) => {
   res.set({
     'Cache-Control': 'no-store',
@@ -155,7 +162,7 @@ async function paymentLoop() {
   if (paymentBusy) return;
   paymentBusy = true;
   try {
-    const pending=db.prepare("SELECT id,coin FROM access_invoices WHERE coin IS NOT NULL AND state='submitted' AND submitted>? ORDER BY COALESCE(last_checked,0),submitted LIMIT 20").all(Date.now()-7*86400000);
+    const pending=db.prepare("SELECT id,coin FROM access_invoices WHERE coin IS NOT NULL AND state='submitted' AND submitted>? ORDER BY COALESCE(last_checked,0),submitted LIMIT 20").all(Date.now()-PAYMENT_SUBMISSION_GRACE);
     for(const row of pending)if(rpcConfigured(row.coin))await verifyCryptoInvoice(db,row.id).catch(()=>{});
     if (process.env.QZU_PAYMENT_WEBHOOK) {
       const rows = db.prepare("SELECT id,plan,sats,eur_cents,usd_cents,coin,verified_at FROM access_invoices WHERE state='confirmed' AND notified=0 LIMIT 20").all();
@@ -253,16 +260,41 @@ const deletionInbox=id=>[...chats.supportDeletions(id,true),...adminPrincipals(i
 const notifyDeletionAdmin=peer=>push.notify([desktopChats.principal(peer)?.admin||peer]);
 function approveDeletion(admin,id){const principal=adminPrincipals(admin).find(p=>chats.directDeletionRequests(p).some(d=>d.id===id));if(principal){const result=chats.approveDirectDeletion(principal,id);push.notify([result.requester]);return {ok:true};}const recipients=chats.rooms.get(id)?.users.filter(x=>x!==admin)||[];const result=chats.approveSupportDeletion(admin,id,true);push.notify(recipients);return result;}
 const supportInboxCount=id=>new Set([...chats.supportRequests(id,true),...deletionInbox(id)].map(r=>r.id)).size;
-app.get('/api/control/overview',(req,res)=>res.json({...controlOverview(db),paymentTickets:tickets.counts().open,supportRequests:supportInboxCount(req.account.id)}));
+function controlWork(id) {
+  const deletions = new Set(deletionInbox(id).map(item => item.id));
+  const pending = new Set(chats.supportRequests(id, true).map(item => item.id));
+  for (const deletion of deletions) pending.delete(deletion);
+  const payments = tickets.counts();
+  return {
+    ...controlWorkload(db),
+    ...helpTickets.workload(id),
+    paymentTickets: payments.open,
+    paymentReleases: payments.readyToRelease,
+    supportRequests: pending.size,
+    deletionRequests: deletions.size
+  };
+}
+app.get('/api/control/overview',(req,res)=>{
+  const work=controlWork(req.account.id);
+  res.json({...controlOverview(db),work,paymentTickets:work.paymentTickets,supportRequests:work.supportRequests+work.deletionRequests});
+});
 app.get('/api/control/monitoring',(req,res)=>res.json({...monitoring.snapshot(),version,environment:production?'production':'development',activeDesktopSessions:controlSessions.activeDesktopIds().length,liveRequests:liveTotal,paymentTickets:tickets.counts().open,supportRequests:supportInboxCount(req.account.id)}));
-app.get('/api/control/inbox',(req,res)=>res.json({version,environment:production?'production':'development',paymentTickets:tickets.counts().open,supportRequests:supportInboxCount(req.account.id),userTickets:helpTickets.count(),adminId:req.account.id}));
+app.get('/api/control/inbox',(req,res)=>{
+  const work=controlWork(req.account.id);
+  res.json({version,environment:production?'production':'development',paymentTickets:work.paymentTickets,supportRequests:work.supportRequests+work.deletionRequests,userTickets:helpTickets.count(),adminId:req.account.id,work});
+});
 app.get('/api/control/accounts',(req,res)=>res.json({items:controlAccounts(db,req.query.q||'',req.query.after||'')}));
 app.get('/api/control/keys',(req,res)=>res.json({items:listAccessKeys(db,req.query.q||'')}));
 app.post('/api/control/keys/generate',(req,res)=>res.json(generatePlanKeys(db,req.body?.plan,req.body?.count,req.account.id)));
 app.post('/api/control/keys/replace',(req,res)=>res.json(replaceUnusedKey(db,req.body?.id,req.account.id)));
 app.post('/api/control/keys/revoke',(req,res)=>res.json(revokeAccessKey(db,req.body?.id,req.account.id,req.body?.reason)));
 app.post('/api/control/accounts/action',(req,res)=>{const b=req.body||{},result=accountAction(db,b.id,req.account.id,b.action,b.reason,b.plan);if(b.action==='revoke'){unlocks.revokeAll(b.id);push.remove(b.id);chats.hidePresence(b.id);}res.json(result);});
-app.get('/api/control/payments',(req,res)=>res.json({items:controlPayments(db,req.query.archived==='1')}));
+app.get('/api/control/payments',(req,res)=>res.json({items:controlPayments(db,req.query.archived==='1',req.query.scope||'all')}));
+app.post('/api/control/payments/verify',paymentRate('staff-payment-verify',10),async(req,res)=>{
+  const id=req.body?.id;
+  if(typeof id!=='string'||!db.prepare("SELECT 1 FROM access_invoices WHERE id=? AND state='submitted' AND coin IS NOT NULL").get(id))return res.status(404).json({error:'Submitted payment unavailable.'});
+  res.json({verified:await verifyCryptoInvoice(db,id)});
+});
 app.get('/api/control/payment-tickets',(req,res)=>res.json({items:tickets.list(req.query.archived==='1')}));
 app.post('/api/control/payment-tickets/state',(req,res)=>res.json(tickets.view(req.body?.id)));
 app.post('/api/control/payment-tickets/send',(req,res)=>{tickets.send(req.body?.id,req.account.id,{text:req.body?.text,requestId:req.body?.requestId});res.json(tickets.view(req.body?.id));});
@@ -282,7 +314,7 @@ app.post('/api/control/support/delete-contact',(req,res)=>{const id=req.body?.id
 app.post('/api/control/support/finish',(req,res)=>res.json(chats.finishSupport(req.account.id,req.body?.id,req.body?.action)));
 app.post('/api/control/archive',(req,res)=>{const b=req.body||{};if(b.category==='support')return res.json(chats.finishSupport(req.account.id,b.id,b.restore===true?'restore':'archive'));res.json(archiveControlRecord(db,b.category,b.id,req.account.id,b.restore===true));});
 app.post('/api/control/support/respond',(req,res)=>res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true)));
-app.post('/api/control/support/send',(req,res)=>{const room=chats.requireRoom(req.account.id,req.body?.id);if(room.supportAgent!==req.account.id||room.supportStatus!=='accepted'||typeof req.body?.text!=='string')return res.status(403).json({error:'Assigned support conversation required.'});const result=chats.send(req.account.id,room.id,req.body.text);push.notify(room.users.filter(id=>id!==req.account.id));res.json({ok:true});});
+app.post('/api/control/support/send',(req,res)=>{const room=chats.requireRoom(req.account.id,req.body?.id);if(room.supportAgent!==req.account.id||room.supportStatus!=='accepted'||typeof req.body?.text!=='string')return res.status(403).json({error:'Assigned support conversation required.'});chats.send(req.account.id,room.id,req.body.text);push.notify(room.users.filter(id=>id!==req.account.id));res.json({ok:true});});
 app.get('/api/control/audit',(req,res)=>res.json({items:auditLedger.list({q:req.query.q||'',before:req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before)}),legacy:controlAudit(db)}));
 app.get('/api/control/reports',(req,res)=>res.json({items:compliance.list(true,req.query.archived==='1')}));
 app.get('/api/control/reports/media/:id',(req,res)=>{const m=compliance.media(req.params.id);if(!m)return res.sendStatus(404);res.set('Cache-Control','no-store').type(m.mime).send(Buffer.from(m.body));});
@@ -311,11 +343,11 @@ app.post('/api/control/sellers/generate',(req,res)=>res.json(sellers.generateKey
 app.post('/api/control/sellers/rotate',(req,res)=>res.json(sellers.rotate(req.body?.id,chats,req.account.id)));
 app.post('/api/control/sellers/access',(req,res)=>{const b=req.body||{};if(!sellers.isSeller(b.id)||typeof b.suspended!=='boolean')return res.status(404).json({error:'Seller unavailable.'});const result=accountAction(db,b.id,req.account.id,b.suspended?'revoke':'restore','Seller access management');if(b.suspended){unlocks.revokeAll(b.id);push.remove(b.id);chats.hidePresence(b.id);}sellers.sync(chats);res.json(result);});
 app.post('/api/control/sellers/verify',(req,res)=>res.json(sellers.verify(req.body?.id,req.body?.verified,req.account.id)));
-app.get('/api/control/announcements',(req,res)=>res.json(req.query.before?official.history(Number(req.query.before)):official.snapshot(req.account.id)));
+app.get('/api/control/announcements',(req,res)=>res.json(req.query.before===undefined?official.recent():official.history(Number(req.query.before),{paged:true})));
 app.post('/api/control/announcements/publish',(req,res)=>{const result=official.publish(req.body?.text,true);push.broadcast(req.account.id);res.json(result);});
 app.post('/api/control/announcements/delete',(req,res)=>res.json(official.remove(req.body?.id,true)));
 app.get('/api/control/ticket-admins',(req,res)=>res.json({items:db.prepare("SELECT id FROM accounts WHERE access_plan='admin'").all().filter(a=>a.id!==req.account.id&&isTicketAdmin(a.id)).map(a=>({id:a.id}))}));
-app.get('/api/control/tickets',(req,res)=>res.json({items:helpTickets.list(req.account.id,true,req.query.archived==='1')}));
+app.get('/api/control/tickets',(req,res)=>res.json({items:helpTickets.list(req.account.id,true,req.query.archived==='1',req.query.scope||'all')}));
 app.post('/api/control/tickets/state',(req,res)=>res.json(helpTickets.view(req.body?.id,req.account.id,true)));
 app.post('/api/control/tickets/send',(req,res)=>{const b=req.body||{},t=helpTickets.send(b.id,req.account.id,true,b.text,b.requestId);notifyHelp(t.id,req.account.id);res.json(t);});
 app.post('/api/control/tickets/action',(req,res)=>{const b=req.body||{},code=b.action==='share'?sellers.ensureCode(b.seller,chats)?.code:null,t=helpTickets.adminAction(b.id,req.account.id,b.action,b.seller,code);if(b.action!=='delete')notifyHelp(t.id,req.account.id);res.json(t);});
@@ -579,13 +611,13 @@ app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 600
   if (!req.deviceId) return res.status(403).json({ error: 'Registered mobile device required.' });
   res.json(chats.getEncryptedMedia(req.account.id, req.params.room, req.params.message));
 });
-function stateData(a) {
+function stateData(a, paged) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
     capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, encryptedOnce:true, live: true },
     prekeyCount:prekeys.count(a.id),
-    official:official.snapshot(a.id),
+    official:official.snapshot(a.id,{paged}),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
     access: accessStatus(a),
     supportAgent: a.access_plan==='admin',
@@ -605,30 +637,38 @@ function stateData(a) {
   };
 }
 app.get('/api/state',(req,res)=>{
-  chats.markPresent(req.account.id,Boolean(req.account.invisible));
-  res.json(versionedState(stateData(req.account)));
+  if(chats.markPresent(req.account.id,Boolean(req.account.invisible)))liveWakeup.changed();
+  res.json(versionedState(stateData(req.account,req.query.officialPage==='1')));
 });
 app.get('/api/state/live',guard('live',180,60000),(req,res,next)=>{
-  const since=req.query.since,id=req.account.id,token=req.get('x-qzu-unlock');
+  const since=req.query.since,id=req.account.id,token=req.get('x-qzu-unlock'),paged=req.query.officialPage==='1';
   if(typeof since!=='string'||!/^[a-f0-9]{64}$/.test(since))return res.status(400).json({error:'Invalid state revision.'});
-  chats.markPresent(id,Boolean(req.account.invisible));
-  const immediate=versionedState(stateData(req.account),since);
+  if(chats.markPresent(id,Boolean(req.account.invisible)))liveWakeup.changed();
+  const immediate=versionedState(stateData(req.account,paged),since);
   if(!immediate.unchanged||liveTotal>=300||(liveWaiters.get(id)||0)>=2)return res.json(immediate);
   liveTotal++;liveWaiters.set(id,(liveWaiters.get(id)||0)+1);
-  const deadline=Date.now()+4500;
-  let timer,closed=false;
-  const cleanup=()=>{if(closed)return;closed=true;clearInterval(timer);liveTotal--;const count=liveWaiters.get(id)-1;if(count)liveWaiters.set(id,count);else liveWaiters.delete(id);};
-  res.once('close',cleanup);
-  timer=setInterval(()=>{
+  let closed=false;
+  const cleanup=()=>{
+    if(closed)return;
+    closed=true;clearTimeout(timer);unsubscribe();liveTotal--;
+    const count=liveWaiters.get(id)-1;
+    if(count)liveWaiters.set(id,count);else liveWaiters.delete(id);
+  };
+  function check(timedOut=false){
     if(closed)return;
     try{
       if(!unlocks.check(id,token)){cleanup();return res.status(423).json({error:'Locked.'});}
       const account=db.prepare('SELECT * FROM accounts WHERE id=?').get(id);
       if(!account||account.pin_state==='retired'||!accessStatus(account).active){cleanup();return res.status(402).json({error:'Access unavailable.'});}
-      const current=versionedState(stateData(account),since);
-      if(!current.unchanged||Date.now()>=deadline){cleanup();res.json(current);}
+      if(account.suspended&&(!account.suspended_until||account.suspended_until>Date.now())){cleanup();return res.status(403).json({error:'Account suspended.'});}
+      const current=versionedState(stateData(account,paged),since);
+      if(!current.unchanged||timedOut){cleanup();res.json(current);}
     }catch(error){cleanup();next(error);}
-  },500);
+  }
+  const unsubscribe=liveWakeup.subscribe(check);
+  // Recheck time-based changes and changes made outside HTTP, such as developer commands.
+  const timer=setTimeout(()=>check(true),4500);
+  res.once('close',cleanup);
 });
 app.post('/api/official/publish',guard('official-publish',10,60000),(req,res)=>{
   const result=official.publish(req.body?.text,req.account.access_plan==='admin');
@@ -637,7 +677,12 @@ app.post('/api/official/publish',guard('official-publish',10,60000),(req,res)=>{
 });
 app.post('/api/official/delete',guard('official-delete',20,60000),(req,res)=>{const result=official.remove(req.body?.id,req.account.access_plan==='admin');auditLedger.record(req.account.id,'mobile','announcements/delete','announcement',req.body.id);res.json(result);});
 app.post('/api/official/read',guard('official-read',60,60000),(req,res)=>res.json(official.mark(req.account.id,req.body?.id)));
-app.get('/api/official/history',guard('official-history',30,60000),(req,res)=>res.json(official.history(Number(req.query.before))));
+app.get('/api/official/history',guard('official-history',30,60000),(req,res)=>{
+  const forward=req.query.after!==undefined;
+  const id=forward?req.query.after:req.query.before;
+  if(typeof id!=='string'||!/^\d+$/.test(id))return res.status(400).json({error:'Invalid announcement reference.'});
+  res.json(official.history(Number(id),{forward,paged:req.query.officialPage==='1'}));
+});
 app.post('/api/push/register',guard('push-register',10,60000),(req,res)=>{
   if(!req.deviceId)return res.status(403).json({error:'Registered mobile device required.'});
   res.json(push.register(req.account.id,req.body?.platform,req.body?.token));
@@ -816,7 +861,7 @@ app.get('/privacy.css', (req,res)=>res.sendFile(resolve(root,'public/privacy.css
 app.get(['/privacy','/privacy.html','/terms','/delete-account'], (req,res)=>{
   const name=process.env.QZU_PRIVACY_OPERATOR?.trim()||'qzu. developer (operator details pending)';
   const email=process.env.QZU_PRIVACY_EMAIL?.trim()||'';
-  const contact=/^[A-Za-z0-9._+%-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)?'<a href="mailto:'+escapePrivacy(email)+'">'+escapePrivacy(email)+'</a>':'Settings &gt; Help &gt; Write Support (public email pending)';
+  const contact=/^[A-Za-z0-9._+%-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)?'<a href="mailto:'+escapePrivacy(email)+'">'+escapePrivacy(email)+'</a>':'Settings &gt; Help &gt; Contact support (public email pending)';
   const policy=readFileSync(resolve(root,'public',req.path==='/terms'?'terms.html':req.path==='/delete-account'?'delete-account.html':'privacy.html'),'utf8').replace('__QZU_OPERATOR__',()=>escapePrivacy(name)).replace('__QZU_CONTACT__',()=>contact);
   res.type('html').send(policy);
 });
@@ -855,7 +900,7 @@ app.use((err, req, res, next) => {
 const port = Number(process.env.PORT || 3000);
 startAdminSocket(command => handleAdminCommand(db, chats, command, unlocks))
   .then(() => {
-    app.listen(port, process.env.HOST || '0.0.0.0', () => console.log('qzu. listening on ' + port));
+    const server = app.listen(port, process.env.HOST || '0.0.0.0', () => console.log('qzu. listening on ' + server.address().port));
   })
   .catch(error => {
     console.error(error.message);

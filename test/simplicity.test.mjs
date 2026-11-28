@@ -7,7 +7,7 @@ import {officialStore} from '../lib/official.mjs';
 import {playAssets} from '../scripts/play-assets.mjs';
 const source=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
 const window={};runInNewContext(source('public/ui-simplicity.js'),{window});
-const {accessSummary,unreadCount,attachEdgeBack}=window.QzuSimplicity;
+const {accessSummary,unreadCount,visibleReadCursor,attachEdgeBack}=window.QzuSimplicity;
 test('entitlements are based on authoritative plan and expiration, including legacy, admin and seller plans',()=>{
  const now=1000000,h=3600000;
  for(const [p,label] of [['week','1 Week'],['month','1 Month'],['year','1 Year'],['monthly','5 Months (legacy)']]){
@@ -40,6 +40,13 @@ function fixture(){
  function fire(type,overrides={}){const e={pointerId:1,isPrimary:true,button:0,pointerType:'touch',clientX:20,clientY:80,target:{closest:()=>null},cancelable:true,detail:1,stopPropagation(){this.stopped=true;},preventDefault(){this.prevented=true;},...overrides};handlers.get(type)(e);return e;}
  return {fire,closed:()=>closed,setActive:v=>active=v,surface,captured};
 }
+test('announcement read cursors advance only through visible posts in order',()=>{
+ const posts=[1,2,4,6].map(id=>({id}));
+ assert.equal(unreadCount({posts,seen:2,unreadCount:20}),20);
+ assert.equal(visibleReadCursor(posts,1,post=>post.id>=4),1);
+ assert.equal(visibleReadCursor(posts,1,post=>[2,6].includes(post.id)),2);
+ assert.equal(visibleReadCursor(posts,2,()=>true),6);
+});
 test('edge swipe closes only on a completed rightward gesture and does not propagate into message reply',()=>{
  const f=fixture();assert.equal(f.fire('pointerdown').stopped,true);assert.equal(f.fire('pointermove',{clientX:85}).prevented,true);assert.equal(f.captured.has(1),true);f.fire('pointerup',{clientX:110});assert.equal(f.closed(),1);assert.equal(f.captured.size,0);
  assert.equal(f.fire('click').prevented,true);f.setActive('room2');f.fire('pointerdown');f.fire('pointerup',{clientX:120});assert.equal(f.closed(),2);
@@ -61,7 +68,7 @@ test('edge swipe rejects ordinary replies, vertical scroll, short and reversed s
 test('removed settings do not leave DOM listeners behind; recovery and renew paths remain; both clients wire non-destructive navigation',()=>{
  const html=source('public/index.html'),app=source('public/app.js'),control=source('public/control.js'),desktop=source('public/desktop-messenger.js'),server=source('server.mjs');
  for(const key of ['externalDeletion','sellerDirectorySettings','officialOlder']){assert.ok(!html.includes('id="'+key+'"'));assert.ok(!app.includes("$('"+key+"')"));}
- assert.ok(!control.includes('Load earlier announcements'));
+ assert.match(html,/id="officialEarlier"[^>]*hidden/);
  assert.ok(app.includes("api('account/deletion-code',{})"));assert.ok(app.includes("button('External deletion code',showDeletionCode"));assert.ok(app.includes("button('Renew access',showRenewal)"));
  assert.ok(server.includes('/api/official/history'));assert.ok(app.includes("close:()=>$('backToChats').click()"));assert.ok(desktop.includes('close:()=>choose(null)'));
  for(const s of [app,control,desktop])assert.doesNotThrow(()=>new Function(s));

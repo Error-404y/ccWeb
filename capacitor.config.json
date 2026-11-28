@@ -8,11 +8,11 @@
   },
   "ios": {
     "contentInset": "automatic",
-    "zoomEnabled": false
+    "zoomEnabled": true
   },
   "android": {
     "allowMixedContent": false,
-    "zoomEnabled": false
+    "zoomEnabled": true
   },
-  "zoomEnabled": false
+  "zoomEnabled": true
 }

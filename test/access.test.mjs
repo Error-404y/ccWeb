@@ -58,7 +58,9 @@ test('renewal requires approval and is bound to its account', () => {
   assert.throws(() => applyRenewal(db, activationKey, 'other', now));
   const result = applyRenewal(db, activationKey, account.id, now);
   assert.equal(result.paidUntil, addMonths(addMonths(now, 5), 1));
-  assert.throws(() => applyRenewal(db, activationKey, account.id, now));
+  assert.deepEqual(applyRenewal(db, activationKey, account.id, now), {
+    paidUntil: result.paidUntil, alreadyApplied: true
+  });
   db.close();
 });
 
