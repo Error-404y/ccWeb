@@ -296,9 +296,30 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  }
  function renderShopReviews(data,token){
   if(!data.items.length){main.append(el('p','No listings waiting for review.','cc-muted'));return;}
+  const fulfillment={unspecified:'Ask seller',pickup:'Pickup',delivery:'Delivery',both:'Pickup or delivery'};
+  const fields=[['Item name',item=>item.name],['Description',item=>item.description||''],
+   ['Quantity',item=>number.format(item.quantity)],['Price per item',item=>new Intl.NumberFormat(undefined,{style:'currency',currency:item.currency,currencyDisplay:'code'}).format(item.priceMinor/100)],
+   ['Fulfillment',item=>fulfillment[item.fulfillment]||item.fulfillment]];
   for(const item of data.items){
-   const row=card(item.name,[details([['Seller',item.seller],['Seller account',item.owner],['Quantity',item.quantity],
-     ['Price per item',currency(item.priceMinor,item.currency)],['Fulfillment',item.fulfillment],['Submitted',date(item.submitted)]])]);
+   const row=card(item.name,[details([['Seller',item.seller],['Seller account',item.owner],['Submitted',date(item.submitted)]])]);
+   if(item.previous){
+    const table=el('table','','cc-shop-changes');
+    table.append(el('caption','Changes to published listing'));
+    const header=table.createTHead().insertRow();
+    for(const label of ['Field','Currently published','Proposed']){
+     const cell=el('th',label);cell.scope='col';header.append(cell);
+    }
+    const rows=table.createTBody();
+    for(const [label,format] of fields){
+     const before=format(item.previous),after=format(item);
+     if(before===after)continue;
+     const cell=el('th',label);cell.scope='row';
+     rows.insertRow().append(cell,el('td',before||'No description'),el('td',after||'No description'));
+    }
+    row.append(rows.rows.length?table:el('p','Matches the currently published listing.','cc-muted'));
+   }else{
+    row.append(el('h4','New listing','cc-shop-review-heading'),details(fields.slice(1).map(([label,format])=>[label,format(item)||'No description'])));
+   }
    const actions=el('div','','cc-actions');
    for(const [label,approve] of [['Publish listing',true],['Return to seller',false]]){
     actions.append(action(label,async()=>{

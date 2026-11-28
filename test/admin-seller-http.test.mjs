@@ -131,7 +131,7 @@ test('live HTTP server: desktop authorization, seller activation and catalog, an
   assert.equal(change?.target,id);
   assert.equal(change?.detail,null);
   assert.equal((await seller.call('/api/sellers/profile',{name:'Studio'})).status,200);
-  const listed={id:item.id,name:'Print',quantity:5,priceMinor:1205,currency:'CHF',fulfillment:'unspecified',published:true};
+  const listed={id:item.id,name:'Print',description:'',quantity:5,priceMinor:1205,currency:'CHF',fulfillment:'unspecified',published:true};
   const shopQueue='/api/control/shop-reviews';
   async function approve(itemId) {
    const row=(await admin(shopQueue)).value.items.find(item=>item.itemId===itemId);

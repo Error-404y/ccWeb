@@ -602,7 +602,8 @@ app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(
 app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(compliance.accept(req.account.id,req.body?.version)));
 app.use('/api',(req,res,next)=>{
   if(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
-  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/invite','/contacts/open','/invite','/tickets/open','/tickets/send'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
+  const closingGroupInvites=req.path==='/group/invite'&&['status','close'].includes(req.body?.action);
+  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&!closingGroupInvites&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/description','/group/invite','/contacts/open','/invite','/tickets/open','/tickets/send'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
   if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
   if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
@@ -617,6 +618,7 @@ function saveSellerListing(req,res,managed=false) {
 }
 app.post('/api/sellers/catalog',guard('seller-catalog-write',40,60000),(req,res)=>saveSellerListing(req,res));
 app.post('/api/sellers/catalog/manage',guard('seller-catalog-write',40,60000),(req,res)=>saveSellerListing(req,res,true));
+app.post('/api/sellers/catalog/manage/preview',guard('seller-catalog-preview',40,60000),(req,res)=>res.json({item:catalog.preview(req.account.id,req.body)}));
 app.post('/api/sellers/catalog/remove',guard('seller-catalog-write',40,60000),(req,res)=>res.json(catalog.remove(req.account.id,req.body?.id)));
 app.post('/api/sellers/catalog/manage/remove',guard('seller-catalog-write',40,60000),(req,res)=>res.json(catalog.remove(req.account.id,req.body?.id,true)));
 app.get('/api/sellers/catalog/contact/:id',guard('seller-catalog-contact',40,60000),(req,res)=>{
@@ -834,7 +836,7 @@ function stateData(a, paged) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, queuedTextSends:true, encryptedOnce:true, sellerListingsV2:true, shopReview:true, groupTimers:true, reportFollowups:true, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, queuedTextSends:true, encryptedOnce:true, sellerListingsV2:true, shopReview:true, sellerListingPreview:true, groupTimers:true, groupDetails:true, reportFollowups:true, live: true },
     prekeyCount:prekeys.count(a.id),
     official:official.snapshot(a.id,{paged}),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
@@ -924,7 +926,14 @@ app.get('/api/qr', async(req, res) => {
   });
   res.json({ image, code: inv.code, expires: inv.expires });
 });
-app.post('/api/connect/preview',guard('connect-preview',10,60000),(req,res)=>{const code=typeof req.body?.code==='string'?req.body.code.trim().toUpperCase():'';sellers.sync(chats);chats.sweep();const invite=chats.codes.get(code);if(!invite||invite.user===req.account.id||!desktopChats.valid(invite.user))return res.status(404).json({error:'Connection unavailable.'});res.json({admin:!invite.group&&chats.profileRole(invite.user)==='admin',group:Boolean(invite.group)});});
+app.post('/api/connect/preview',guard('connect-preview',10,60000),(req,res)=>{
+  const code=typeof req.body?.code==='string'?req.body.code.trim().toUpperCase():'';
+  sellers.sync(chats);chats.sweep();
+  const invite=chats.codes.get(code);
+  if(!invite||invite.user===req.account.id||!desktopChats.valid(invite.user))return res.status(404).json({error:'Connection unavailable.'});
+  if(invite.group)return res.json({admin:false,group:true,...chats.previewGroupInvite(req.account.id,invite.group)});
+  res.json({admin:chats.profileRole(invite.user)==='admin',group:false});
+});
 app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   const code = typeof req.body?.code === 'string' ? req.body.code.trim().toUpperCase(): '';
   if (!/^[A-Z0-9]{6}$/.test(code)) return res.status(400).json({
@@ -1011,12 +1020,13 @@ app.post('/api/unblock', guard('unblock', 20, 60_000), (req, res) => {
 });
 
 app.post('/api/group/create', guard('group-create', 10, 60_000), (req, res) => {
-  res.json({ id: chats.createGroup(req.account.id,req.body?.name) });
+  res.json({ id: chats.createGroup(req.account.id,req.body?.name,req.body?.description) });
 });
+app.post('/api/group/description',guard('group-description',20,60000),(req,res)=>res.json(chats.editGroupDescription(req.account.id,req.body?.id,req.body?.description)));
 app.post('/api/group/timers',guard('group-timers',20,60000),(req,res)=>res.json(chats.groupTimers(req.account.id,req.body?.id,req.body)));
 
 app.post('/api/group/invite', guard('group-invite', 20, 60_000), (req, res) => {
-  res.json(chats.groupInvite(req.account.id, req.body?.id));
+  res.json(chats.groupInvite(req.account.id, req.body?.id, req.body?.action));
 });
 
 app.post('/api/typing', guard('typing', 100, 60_000), (req, res) => {

@@ -859,3 +859,12 @@
   display:none;
  }
 }
+
+.cc-shop-review-heading { margin: 0; font-size: 14px; }
+.cc-shop-changes { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
+.cc-shop-changes caption { padding-block-end: 8px; text-align: start; font-weight: 650; }
+.cc-shop-changes th, .cc-shop-changes td { padding: 8px; border-top: 1px solid #303137; text-align: start; vertical-align: top; overflow-wrap: anywhere; }
+.cc-shop-changes th:first-child { width: 24%; }
+.cc-shop-changes thead { color: #aeb0ba; }
+.cc-shop-changes td { white-space: pre-wrap; }
+.cc-shop-changes td:last-child { background: #24352c; color: #e5f9ee; }
