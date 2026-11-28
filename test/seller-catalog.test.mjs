@@ -25,10 +25,15 @@ test('only the current approved revision replaces the visible shop listing',t=>{
   catalog.save('seller',{...item,name:'Updated print'},true);
   const [latest]=catalog.queue();
   assert.throws(()=>catalog.review(first.id,true),{status:409});
-  catalog.review(latest.id,false);
+  assert.throws(()=>catalog.review(latest.id,false,'x'.repeat(301)),{status:400});
+  catalog.review(latest.id,false,'  Please clarify pickup details.  ');
   assert.deepEqual(catalog.forContact('buyer','seller','contact').items,[]);
-  assert.equal(catalog.list('seller',true).items[0].reviewStatus,'returned');
+  const [returned]=catalog.list('seller',true).items;
+  assert.equal(returned.reviewStatus,'returned');
+  assert.equal(returned.returnNote,'Please clarify pickup details.');
+  assert.deepEqual(catalog.forGroup('seller').items,[]);
   catalog.save('seller',item,true);
+  assert.equal(catalog.list('seller',true).items[0].returnNote,undefined);
   catalog.review(catalog.queue()[0].id,true);
   catalog.save('seller',{...item,quantity:8,price:'11.00',description:'Updated description'},true);
   assert.equal(catalog.forContact('buyer','seller','contact').items[0].quantity,2);
@@ -42,6 +47,30 @@ test('only the current approved revision replaces the visible shop listing',t=>{
   assert.deepEqual(catalog.queue(),[]);
   catalog.save('seller',{...item,quantity:8,price:'11.00',description:''},true);
   assert.equal(catalog.queue()[0].description,'');
+});
+
+test('pausing hides approved listings, preserves owner data and delays eligible restock alerts',t=>{
+  const db=new DatabaseSync(':memory:');
+  t.after(()=>db.close());
+  const catalog=sellerCatalog(db,{isSeller:id=>id==='seller',canView:()=>true});
+  const item=listing({quantity:0,published:true,fulfillment:'pickup'});
+  const draft=listing({published:false});
+  catalog.save('seller',item,true);
+  catalog.save('seller',draft,true);
+  catalog.watch('buyer','seller','contact',item.id);
+  assert.throws(()=>catalog.setPaused('buyer',true),{status:403});
+  assert.deepEqual(catalog.setPaused('seller',true),{paused:true,notified:[]});
+  assert.deepEqual(catalog.forGroup('seller'),{paused:true,items:[]});
+  assert.deepEqual(catalog.forContact('buyer','seller','contact'),{paused:true,items:[]});
+  assert.equal(catalog.publicItem('seller',item.id),null);
+  assert.equal(catalog.list('seller',true).items.length,2);
+  assert.deepEqual(catalog.save('seller',{...item,quantity:3},true).notified,[]);
+  assert.equal(catalog.alerts('buyer')[0].notified,null);
+  assert.deepEqual(catalog.setPaused('seller',false),{paused:false,notified:['buyer']});
+  assert.deepEqual(catalog.setPaused('seller',false),{paused:false,notified:[]});
+  assert.equal(catalog.publicItem('seller',item.id).quantity,3);
+  assert.equal(catalog.publicItem('seller',draft.id),null);
+  assert.equal(catalog.forGroup('seller').items.length,1);
 });
 
 test('seller listing IDs are scoped to the owner and repeated actions do not create duplicates',t => {

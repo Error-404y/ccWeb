@@ -1047,7 +1047,7 @@ async function askAboutSellerItem(contact, item, control, root, epoch) {
   }
 }
 
-function sellerListingTable(items, contact, root, epoch, mode) {
+function sellerListingTable(items, contact, root, epoch, mode, shareListing) {
   const editable = !contact && !mode;
   const table = el('table','seller-catalog-table');
   table.setAttribute('aria-label',items[0]?.published===false?'Private drafts':'Items for sale');
@@ -1069,6 +1069,7 @@ function sellerListingTable(items, contact, root, epoch, mode) {
       const edit = button('Edit', () => editSellerListing(item), 'seller-catalog-edit');
       edit.setAttribute('aria-label','Edit ' + item.name);
       title.append(edit);
+      if(item.returnNote)title.append(el('small','seller-review-note-label','Staff left a note'));
     } else {
       const name = contact ? button(item.name, () => askAboutSellerItem(contact,item,name,root,epoch),'seller-listing-name')
         : el('span','seller-listing-name',item.name);
@@ -1076,6 +1077,11 @@ function sellerListingTable(items, contact, root, epoch, mode) {
       title.append(name);
       if(item.description)title.append(description);
       title.append(el('small','seller-listing-method',sellerFulfillmentLabels[item.fulfillment]||sellerFulfillmentLabels.unspecified));
+      if(shareListing){
+        const share=button('Share to group',event=>shareListing(item,event.currentTarget),'seller-catalog-edit');
+        share.setAttribute('aria-label','Share '+item.name+' to group');
+        title.append(share);
+      }
       if(mode==='preview' && !item.quantity)title.append(el('span','seller-catalog-edit','Notify me'));
       if (contact && state.capabilities?.sellerListingsV2 && !item.quantity) {
         const status = el('small','seller-listing-alert-status');
@@ -1114,7 +1120,7 @@ function sellerDialogActive(root, epoch) {
   return epoch === authEpoch && !document.hidden && Boolean(unlockToken) && modal.open && root.isConnected;
 }
 
-function showSellerCatalog(contact, group) {
+function showSellerCatalog(contact, group, itemId=null) {
   if (!group && !canViewSellerCatalog(contact)) return;
   if(contact?.shopUpdate&&contact.shopUpdate>(viewedShopUpdates.get(contact.id)||0)){
     const version=contact.shopUpdate;
@@ -1132,7 +1138,18 @@ function showSellerCatalog(contact, group) {
   const actions = el('div','seller-catalog-actions');
   if(contact)actions.append(button('Manage contact', () => showContactManagement(contact), 'secondary-button'));
   root.append(profile, content, actions);
-  show('Seller shop', [root]);
+  show(itemId?'Shop item':'Seller shop', [root]);
+
+  async function shareListing(item,control){
+    control.disabled=true;
+    control.dataset.requestId ||= crypto.randomUUID();
+    try{
+      await api('group/shop/share',{id:group.id,itemId:item.id,requestId:control.dataset.requestId});
+      if(sellerDialogActive(root,epoch))closeModal();
+      haptic();await refresh();
+    }catch(error){if(sellerDialogActive(root,epoch))modalError(error);}
+    finally{control.disabled=false;}
+  }
 
   async function load() {
     const loading = el('p','seller-catalog-message','Loading listings…');
@@ -1145,8 +1162,14 @@ function showSellerCatalog(contact, group) {
       name.textContent = result.name || contact?.nickname || 'Seller';
       status.textContent = result.verified ? 'Verified seller' : 'Seller';
       const buyerContact=contact||state.contacts?.find(item=>item.id===result.contactId);
-      if (result.items.length) content.replaceChildren(sellerListingTable(result.items,buyerContact,root,epoch,buyerContact?undefined:'readonly'));
-      else content.replaceChildren(el('p','seller-catalog-empty','List is empty'));
+      const items=itemId?result.items.filter(item=>item.id===itemId):result.items;
+      const share=group&&result.own&&state.capabilities?.groupListingShare?shareListing:undefined;
+      if(result.paused){
+        const unavailable=el('div','seller-catalog-message shop-unavailable');unavailable.setAttribute('role','status');
+        unavailable.append(el('strong','','Temporarily unavailable'),el('span','','This shop is paused.'));
+        content.replaceChildren(unavailable);
+      }else if(items.length)content.replaceChildren(sellerListingTable(items,buyerContact,root,epoch,buyerContact?undefined:'readonly',share));
+      else content.replaceChildren(el('p','seller-catalog-empty',itemId?'This item is unavailable.':'List is empty'));
       if(group)actions.replaceChildren(result.own?button('Manage shop',()=>{
         closeModal();navigate('/settings/shop');
       },'secondary-button'):button('Message seller',async event=>{
@@ -1162,6 +1185,7 @@ function showSellerCatalog(contact, group) {
         }catch(error){if(sellerDialogActive(root,epoch))modalError(error);}
         finally{control.disabled=false;}
       }));
+      if(itemId)actions.append(button('View full shop',()=>showSellerCatalog(contact,group),'secondary-button'));
     } catch (error) {
       if (!sellerDialogActive(root, epoch)) return;
       const message = el('p','seller-catalog-message',errorMessage(error));
@@ -1183,6 +1207,16 @@ function clearSellerShop() {
   $('sellerShopItems').replaceChildren();
   $('sellerShopName').textContent = '';
   $('sellerShopAdd').disabled = true;
+  $('sellerShopAvailability').hidden = true;
+}
+
+function renderShopAvailability(paused){
+  const panel=$('sellerShopAvailability');
+  panel.hidden=!state.capabilities?.shopAvailability;
+  panel.dataset.paused=String(paused);
+  $('sellerShopAvailabilityStatus').textContent=paused?'Shop paused':'Shop open';
+  $('sellerShopAvailabilityHint').textContent=paused?'Listings are hidden from buyers. You can still edit them.':'Buyers can browse your approved listings.';
+  $('sellerShopTogglePause').textContent=paused?'Reopen shop':'Pause shop';
 }
 
 function showSellerShopListings(items) {
@@ -1225,8 +1259,12 @@ function renderSellerShop() {
     loading.setAttribute('role','status');
     content.replaceChildren(loading);
     try {
-      const {items} = await api(sellerShopRoute());
-      if (sellerShopSession === session && authEpoch === session.epoch) showSellerShopListings(items);
+      const {items,paused} = await api(sellerShopRoute());
+      if (sellerShopSession === session && authEpoch === session.epoch){
+        session.paused=Boolean(paused);
+        renderShopAvailability(session.paused);
+        showSellerShopListings(items);
+      }
     } catch (error) {
       if (sellerShopSession !== session || authEpoch !== session.epoch) return;
       const message = el('p','seller-catalog-message',errorMessage(error));
@@ -1364,6 +1402,11 @@ function editSellerListing(item) {
   if(state.capabilities?.sellerListingPreview)actions.append(preview);
   actions.append(button('Cancel',closeModal,'secondary-button'));
   if (item) actions.append(button('Remove item',() => confirmRemoveSellerListing(item),'secondary-button danger-button'));
+  if(item?.returnNote){
+    const feedback=el('aside','seller-review-note');
+    feedback.append(el('strong','','Staff note'),el('p','',item.returnNote));
+    form.append(feedback);
+  }
   form.append(sellerField('Item name',title));
   if(state.capabilities?.sellerListingPreview)form.append(sellerField('Description (optional)',description));
   form.append(details,note,error,actions);
@@ -1623,7 +1666,7 @@ function renderChat() {
   const visibleSaved=unreadOnly?[]:savedList.filter(contact=>matchesChatSearch(query,contact.peerName,contact.nickname));
   const count=filtered?visibleRooms.length+visibleSaved.length:total;
   $('chatCount').textContent=count?String(count):'';
-  const key = JSON.stringify([Boolean(state.now),privacyMode,query,unreadOnly,savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole,c.peerName,c.peerAdmin]),rooms.map(r=>[r.id,r.contact?.nickname,r.contact?.warning,r.contact?.trusted,r.contact?.favorite,r.contact?.muted,r.peerRole,r.peerName,r.peerAdmin,r.encryption?.peer?.identity,r.contact?.peerIdentity,r.memberCount,r.activeCount,r.messages.at(-1)?.id,r.messages.at(-1)?.text,r.messages.at(-1)?.opened,r.messages.at(-1)?.deleted,r.deletionRequested,unreadCount(r),r.id===selected,r.mutedUntil>now,r.expires-now<=3600000?Math.ceil((r.expires-now)/60000):null,drafts.has(r.id)])]);
+  const key = JSON.stringify([Boolean(state.now),privacyMode,query,unreadOnly,savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole,c.peerName,c.peerAdmin]),rooms.map(r=>[r.id,r.contact?.nickname,r.contact?.warning,r.contact?.trusted,r.contact?.favorite,r.contact?.muted,r.peerRole,r.peerName,r.peerAdmin,r.encryption?.peer?.identity,r.contact?.peerIdentity,r.memberCount,r.activeCount,r.messages.at(-1)?.id,r.messages.at(-1)?.text,r.messages.at(-1)?.shopItem,r.messages.at(-1)?.opened,r.messages.at(-1)?.deleted,r.deletionRequested,unreadCount(r),r.id===selected,r.mutedUntil>now,r.expires-now<=3600000?Math.ceil((r.expires-now)/60000):null,drafts.has(r.id)])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -1750,7 +1793,7 @@ function renderChat() {
   const container = $('messages');
   const signatures = new Map(current.messages.map(message => [message.id, JSON.stringify([
     message.text, message.sender, message.edited, message.opened, message.deleted, message.reactions,
-    message.reply, message.burnSeconds, message.burnAt, message.encryptedMedia, current.encryptionStatus, message.senderRole, postingRestricted
+    message.reply, message.burnSeconds, message.burnAt, message.encryptedMedia, current.encryptionStatus, message.senderRole, message.shopItem, postingRestricted
   ])]));
   const sameRoom = renderedRoom === current.id;
 
@@ -1947,6 +1990,19 @@ function appendGroupBadge(element,role){
   element.append(badge);
 }
 
+function sharedListingCard(room,item){
+  const card=el('section','message-listing');
+  const label=el('span','message-listing-label');
+  label.append(svg('ticketIcon'),el('span','','Shop listing'));
+  card.append(label);
+  if(item){
+    const summary=el('div','message-listing-summary');
+    summary.append(el('strong','',item.name),el('span','',formatListingPrice(item)));
+    card.append(summary,button('View item',()=>showSellerCatalog(null,room,item.id),'message-listing-link'));
+  }else card.append(el('p','message-listing-unavailable','Item unavailable'));
+  return card;
+}
+
 function renderMessage(room, message) {
   if(message.system){
     const notice=el('div','group-notice',privacyMode?'Group activity':message.text);
@@ -1975,6 +2031,8 @@ function renderMessage(room, message) {
 
   if (message.deleted) {
     content.append(el('div', 'deleted-message', message.burnSeconds ? 'Timed message expired or removed.' : 'This message was deleted.'));
+  } else if (Object.hasOwn(message,'shopItem')) {
+    content.append(sharedListingCard(room,message.shopItem));
   } else if (message.burnSeconds && !message.burnAt && !message.mine) {
     content.append(button('Open · ' + message.burnSeconds + 's', async () => {
       try { await api('message/burn-open', { id: room.id, messageId: message.id }); await refresh(); } catch (error) { showError(error); }
@@ -2019,10 +2077,12 @@ function renderMessage(room, message) {
   if (masked && !(message.burnSeconds && !message.burnAt && !message.mine)) {
     bubble.classList.add('masked-message');
     content.setAttribute('aria-hidden', 'true');
+    content.inert=true;
     const reveal = button('Tap to reveal', () => {
       revealedMessages.add(message.id);
       bubble.classList.remove('masked-message');
       content.removeAttribute('aria-hidden');
+      content.inert=false;
       reveal.remove();
       if (canReadCurrent()) acknowledgeMessages();
     }, 'reveal-message');
@@ -2219,6 +2279,19 @@ $('sellerProfileSettings').addEventListener('click',showOwnSellerProfile);
 $('sellerShopProfile').addEventListener('click',showOwnSellerProfile);
 $('sellerShopAdd').addEventListener('click',()=>editSellerListing());
 $('sellerShopRefresh').addEventListener('click',()=>{clearSellerShop();renderSellerShop();});
+$('sellerShopTogglePause').addEventListener('click',async event=>{
+  const session=sellerShopSession, control=event.currentTarget;
+  if(!session||session.paused===undefined)return;
+  const refreshButton=$('sellerShopRefresh');
+  control.disabled=refreshButton.disabled=true;
+  try{
+    const {paused}=await api(sellerShopRoute()+'/availability',{paused:!session.paused});
+    if(sellerShopSession!==session)return;
+    session.paused=paused;
+    renderShopAvailability(paused);
+  }catch(error){if(sellerShopSession===session)showError(error);}
+  finally{control.disabled=refreshButton.disabled=false;}
+});
 $('sellerStockAlerts').addEventListener('click',showSellerStockAlerts);
 function openControlCenter(initialTab) {
  if(!unlockToken||!state.supportAgent)return;
@@ -3662,6 +3735,7 @@ loop();
 
 function previewText(message) {
   if (message.deleted) return 'This message was deleted.';
+  if (Object.hasOwn(message,'shopItem')) return message.shopItem?'Shop listing · '+message.shopItem.name:'Shop listing unavailable';
   if (message.burnSeconds) return 'Timed message';
   if (message.once) return message.opened ? 'Opened' : 'View-once '+onceLabel(message).toLowerCase();
   if (message.kind === 'image') return 'Photo';
@@ -3909,10 +3983,11 @@ function messageActions(room, message) {
   const extras=!room.encryption||(state.capabilities?.encryptedExtras&&encryptionReady(room));
   const controls = message.once || message.burnSeconds || !extras ? [] : [picker];
   if(room.canWrite!==false&&!message.once&&!message.burnSeconds&&extras)controls.push(button('Reply',()=>{closeModal();beginReply(room,message);},'secondary-button'));
-  if(message.kind==='text'&&!message.once&&!message.burnSeconds&&(!room.encryption||message.decrypted))controls.push(button('Copy',async()=>{try{await navigator.clipboard.writeText(message.text);closeModal();}catch(error){modalError(error);}},'secondary-button'));
+  const sharedListing=Object.hasOwn(message,'shopItem');
+  if(!sharedListing&&message.kind==='text'&&!message.once&&!message.burnSeconds&&(!room.encryption||message.decrypted))controls.push(button('Copy',async()=>{try{await navigator.clipboard.writeText(message.text);closeModal();}catch(error){modalError(error);}},'secondary-button'));
   if(!message.mine)controls.push(button('Report',()=>showReport(room,{messageId:message.id}),'secondary-button'));
 
-  if (room.canWrite!==false && !room.encryption && !message.once && !message.burnSeconds && message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
+  if (!sharedListing && room.canWrite!==false && !room.encryption && !message.once && !message.burnSeconds && message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
     controls.push(button('Edit message', () => {
       const input = el('textarea', 'edit-input');
       input.value = message.text;

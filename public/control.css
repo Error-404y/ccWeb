@@ -869,3 +869,8 @@
 .cc-shop-changes td { white-space: pre-wrap; }
 .cc-shop-changes td:last-child { background: #24352c; color: #e5f9ee; }
 .cc-group-author { display: flex; align-items: center; gap: 5px; }
+
+.cc-shop-return { width: min(420px, calc(100vw - 32px)); }
+.cc-shop-return label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
+.cc-shop-return textarea { font-weight: 400; }
+.cc-shop-return .cc-actions { justify-content: flex-end; }
