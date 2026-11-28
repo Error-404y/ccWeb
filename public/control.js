@@ -12,7 +12,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  let revision=0,current='Overview',query='',cursor='',objectURL=null;
  const header=el('header','','cc-header');const brand=el('h1','qzu.');brand.append(el('span',' Control','cc-accent'));header.append(brand,button(mobile?'Close':'Sign out',async()=>{revision++;if(objectURL)URL.revokeObjectURL(objectURL);if(!mobile)await api('logout',{}).catch(()=>{});root.replaceChildren();onExit();},'cc-secondary'));
  const layout=el('div','','cc-layout'),nav=el('nav','','cc-nav'),main=el('section','','cc-content');main.setAttribute('aria-label','Control Center content');layout.append(nav,main);root.append(header,layout);
- const tabs=['Overview','Accounts','Keys','Payments','Reports','Feedback','Audit'];
+ const tabs=['Overview','Accounts','Keys','Payments','Reports','Feedback','Support','Audit'];
  for(const tab of tabs)nav.append(button(tab,()=>{current=tab;query='';cursor='';load();},'cc-tab'));
  const alive=token=>isActive()&&token===revision;
  function error(e){if(isActive())main.prepend(el('p',e?.message||'Request failed.','cc-error'));}
@@ -63,6 +63,11 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     }
    }else if(current==='Feedback'){
     for(const f of data.items){const note=el('textarea');note.placeholder='Internal support note';note.maxLength=1000;const n=card('Feedback #'+f.id,[status(f.workflow||'inspection'),el('p',date(f.at),'cc-muted'),el('p',f.text)]);for(const e of f.events||[])n.append(el('p','Admin '+(e.actor||'Deleted')+' · '+e.status+' · '+e.note,'cc-muted'));n.append(note);for(const [value,label] of [['inspection','Under Inspection'],['help','Need Additional Help'],['solved','Solved']])n.append(action(label,async()=>{await api('feedback/status',{id:f.id,status:value,note:note.value});await load();},value==='help'?'cc-danger':''));main.append(n);}
+   }else if(current==='Support'){
+    main.append(el('p','Assigned support requests and conversations. Private user-to-user chats are never listed.','cc-muted'));
+    for(const r of data.requests||[])main.append(card('Pending request '+r.id,[el('p',r.preview||'New request'),el('p',date(r.at),'cc-muted'),action('Accept',async()=>{await api('support/respond',{id:r.id,action:'accept'});await load();}),action('Reject',async()=>{await api('support/respond',{id:r.id,action:'reject'});await load();},'cc-secondary')]));
+    for(const r of data.rooms||[]){const n=card('Support '+r.id,[details([['Expires',date(r.expires)],['Deletion requested',r.deletionRequested?'Yes':'No']])]);const snap=el('div','','cc-snapshot');for(const m of r.messages){const bubble=el('div','','cc-bubble '+(m.mine?'mine':'other'));bubble.append(el('small',m.sender+' · '+date(m.at)),el('p',m.text));snap.append(bubble);}const reply=el('textarea');reply.placeholder='Write support reply';reply.maxLength=2000;n.append(snap,reply,action('Send reply',async()=>{if(!reply.value.trim())throw Error('Enter a reply.');await api('support/send',{id:r.id,text:reply.value});await load();}));main.append(n);}
+    if(!(data.requests||[]).length&&!(data.rooms||[]).length)main.append(el('p','No assigned support cases.','cc-muted'));
    }else if(current==='Audit'){
     for(const a of data.items)main.append(card(a.action,[details([['Actor',a.actor],['Account',a.account],['Key',a.key_id],['At',date(a.at)],['Reason',a.reason]])]));
    }
