@@ -2473,3 +2473,43 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .once-loading{display:flex;align-items:center;gap:10px;font-weight:600}
 .once-content{padding:12px 0;font-size:17px;line-height:1.55}
 @media(max-width:360px){.composer .once-toggle{width:30px}}
+
+
+/* Control update: retain the live QR, fit the connection tools on one screen. */
+#connectPage .page-content{container-type:size;overflow:auto;overscroll-behavior:none;padding:8px 14px 12px;align-items:center;justify-content:center}
+#connectPage .connect-panel{width:100%;max-width:390px;gap:8px;margin:0;padding:10px 16px;align-self:center}
+#connectPage h1{margin:0;font-size:clamp(20px,5vw,24px)}
+.connect-subtitle{font-size:13px;color:var(--muted);margin:0}
+#connectPage .qr-stage{padding:12px;margin:0 auto}
+#connectPage .qr-box{width:clamp(112px,29cqh,184px);height:clamp(112px,29cqh,184px)}
+#connectPage .code-line{min-height:42px}
+#connectPage .primary-button,#connectPage .secondary-button{min-height:42px}
+#connectPage .separator{margin:2px 0}
+.connect-secondary{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.connect-secondary button{min-width:0;padding-inline:6px}
+@container (min-height:540px){#connectPage .connect-panel{gap:10px}}
+#connectPage .page-content.connect-fits{overflow:hidden}
+#connectPage .page-content:not(.connect-fits){align-items:safe center;overflow:auto}
+@media(max-height:729px){#connectPage .page-content{align-items:flex-start}}
+@media(max-height:600px){#connectPage .connect-panel{padding:4px 10px;gap:5px}#connectPage .qr-box{width:112px;height:112px}}
+
+/* Inline keyboard-replacement attachment menu and submitted report snapshots. */
+.inline-attachments{flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-content:start;gap:18px 6px;margin:0 5px 5px;padding:22px 12px max(22px,env(safe-area-inset-bottom));min-height:min(245px,31dvh);border-radius:24px;background:var(--sub);border:1px solid var(--line);animation:inlineAttachmentIn .22s ease-out both;overflow:auto}
+.inline-attachments[hidden]{display:none!important}
+.inline-attachment-tile{display:flex;flex-direction:column;align-items:center;justify-content:start;gap:8px;min-width:0;background:none;border:0;color:var(--ink);font-size:12px;padding:0;text-align:center}
+.inline-attachment-icon{width:56px;height:56px;border-radius:50%;display:grid;place-items:center;background:var(--hover)}
+.inline-attachment-icon svg{width:29px;height:29px}
+.inline-attachment-icon[data-icon=photosIcon]{color:#70a9f5}
+.inline-attachment-icon[data-icon=mic]{color:#62c9a0}
+.inline-attachment-icon[data-icon=clock]{color:#f2b94e}
+#attachmentMenu.inline-open{transform:none;color:var(--ink)}
+@keyframes inlineAttachmentIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@media(max-width:360px){.inline-attachment-icon{width:48px;height:48px}.inline-attachment-tile{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.inline-attachments{animation:none}}
+.case-status{font-weight:650;font-size:13px}
+.case-status.inspection{color:#b8860b}.case-status.help{color:#e04444}.case-status.solved{color:#2c9b60}
+.report-transcript{display:flex;flex-direction:column;gap:8px;padding:10px;background:var(--surface);border-radius:14px}
+.report-transcript .report-evidence{max-width:87%;border-radius:14px;padding:10px;overflow-wrap:anywhere}
+.report-transcript .snapshot-mine{align-self:flex-end;background:var(--active)}
+.report-transcript .snapshot-other{align-self:flex-start;background:var(--sub)}
+.report-transcript .reported{outline:1px solid var(--accent)}

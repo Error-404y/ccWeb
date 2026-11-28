@@ -164,6 +164,7 @@ function navigate(path, push = true) {
   if (push) history.pushState(null, '', path);
   const nextPage = routeName(location.pathname);
   if (page !== nextPage) {
+    closeInlineAttachments();
     rememberRoom();
     if(nextPage==='chat')restoreDraft(selected);else resetOnce();
     closeModal();
@@ -648,6 +649,7 @@ async function getSession() {
 
 function lock(reopen = true) {
   if (isPublicCheckout()) return;
+  closeInlineAttachments();
   if (!playBuild && modal.dataset.checkout === 'renewal') {
     const saved = savedInvoice(true);
     checkoutReturn = saved ? () => showInvoice(saved, null, true) : showRenewal;
@@ -792,6 +794,7 @@ if (native) {
 
 function selectRoom(id, open = true) {
   if (selected !== id) {
+    closeInlineAttachments();
     rememberRoom();
     if (mediaRoom) closeModal();
     resetOnce();
@@ -847,8 +850,8 @@ $('manageContacts').addEventListener('click',()=>{
   show('Contacts',[list,button('Close',closeModal)]);
 });
 let lastBadge=-1,activityTimer=null;
-function syncBadge(count){if(!native||window.Capacitor.getPlatform()!=='ios'||lastBadge===count)return;lastBadge=count;devicePlugin.setBadge({count}).catch(()=>{lastBadge=-1;});}
-function showActivityBanner(){const banner=$('activityBanner');banner.textContent='New message';banner.hidden=false;clearTimeout(activityTimer);activityTimer=setTimeout(()=>{banner.hidden=true;},2400);}
+function syncBadge(count){if(pushOptedOut())count=0;if(!native||window.Capacitor.getPlatform()!=='ios'||lastBadge===count)return;lastBadge=count;devicePlugin.setBadge({count}).catch(()=>{lastBadge=-1;});}
+function showActivityBanner(){if(pushOptedOut())return;const banner=$('activityBanner');banner.textContent='New message';banner.hidden=false;clearTimeout(activityTimer);activityTimer=setTimeout(()=>{banner.hidden=true;},2400);}
 function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m.unread===true).length;}
 function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+(state.official?.unread?1:0);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
 function renderChat() {
@@ -946,6 +949,7 @@ function renderChat() {
   const isAdmin = Boolean(current?.admin);
   const readOnly = Boolean(current?.readOnly);
   $('composer').hidden = !current || readOnly;
+  if(!current||readOnly||current.support||!unlockToken)closeInlineAttachments();
   renderEncryptionNotice(current);
   $('adminComposer').hidden = !readOnly;
   $('deleteChat').hidden = readOnly;
@@ -1270,8 +1274,20 @@ async function acknowledgeMessages() {
 
 let inviteMotionKey='',inviteMotionDuration=1;
 function updateInviteMotion(inv,now=serverNow()){const key=inv?.code+':'+inv?.expires;if(key!==inviteMotionKey){inviteMotionKey=key;inviteMotionDuration=Math.max(1,(inv?.expires||now)-now);}const remaining=inv?Math.max(0,inv.expires-now):0;$('inviteProgress').max=inviteMotionDuration;$('inviteProgress').value=remaining;$('inviteTimer').textContent=inv?clock(remaining):'Generating code…';}
+function fitConnectPage(){
+  const content=$('connectPage').querySelector('.page-content'),panel=content.querySelector('.connect-panel');
+  if(!content.clientHeight)return;
+  const style=getComputedStyle(content),available=content.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom);
+  content.classList.toggle('connect-fits',panel.getBoundingClientRect().height<=available+1);
+}
+if(typeof ResizeObserver==='function'){
+  const connectObserver=new ResizeObserver(fitConnectPage);
+  connectObserver.observe($('connectPage').querySelector('.page-content'));
+  connectObserver.observe($('connectPage').querySelector('.connect-panel'));
+}
 function renderConnect() {
   if (page !== 'connect' || !unlockToken) return;
+  fitConnectPage();
   const inv = state.invite && state.invite.expires > serverNow() ? state.invite: null;
   $('inviteCode').textContent = inv?.code || '– – – – – –';
   updateInviteMotion(inv);
@@ -1312,7 +1328,9 @@ function renderSettings() {
   $('emergency').disabled = !state.pinState;
   $('changeLogin').disabled = !unlockToken;
   $('backgroundPin').checked=backgroundPin;$('backgroundPin').disabled=!native||!unlockToken||backgroundPinSaving;
-  $('pushStatus').textContent=state.push?.registered&&!pushOptedOut()?'On':native&&window.Capacitor.getPlatform()==='ios'?'In-app':pushAvailable()?(pushOptedOut()?'Off':'Permission / setup'):'Unavailable';
+  $('privateNotifications').checked=!pushOptedOut();
+  $('privateNotifications').disabled=!unlockToken||Boolean(pushRemovalJob||pushRegisterJob);
+  $('pushStatus').textContent=pushOptedOut()?'Message notifications are off.':state.push?.registered?'Message notifications are enabled.':native&&window.Capacitor.getPlatform()==='ios'?'In-app alerts enabled. Remote delivery depends on Apple push configuration.':'Allow notifications in your device settings if prompted.';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
@@ -1671,13 +1689,20 @@ function renderAdminFeedback(){
   if(!feedbackItems.length)list.append(el('p','support-help-notes','No feedback yet.'));
   for(const entry of feedbackItems){
     const item=el('div','request-item');
-    item.append(el('strong','','Feedback #'+entry.id+(entry.reviewed?' · Reviewed':' · New')),el('span','',new Date(entry.at).toLocaleString()),el('p','support-request-preview',privacyMode?'Feedback hidden':entry.text));
+    item.append(el('strong','','Feedback #'+entry.id),el('span','',new Date(entry.at).toLocaleString()),el('p','support-request-preview',privacyMode?'Feedback hidden':entry.text));
+    const workflow=entry.workflow|| (entry.reviewed?'solved':'inspection');item.append(el('p','case-status '+workflow,workflow==='solved'?'Solved':workflow==='help'?'Need Additional Help':'Under Inspection'));
     const actions=el('div','request-actions');
     const act=async action=>{
       try{await api('admin/feedback/'+action,{id:entry.id});closeModal();await refresh();if(state.supportAgent&&location.pathname==='/settings/admin-feedback')await loadAdminFeedback();}
       catch(error){showError(error);}
     };
-    if(!entry.reviewed)actions.append(button('Mark reviewed',()=>act('review'),'secondary-button'));
+    actions.append(button('Review case',()=>{
+      const note=el('textarea','edit-input');note.maxLength=1000;note.placeholder='Internal support note';
+      const controls=[el('p','',privacyMode?'Feedback hidden':entry.text),note];
+      for(const event of entry.events||[])controls.push(el('p','','Admin '+(event.actor||'Deleted')+' · '+event.status+' · '+new Date(event.at).toLocaleString()+' · '+event.note));
+      for(const [label,status] of [['Under Inspection','inspection'],['Need Additional Help','help'],['Solved','solved']])controls.push(button(label,async()=>{try{await api('admin/feedback/status',{id:entry.id,status,note:note.value});closeModal();await refresh();await loadAdminFeedback();}catch(e){modalError(e);}},'secondary-button'));
+      controls.push(button('Close',closeModal,'secondary-button'));show('Feedback #'+entry.id,controls);
+    },'secondary-button'));
     actions.append(button('Delete',()=>show('Delete feedback?',[el('p','','Remove this feedback permanently?'),button('Delete',()=>act('delete'),'primary-button danger-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
     item.append(actions);list.append(item);
   }
@@ -1807,6 +1832,7 @@ $('qzuInfoOpen').addEventListener('click', () => {
 });
 $('qzuInfoBack').addEventListener('click', () => $('backToChats').click());
 $('backToChats').addEventListener('click', () => {
+  closeInlineAttachments();
   if(recordingCleanup)clearMedia();
   rememberRoom();
   resetOnce();
@@ -1859,6 +1885,7 @@ function updateSendButton() {
 }
 
 async function sendMessage() {
+  closeInlineAttachments();
   const id = selected;
   const text = $('message').value.trim();
   const room = state.rooms.find(room => room.id === id);
@@ -2405,9 +2432,9 @@ function showReport(room,selection={}){
   const reason=el('select','edit-input');reason.setAttribute('aria-label','Reason');for(const name of ['Harassment','Threats or violence','Sexual exploitation','Spam or scam','Other']){const option=el('option','',name);option.value=name;reason.append(option);}
   const evidence=el('textarea','edit-input');evidence.maxLength=2000;evidence.placeholder='Additional details (optional)';
   const available=room.messages.filter(m=>m.kind==='text'&&!m.deleted&&!m.once&&!m.burnSeconds&&(!room.encryption||m.decrypted)&&(!privacyMode||revealedMessages.has(m.id)));
-  const anchor=available.findIndex(m=>m.id===selection.messageId),candidates=anchor>=0?available.slice(Math.max(0,anchor-5),anchor+6):available.slice(-11);
-  const chosen=new Set(),list=el('div','report-context-list');if(candidates.length)list.append(el('p','','Select up to 6 messages to share with moderators.'));
-  for(const m of candidates){const check=el('input');check.type='checkbox';const item=el('label','report-context-row');const copy=el('div');copy.append(el('strong','',(m.mine?'You':m.sender)+' · '+fmtTime(m.at)+(m.id===selection.messageId?' · Reported':'')),el('p','',m.text.slice(0,1000)));item.append(check,copy);check.addEventListener('change',()=>{if(check.checked&&chosen.size>=6){check.checked=false;return;}if(check.checked)chosen.add(m.id);else chosen.delete(m.id);});list.append(item);}
+  const anchor=available.findIndex(m=>m.id===selection.messageId),candidates=anchor>=0?available.slice(Math.max(0,anchor-12),anchor+13):available.slice(-24);
+  const chosen=new Set(),list=el('div','report-context-list');if(candidates.length)list.append(el('p','','Select up to 24 messages to share with moderators. Review the conversation snapshot before submitting.'));
+  for(const m of candidates){const check=el('input');check.type='checkbox';const item=el('label','report-context-row');const copy=el('div');copy.append(el('strong','',(m.mine?'You':m.sender)+' · '+fmtTime(m.at)+(m.id===selection.messageId?' · Reported':'')),el('p','',m.text.slice(0,1000)));item.append(check,copy);check.addEventListener('change',()=>{if(check.checked&&chosen.size>=24){check.checked=false;return;}if(check.checked)chosen.add(m.id);else chosen.delete(m.id);});list.append(item);}
   const selectedMessage=room.messages.find(m=>m.id===selection.messageId&&!m.deleted&&!m.once&&!m.burnSeconds),share=el('input');share.type='checkbox';const shareLabel=el('label','feedback-confirm');shareLabel.append(share,el('span','','Share the reported photo or voice message with moderators'));shareLabel.hidden=!(selectedMessage&&['image','audio'].includes(selectedMessage.kind)&&(!room.encryption||encryptionReady(room))&&(!privacyMode||revealedMessages.has(selectedMessage.id)));
   const send=button('Submit report',async()=>{send.disabled=true;try{const epoch=authEpoch,context=candidates.filter(m=>chosen.has(m.id)).map(m=>({id:m.id,text:m.text.slice(0,1000)}));let attachment=null;
     if(share.checked&&!shareLabel.hidden){let blob;if(room.encryption){const value=await api('encryption/media/'+encodeURIComponent(room.id)+'/'+encodeURIComponent(selectedMessage.id));blob=await QzuCrypto.decryptMedia(roomKeys.get(room.id).context,selectedMessage.kind,value.cipher,selectedMessage.mine);}else{const response=await transport('/api/media/'+encodeURIComponent(room.id)+'/'+encodeURIComponent(selectedMessage.id),{headers:{'X-QZU-Unlock':unlockToken},cache:'no-store',credentials:'same-origin'});if(!response.ok)throw Error('Evidence unavailable.');blob=await response.blob();}
@@ -2420,18 +2447,19 @@ function showReport(room,selection={}){
 function reportDetail(item){
   const controls=[el('h3','',item.reason),el('p','','Report '+item.id),el('p','','Reported account: '+(item.target||'Deleted account')),el('p','','Reporter: '+(item.reporter||'Deleted account')),el('p','','Chat: '+item.chat_type+' · '+item.room),el('p','','Received '+new Date(item.created).toLocaleString()),el('p','','Previous reports: '+item.previousReports),el('p','',item.evidence||'No additional details')];
   const transcript=el('div','report-transcript');
-  for(const entry of item.context||[]){const bubble=el('div','report-evidence'+(entry.reported?' reported':''));bubble.append(el('strong','',entry.sender+' · '+new Date(entry.at).toLocaleTimeString()),el('p','',entry.text),el('small','',entry.source==='reporter-submitted'?'Reporter-submitted text':'Server-confirmed text'));transcript.append(bubble);}
-  controls.push(el('h3','','Submitted messages'),transcript);
+  for(const entry of item.context||[]){const bubble=el('div','report-evidence'+(entry.sender==='Reporter'?' snapshot-mine':' snapshot-other')+(entry.reported?' reported':''));bubble.append(el('strong','',entry.sender+' · '+new Date(entry.at).toLocaleTimeString()),el('p','',entry.text),el('small','',entry.source==='reporter-submitted'?'Reporter-submitted text':'Server-confirmed text'));transcript.append(bubble);}
+  controls.push(el('p','case-status '+(item.resolved?'solved':item.workflow==='help'?'help':'inspection'),item.resolved?'Solved':item.workflow==='help'?'Need Additional Help':'Under Inspection'),el('h3','','Conversation snapshot · '+(item.context?.length||0)+' messages'),transcript);
   if(item.attachment)controls.push(button('View reported '+(item.attachment.kind==='image'?'photo':'audio'),async()=>{try{const epoch=authEpoch,response=await transport('/api/admin/reports/media/'+encodeURIComponent(item.id),{headers:{'X-QZU-Unlock':unlockToken},cache:'no-store',credentials:'same-origin'});if(!response.ok)throw Error('Evidence unavailable.');const blob=await response.blob();if(epoch!==authEpoch||!unlockToken||document.hidden)return;const media=el(item.attachment.kind==='image'?'img':'audio','temporary-media');if(item.attachment.kind==='audio')media.controls=true;else media.alt='Reported photo';show('Report evidence',[el('p','',item.attachment.source==='reporter-submitted'?'Reporter-submitted attachment':'Server-confirmed attachment'),media,button('Back',()=>reportDetail(item),'secondary-button')]);mediaUrl=URL.createObjectURL(blob);media.src=mediaUrl;}catch(error){modalError(error);}},'secondary-button'));if(!item.context?.length)controls.push(el('p','','No message content was shared.'));
   if(item.history?.length){controls.push(el('h3','','Moderation history'));for(const event of item.history)controls.push(el('p','',new Date(event.created).toLocaleString()+' · '+event.action+(event.notes?' · '+event.notes:'')));}
   const notes=el('textarea','edit-input');notes.placeholder='Moderator notes';notes.maxLength=1000;
-  if(!item.resolved){controls.push(notes);for(const [label,action] of [['Dismiss','dismiss'],['Warn account','warn'],['Restrict messaging for 24h','restrict'],['Suspend for 24h','suspend24h'],['Suspend for 7 days','suspend7d'],['Permanently suspend','suspend']])controls.push(button(label,()=>{show('Confirm '+label.toLowerCase()+'?',[el('p','','This action will be recorded in moderation history.'),button('Confirm',async()=>{try{await api('admin/reports/resolve',{id:item.id,action,notes:notes.value});openModeration();}catch(error){dialogError(error);}}),button('Cancel',()=>reportDetail(item),'secondary-button')]);},'secondary-button'+(action.startsWith('suspend')?' danger-button':'')));}
+  if(item.collaboration?.length){controls.push(el('h3','','Support collaboration'));for(const event of item.collaboration)controls.push(el('p','','Admin '+(event.actor||'Deleted')+' · '+new Date(event.at).toLocaleString()+' · '+event.status+' · '+event.note));}
+  if(!item.resolved){controls.push(notes);for(const [label,status] of [['Under Inspection','inspection'],['Need Additional Help','help']])controls.push(button(label,async()=>{try{await api('admin/reports/collaborate',{id:item.id,status,note:notes.value});openModeration();}catch(error){modalError(error);}},'secondary-button'));for(const [label,action] of [['Dismiss','dismiss'],['Warn account','warn'],['Restrict messaging for 24h','restrict'],['Suspend for 24h','suspend24h'],['Suspend for 7 days','suspend7d'],['Permanently suspend','suspend']])controls.push(button(label,()=>{show('Confirm '+label.toLowerCase()+'?',[el('p','','This action will be recorded in moderation history.'),button('Confirm',async()=>{try{await api('admin/reports/resolve',{id:item.id,action,notes:notes.value});openModeration();}catch(error){dialogError(error);}}),button('Cancel',()=>reportDetail(item),'secondary-button')]);},'secondary-button'+(action.startsWith('suspend')?' danger-button':'')));}
   else{controls.push(el('p','','Resolved: '+(item.action||'reviewed')),el('p','',item.notes||''));if(item.account?.suspended||item.account?.restrictedUntil){controls.push(notes,button('Reinstate account',()=>{show('Reinstate account?',[button('Confirm',async()=>{try{await api('admin/reports/reinstate',{target:item.target,notes:notes.value});openModeration();}catch(error){dialogError(error);}}),button('Cancel',()=>reportDetail(item),'secondary-button')]);},'secondary-button trusted-action'));}}
   controls.push(button('Back',openModeration,'secondary-button'));show('Report details',controls);
 }
 async function openModeration(){
   try{const {items}=await api('admin/reports'),search=el('input','edit-input'),filter=el('select','edit-input'),list=el('div','request-list');search.placeholder='Search report, account or reason';for(const value of ['Pending','Resolved','All']){const o=el('option','',value);o.value=value;filter.append(o);}
-    function renderReports(){list.replaceChildren();const query=search.value.toLowerCase().trim();const matches=items.filter(x=>(filter.value==='All'||Boolean(x.resolved)===(filter.value==='Resolved'))&&[x.id,x.reason,x.target,x.reporter].some(v=>String(v||'').toLowerCase().includes(query)));for(const item of matches){const row=el('div','request-item');row.append(el('strong','',item.reason),el('p','',(item.resolved?'Resolved':'Pending')+' · '+new Date(item.created).toLocaleDateString()+' · '+item.previousReports+' previous reports'),button('View report',()=>reportDetail(item),'secondary-button'));list.append(row);}if(!matches.length)list.append(el('p','','No reports found.'));}
+    function renderReports(){list.replaceChildren();const query=search.value.toLowerCase().trim();const matches=items.filter(x=>(filter.value==='All'||Boolean(x.resolved)===(filter.value==='Resolved'))&&[x.id,x.reason,x.target,x.reporter].some(v=>String(v||'').toLowerCase().includes(query)));for(const item of matches){const row=el('div','request-item');row.append(el('strong','',item.reason),el('p','',(item.resolved?'Solved':item.workflow==='help'?'Need Additional Help':'Under Inspection')+' · '+new Date(item.created).toLocaleDateString()+' · '+item.previousReports+' previous reports'),button('View report',()=>reportDetail(item),'secondary-button'));list.append(row);}if(!matches.length)list.append(el('p','','No reports found.'));}
     search.addEventListener('input',renderReports);filter.addEventListener('change',renderReports);renderReports();show('Moderation',[el('p','',items.filter(x=>!x.resolved).length+' pending · '+items.filter(x=>x.resolved).length+' resolved'),search,filter,list,button('Close',closeModal,'secondary-button')]);
   }catch(error){showError(error);}
 }
@@ -2685,20 +2713,29 @@ voiceControl.addEventListener('pointerup',event=>endVoiceGesture(event));
 voiceControl.addEventListener('pointercancel',event=>endVoiceGesture(event,true));
 voiceControl.addEventListener('lostpointercapture',event=>endVoiceGesture(event,true));
 voiceControl.addEventListener('click',event=>{if(event.detail===0){const room=currentMediaRoom();if(room)recordVoice(room);}});
+function closeInlineAttachments(focus=false){
+  const panel=$('inlineAttachments'),toggle=$('attachmentMenu');
+  if(panel.hidden)return;
+  panel.hidden=true;panel.replaceChildren();toggle.classList.remove('inline-open');
+  toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-label','Message options');toggle.replaceChildren(svg('plus'));
+  if(focus)$('message').focus({preventScroll:true});
+}
 function showAttachmentGrid(title,options){
-  const grid=el('div','attachment-grid'),handle=el('div','attachment-handle');
+  const panel=$('inlineAttachments'),toggle=$('attachmentMenu');
+  $('message').blur();panel.replaceChildren();
   for(const control of options){
     const label=control.textContent;
-    const icon=label.includes('Gallery')?'camera':label.includes('Camera')?'camera':label.includes('Voice')?'mic':label.toLowerCase().includes('once')?'viewOnceIcon':label.includes('reading')||label.includes('Timed')?'clock':'chat';
-    control.className='attachment-tile';control.prepend(svg(icon));grid.append(control);
+    const icon=label.includes('Gallery')?'photosIcon':label.includes('Camera')?'camera':label.includes('Voice')?'mic':label.toLowerCase().includes('once')?'viewOnceIcon':label.includes('reading')||label.includes('Timed')?'clock':'chat';
+    const name=label==='Gallery'?'Photos':label==='Voice message'?'Voice':label.includes('once')?'View Once':label.includes('reading')?'Timed Text':label;
+    const tile=el('span','inline-attachment-icon');tile.dataset.icon=icon;tile.append(svg(icon));
+    control.className='inline-attachment-tile';control.setAttribute('aria-label',label);control.replaceChildren(tile,el('span','',name));
+    control.addEventListener('click',()=>closeInlineAttachments(),{capture:true,once:true});panel.append(control);
   }
-  show(title,[handle,grid,button('Close',closeModal,'secondary-button')]);
-  modal.classList.add('attachment-sheet');$('attachmentMenu').classList.add('sheet-open');
-  let y=null;handle.addEventListener('pointerdown',e=>{y=e.clientY;handle.setPointerCapture(e.pointerId);});
-  handle.addEventListener('pointerup',e=>{if(y!==null&&e.clientY-y>25)closeModal();y=null;});
-  haptic();
+  panel.hidden=false;toggle.classList.add('inline-open');toggle.replaceChildren(svg('keyboardIcon'));toggle.setAttribute('aria-expanded','true');toggle.setAttribute('aria-label','Show keyboard');haptic();
 }
+$('message').addEventListener('focus',()=>closeInlineAttachments());
 $('attachmentMenu').addEventListener('click', () => {
+  if(!$('inlineAttachments').hidden){closeInlineAttachments(true);return;}
   const room = state.rooms.find(room => room.id === selected);
   if (!room || room.admin) return;
   if (room.encryption || (native && directRoom(room))) {
@@ -2991,7 +3028,7 @@ $('updateCenter').addEventListener('click', async () => {
   } catch (error) { showError(error); }
 });
 let pushPlugin=null,pushListenersReady=false,pushRetryAt=0,pushRegisterJob=null,pushRemovalJob=null;
-function pushOptedOut(){try{localStorage.removeItem('qzu-push-opt-out');}catch{}return false;}
+function pushOptedOut(){try{return localStorage.getItem('qzu-push-opt-out')==='1';}catch{return false;}}
 function shouldPromptPush(){try{return localStorage.getItem('qzu-push-permission-requested')!=='1';}catch{return false;}}
 function notePushPrompt(){try{localStorage.setItem('qzu-push-permission-requested','1');}catch{}}
 function pushAvailable(){return Boolean(state.push?.available&&(!state.push.platforms||state.push.platforms.includes(window.Capacitor?.getPlatform?.())));}
@@ -3036,18 +3073,25 @@ function restorePushRegistration(){
     pushEpoch=authEpoch;registerPrivatePush(false,shouldPromptPush()).catch(()=>{pushEpoch=-1;pushRetryAt=Date.now()+15000;});
   }
 }
-$('privateNotifications').addEventListener('click',()=>{
+$('privateNotifications').addEventListener('change',async event=>{
   if(!unlockToken)return;
-  const registered=state.push?.registered;
-  const controls=[el('p','','Only generic activity alerts. No sender, chat or message details.')];if(native&&window.Capacitor.getPlatform()==='android'&&!pushOptedOut())controls.push(el('p','','Message notifications are enabled by default. Allow notifications in Android settings if prompted.'));
-  if(native&&window.Capacitor.getPlatform()==='ios'){
-    controls.push(el('p','','Internal notifications work in the app. Remote notifications require Apple Push Notification service.'),button('Enable iOS notification permissions',async()=>{try{const count=state.rooms.reduce((n,r)=>n+unreadCount(r),0);const result=await devicePlugin.setBadge({count,requestPermission:true});info('Notifications',result.granted?'Enabled.':'Permission not granted.');}catch(error){modalError(error);}}),button('Test local notification',async event=>{const control=event.currentTarget,epoch=authEpoch;control.disabled=true;control.textContent='Scheduling test…';let timer;try{const result=await Promise.race([devicePlugin.testLocalNotification(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Native notification test timed out. Rebuild the iOS app.')),12000);})]);if(!result?.scheduled)throw Error('Native test was not confirmed. Install the latest iOS build.');if(epoch===authEpoch&&unlockToken)info('Notifications','Local test scheduled for 5 seconds. Stay here or return to the Home Screen. Alerts: '+(result.alerts?'enabled':'disabled')+' · Sounds: '+(result.sounds?'enabled':'disabled')+' · Badges: '+(result.badges?'enabled':'disabled')+'.');}catch(error){if(epoch===authEpoch)modalError(error);}finally{clearTimeout(timer);control.disabled=false;control.textContent='Test local notification';}},'secondary-button'));
-  }
-  if(registered&&!pushOptedOut())controls.push(button('Test push notification',async()=>{try{const result=await api('push/test',{});info('Push test',result.result==='accepted'?'Notification accepted by delivery provider. Check your phone.':'Delivery status: '+result.result);}catch(error){modalError(error);}},'secondary-button'));
-  else if(pushAvailable()&&getPushPlugin()){controls.push(button('Enable',async()=>{try{if(pushRemovalJob)await pushRemovalJob;try{localStorage.removeItem('qzu-push-opt-out');}catch{}pushRetryAt=0;await registerPrivatePush(true);}catch(error){modalError(error);}}));}
-  else if(!native||window.Capacitor.getPlatform()!=='ios')controls.push(el('p','','Push delivery is not configured yet.'));
-  if(state.push?.diagnostic)controls.push(el('p','','Last push result: '+state.push.diagnostic.result));
-  controls.push(button('Close',closeModal,'secondary-button'));show('Private notifications',controls);
+  const toggle=event.currentTarget,enabled=toggle.checked;
+  try{if(enabled)localStorage.removeItem('qzu-push-opt-out');else localStorage.setItem('qzu-push-opt-out','1');}catch{}
+  toggle.disabled=true;pushRetryAt=0;
+  try{
+    if(!enabled){$('activityBanner').hidden=true;syncBadge(0);await disablePrivatePush();}
+    else{
+      if(pushRemovalJob)await pushRemovalJob;
+      pushEpoch=-1;lastBadge=-1;
+      if(native&&window.Capacitor.getPlatform()==='ios'){
+        const count=state.rooms.reduce((n,r)=>n+unreadCount(r),0);
+        await devicePlugin.setBadge({count,requestPermission:true});
+      }
+      if(pushAvailable()&&getPushPlugin())await registerPrivatePush(false,true);
+    }
+    await refresh();
+  }catch(error){$('pushStatus').textContent='Notification setting saved. Device registration will retry.';}
+  finally{toggle.disabled=false;toggle.checked=!pushOptedOut();updateNavigation();}
 });
 const backgroundChoices = ['plain', 'grid', 'dots'];
 function applyChatBackground(value) {
@@ -3182,6 +3226,12 @@ function showKeyEntry(renewal) {
 
 function showRenewal() {
   if(playBuild){showRestrictedAccount('Access unavailable','Your current access is no longer active.');return;}
+  if(state.access?.plan!=='monthly'){
+    const input=el('input','access-key-input');input.placeholder='Enter renewal access key';input.autocomplete='off';input.spellcheck=false;input.maxLength=52;
+    const apply=button('Apply renewal',async()=>{apply.disabled=true;try{await api('access/renew',{key:input.value.trim().toUpperCase()});accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}catch(error){dialogError(error);apply.disabled=false;}});
+    showCheckout('Renew access',[el('p','','Enter a new access key to extend your existing account.'),input,apply,button(accessDue?'Lock':'Close',accessDue?()=>{delete modal.dataset.checkout;checkoutReturn=null;lock();}:()=>{modalLocked=false;closeModal();},'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button')],true);
+    return;
+  }
   const plan = el('div', 'access-plan');
   plan.append(el('strong', 'access-price', '€2.99'), el('span', '', 'One month · Incl. 19% tax'));
   const controls = [plan, button('Renew access', async () => {
@@ -3359,11 +3409,11 @@ function showInvoice(secret, initial, renewal) {
 
 $('accessSettings').addEventListener('click', () => {
   const access = state.access;
-  if (!access || access.plan !== 'monthly') {
+  if (!access || !['monthly','week','month','year'].includes(access.plan)) {
     info('qzu-Access', 'Lifetime or existing account access.');
     return;
   }
   if(playBuild){info('qzu-Access','Existing access until '+new Date(access.paidUntil).toLocaleDateString()+'.');return;}
   const date = new Date(access.paidUntil).toLocaleDateString();
-  show('qzu-Access', [el('p', '', 'Paid through ' + date), el('p', '', 'Months paid: ' + access.monthsPaid + '. Renewal €2.99 including 19% tax.'), button('Renew access', showRenewal), button('Close', closeModal, 'secondary-button')]);
+  show('qzu-Access', [el('p', '', 'Paid through ' + date), el('p', '', access.plan==='monthly'?'Months paid: '+access.monthsPaid+'. Legacy renewal €2.99 including 19% tax.':'Your account is renewed using a new access key.'), button('Renew access', showRenewal), button('Close', closeModal, 'secondary-button')]);
 });
