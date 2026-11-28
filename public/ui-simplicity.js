@@ -4,6 +4,7 @@
   function accessSummary(access,now){
     if(!access||!Object.hasOwn(planLabels,access.plan))return {plan:'Unavailable',remaining:'Access information unavailable',status:'Unknown',timed:false};
     const plan=planLabels[access.plan],timed=['week','month','year','monthly'].includes(access.plan);
+    if(timed&&Number.isFinite(access.paidUntil)&&Number.isFinite(now)&&access.paidUntil<=now)return {plan,remaining:'Expired',status:'Expired',timed};
     if(!access.active)return {plan,remaining:'No remaining access',status:'Inactive',timed};
     if(!timed)return {plan,remaining:'No expiration',status:'Active',timed};
     if(!Number.isFinite(access.paidUntil)||!Number.isFinite(now))return {plan,remaining:'Expiration unavailable',status:'Unknown',timed};
@@ -19,7 +20,7 @@
     const owns=e=>gesture?.id===e.pointerId;
     const horizontal=(dx,dy)=>dx>0&&dx>=Math.abs(dy)*1.6;
     surface.addEventListener('pointerdown',e=>{
-      if(gesture&&!owns(e)){clear();return;}
+      if(gesture&&!owns(e)){clear();return;}if(gesture)clear();
       suppress=false;
       const active=current(),bounds=surface.getBoundingClientRect();
       if(!active||!e.isPrimary||e.button!==0||!['touch','pen'].includes(e.pointerType)||e.clientX<bounds.left||e.clientX>bounds.left+edge||e.target.closest?.('button,a,input,textarea,select,audio,video,[contenteditable],dialog'))return;
@@ -39,7 +40,7 @@
       const g=gesture,dx=e.clientX-g.x,dy=e.clientY-g.y,valid=current()===g.active&&dx>=72&&horizontal(dx,dy);
       clear();if(g.tracking||valid){suppress=true;e.stopPropagation();if(e.cancelable)e.preventDefault();}if(valid)close();
     },true);
-    surface.addEventListener('pointercancel',e=>{if(owns(e))clear();},true);
+    surface.addEventListener('pointercancel',e=>{if(owns(e)){suppress=gesture.tracking;clear();}},true);
     surface.addEventListener('lostpointercapture',e=>{if(owns(e)&&e.target===surface&&!surface.hasPointerCapture?.(e.pointerId))clear();},true);
     surface.addEventListener('click',e=>{if(suppress&&e.detail!==0){suppress=false;e.preventDefault();e.stopPropagation();}},true);
     return clear;
