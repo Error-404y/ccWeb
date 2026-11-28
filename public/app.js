@@ -891,7 +891,7 @@ function renderChat() {
   const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
   $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
+  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole,c.peerName]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.peerName, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -3453,7 +3453,8 @@ $('accessSettings').addEventListener('click', () => {
 function clearUserTicketUI(){ticketEpoch++;ticketSelected=null;ticketMode='list';ticketBusy=false;ticketPolling=false;ticketLast='';ticketDraft='';ticketPending=null;$('userTicketContent').replaceChildren();}
 function ticketAlive(epoch,auth){return epoch===ticketEpoch&&auth===authEpoch&&Boolean(unlockToken)&&page==='tickets'&&!accessDue&&!termsPending&&!suspendedAccount;}
 function ticketNavigate(mode,id=null){ticketEpoch++;ticketMode=mode;ticketSelected=id;ticketLast='';ticketDraft='';ticketPending=null;ticketBusy=false;ticketPolling=false;$('userTicketContent').replaceChildren();refreshUserTickets();}
-function renderTicketList(items){
+function renderTicketList(items,completed=[]){
+ if(ticketLast){try{const old=JSON.parse(ticketLast);if(Array.isArray(old)&&old.some(t=>completed.includes(t.id)&&!t.closed))showActivityBanner('Ticket completed');}catch{}}
  items=items.filter(t=>!t.closed);
  const root=$('userTicketContent');const key=JSON.stringify(items);if(ticketLast===key)return;ticketLast=key;root.replaceChildren();
  if(state.supportAgent){root.append(el('p','pay-note','Manage tickets in qzu. Control.'));return;}
@@ -3474,13 +3475,13 @@ function renderUserTicket(t,epoch,auth){
  const composer=el('form','user-ticket-compose');send=el('button','primary-button user-ticket-send','Send');composer.append(field,send);root.append(head,feed,notice,composer);
  composer.onsubmit=async e=>{e.preventDefault();const text=field.value.trim();if(!text||ticketBusy)return;ticketBusy=true;send.disabled=true;if(!ticketPending||ticketPending.text!==text)ticketPending={text,requestId:crypto.randomUUID()};try{const data=await api('tickets/send',{id:t.id,...ticketPending},true);if(ticketAlive(epoch,auth)){if(field.value.trim()===text){field.value='';ticketDraft='';}ticketPending=null;renderUserTicket(data,epoch,auth);feed.scrollTop=feed.scrollHeight;}}catch(e){if(ticketAlive(epoch,auth))notice.textContent=errorMessage(e);}finally{if(ticketAlive(epoch,auth)){ticketBusy=false;send.disabled=field.disabled;}}};
  }
- const key=JSON.stringify(t.messages);if(ticketLast!==key){ticketLast=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','pay-ticket-bubble '+(m.mine?'mine':'other'));if(!m.mine){const name=el('span','user-ticket-name',m.role==='admin'?'qzu-Support':m.role==='seller'||m.role==='verified-seller'?'Seller':m.role==='system'?'Ticket':'Customer');if(m.role==='admin'||m.role==='verified-seller')name.append(svg(m.role==='admin'?'adminBadge':'sellerBadge','admin-badge'));b.append(name);}b.append(el('p','',m.text),el('small','pay-ticket-time',fmtTime(m.at)));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
+ const key=JSON.stringify(t.messages);if(ticketLast!==key){ticketLast=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','pay-ticket-bubble '+(m.mine?'mine':'other'));if(!m.mine){const name=el('span','user-ticket-name',m.role==='admin'?'qzu-Support':m.role==='seller'||m.role==='verified-seller'?(m.name||'Seller'):m.role==='system'?'Ticket':'Customer');if(m.role==='admin'||m.role==='verified-seller')name.append(svg(m.role==='admin'?'adminBadge':'sellerBadge','admin-badge'));b.append(name);}b.append(el('p','',m.text),el('small','pay-ticket-time',fmtTime(m.at)));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
  field.disabled=Boolean(t.closed);send.disabled=field.disabled||ticketBusy;notice.textContent=t.closed?'Solved · Ticket closed':t.assigned?'Open':'Waiting for Support';root.querySelector('.user-ticket-compose').hidden=Boolean(t.closed);
 }
 async function refreshUserTickets(){
  if(!unlockToken||page!=='tickets'||accessDue||termsPending||suspendedAccount||ticketPolling||ticketBusy||document.hidden)return;
  if(ticketMode==='new'){renderNewUserTicket();return;}
- const epoch=ticketEpoch,auth=authEpoch;ticketPolling=true;try{const result=ticketMode==='chat'?await api('tickets/state',{id:ticketSelected},true):await api('tickets');if(!ticketAlive(epoch,auth)||ticketBusy)return;if(ticketMode==='chat')renderUserTicket(result,epoch,auth);else renderTicketList(result.items);}
+ const epoch=ticketEpoch,auth=authEpoch;ticketPolling=true;try{const result=ticketMode==='chat'?await api('tickets/state',{id:ticketSelected},true):await api('tickets');if(!ticketAlive(epoch,auth)||ticketBusy)return;if(ticketMode==='chat')renderUserTicket(result,epoch,auth);else renderTicketList(result.items,result.completed||[]);}
  catch(e){if(ticketAlive(epoch,auth)&&ticketMode==='chat'&&(e.status===404||errorMessage(e)==='Ticket unavailable.')){showActivityBanner('Ticket no longer available');ticketNavigate('list');return;}if(ticketAlive(epoch,auth)&&!$('userTicketContent').childElementCount)$('userTicketContent').append(el('p','pay-note',errorMessage(e)),button('Retry',()=>ticketNavigate('list'),'secondary-button'));}
  finally{if(epoch===ticketEpoch)ticketPolling=false;}
 }
