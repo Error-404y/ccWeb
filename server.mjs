@@ -1,4 +1,5 @@
 import express from 'express';
+import {desktopMessenger} from './lib/desktop-messenger.mjs';
 import {sellerStore} from './lib/sellers.mjs';
 import {userTickets} from './lib/user-tickets.mjs';
 import {createMonitoring} from './lib/monitoring.mjs';
@@ -54,6 +55,7 @@ const unlocks = new Unlocks(), sendingResets = new Map();
 const controlSessions=createControlSessions(db);
 const sellers=sellerStore(db);chats.sellerInvites=sellers;chats.profileRole=id=>sellers.role(id);sellers.sync(chats);
 const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN support_keys k ON k.account=a.id WHERE a.id=? AND a.access_plan='admin' AND a.access_revoked=0 AND (a.suspended=0 OR a.suspended_until<=?) AND k.expires>?").get(id,Date.now(),Date.now()));
+const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
 const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
 const notifyHelp=(id,actor)=>push.notify(helpTickets.recipients(id).filter(x=>x!==actor));
 const production = process.env.NODE_ENV === 'production';
@@ -274,6 +276,15 @@ app.post('/api/control/reports/collaborate',(req,res)=>{const b=req.body||{},res
 app.post('/api/control/reports/resolve',(req,res)=>{const b=req.body||{},result=compliance.resolve(b.id,b.action,req.account.id,b.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
 app.get('/api/control/feedback',(req,res)=>res.json({items:feedback.list(true,req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before),req.query.archived==='1')}));
 app.post('/api/control/feedback/status',(req,res)=>{const b=req.body||{},result=feedback.status(true,b.id,b.status,req.account.id,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
+app.post('/api/control/chats/identity',(req,res)=>res.json(desktopChats.bind(req.account.id,req.body?.record)));
+app.get('/api/control/chats',(req,res)=>res.json(desktopChats.state(req.account.id)));
+app.post('/api/control/chats/reset',(req,res)=>{if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});res.json(desktopChats.reset(req.account.id));});
+app.post('/api/control/chats/connect',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);sellers.sync(chats);chats.sweep();const code=String(req.body?.code||'').trim().toUpperCase(),invite=chats.codes.get(code);if(!invite||invite.group||!desktopChats.valid(invite.user))return res.status(404).json({error:'Direct connection code unavailable.'});res.json(chats.requestConnection(p.principal,code,req.body?.nickname));});
+app.post('/api/control/chats/respond',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{},request=chats.requests.get(b.id);if(request?.group)return res.status(403).json({error:'Direct chats only.'});res.json(chats.respondConnection(p.principal,b.id,b.accept===true,b.nickname));});
+app.post('/api/control/chats/contact',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);res.json({id:chats.openContact(p.principal,req.body?.id)});});
+app.post('/api/control/chats/key',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);res.json(chats.publishRoomKey(p.principal,req.body?.id,p.device,req.body?.record));});
+app.post('/api/control/chats/confirm',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(typeof b.code!=='string')return res.status(400).json({error:'Safety code required.'});res.json(chats.confirmRoomKey(p.principal,b.id,b.code,false));});
+app.post('/api/control/chats/send',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{},sent=chats.sendEncrypted(p.principal,b.id,b.cipher,'text',null,b.requestId??null);if(!sent?.duplicate)notifyRoom(p.principal,b.id);res.json(typeof sent==='string'?{id:sent}:sent);});
 app.get('/api/control/sellers',(req,res)=>res.json({items:sellers.list(chats)}));
 app.post('/api/control/sellers/generate',(req,res)=>res.json(sellers.generateKey(req.account.id)));
 app.post('/api/control/sellers/verify',(req,res)=>res.json(sellers.verify(req.body?.id,req.body?.verified,req.account.id)));
@@ -375,7 +386,7 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
   res.json({ ok: true });
 });
 
-function deleteAccount(id){controlSessions.revokeAccount(id);helpTickets.erase(id);sellers.erase(id,chats);
+function deleteAccount(id){controlSessions.revokeAccount(id);helpTickets.erase(id);sellers.erase(id,chats);desktopChats.erase(id);
   chats.erase(id);prekeys.remove(id);compliance.purge(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
 }
 app.use('/api',(req,res,next)=>{
@@ -620,7 +631,8 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   });
   sellers.sync(chats);chats.sweep();
   const invite=chats.codes.get(code);
-  if(invite&&!invite.group&&!invite.seller&&invite.user!==req.account.id){
+  if(invite&&!desktopChats.valid(invite.user))return res.status(404).json({error:'Connection unavailable.'});
+  if(invite&&!invite.group&&!invite.seller&&!invite.desktop&&invite.user!==req.account.id){
     const agents=activeSupportAccounts(),senderAdmin=agents.some(a=>a.id===req.account.id),targetAdmin=agents.some(a=>a.id===invite.user);
     if(targetAdmin&&!senderAdmin)return res.json({id:chats.openMobileSupport(req.account.id,invite.user)});
     if(senderAdmin&&!targetAdmin)return res.json({id:chats.openMobileSupport(invite.user,req.account.id,true)});
