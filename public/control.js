@@ -111,24 +111,24 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  async function openUserTicket(id){
   listView=false;const token=++revision;main.replaceChildren(el('h2','Ticket'),button('‹ Back',()=>load(),'cc-secondary'));
   const info=el('p','','cc-muted'),feed=el('div','','cc-ticket-chat cc-snapshot'),field=el('textarea'),controls=el('div','','cc-actions'),seller=select([['','Choose a seller']]),notice=el('p','','cc-muted');field.placeholder='Write a reply…';field.maxLength=2000;
-  let current=null,busy=false,polling=false,fp='',pending=null,available=[];
+  let current=null,busy=false,polling=false,fp='',pending=null,available=[],lastPollError='';
   const act=(label,path,data,cls='')=>action(label,async()=>{if(busy)return;busy=true;try{const t=await api(path,data());if(alive(token))render(t);}finally{busy=false;}},cls);
   const accept=act('Accept ticket','tickets/action',()=>({id,action:'accept'})),assign=act('Add seller','tickets/action',()=>({id,action:'assign',seller:seller.value})),share=act('Share seller code','tickets/action',()=>({id,action:'share',seller:seller.value}),'cc-secondary');
   const adminPicker=select([['','Choose administrator']]);const transfer=act('Transfer ticket','tickets/action',()=>({id,action:'transfer',seller:adminPicker.value}),'cc-secondary');transfer.disabled=true;adminPicker.addEventListener('change',()=>{transfer.disabled=!adminPicker.value;});
   const remove=act('Remove seller','tickets/action',()=>({id,action:'remove',seller:seller.value}),'cc-secondary');
   const erase=action('Delete archived ticket',async()=>{if(busy||!await modalConfirm('Permanently delete this archived ticket?'))return;busy=true;try{await api('tickets/action',{id,action:'delete'});toast('Ticket deleted','success');if(alive(token))await load();}finally{busy=false;}},'cc-danger');erase.hidden=true;
-  const close=action('Close & archive',async()=>{if(busy||!await modalConfirm('Close this ticket and archive it?'))return;busy=true;try{await api('tickets/action',{id,action:'close'});if(alive(token))await load();}finally{busy=false;}},'cc-danger');
+  const close=action('Close & archive',async()=>{if(busy||!await modalConfirm('Close this ticket and archive it?'))return;busy=true;try{await api('tickets/action',{id,action:'close'});if(alive(token)){toast('Ticket closed and archived','success');await load();}}finally{busy=false;}},'cc-danger');
   const send=action('Send reply',async()=>{if(busy||!field.value.trim())return;const text=field.value.trim();if(!pending||pending.text!==text)pending={text,requestId:crypto.randomUUID()};busy=true;try{const t=await api('tickets/send',{id,...pending});if(alive(token)){if(field.value.trim()===text)field.value='';pending=null;render(t);}}finally{busy=false;}});
   controls.append(accept,seller,assign,share,remove,adminPicker,transfer,close,erase);seller.addEventListener('change',updateSellerControls);
   function lock(b,v){b.dataset.locked=v?'1':'0';b.disabled=v;}
   function updateSellerControls(){const editable=current&&!current.closed&&current.canReply,selected=seller.value,members=current?.sellers||[];lock(assign,!editable||!selected||!available.includes(selected)||members.includes(selected));lock(share,!editable||!selected||!available.includes(selected));lock(remove,!editable||!selected||!members.includes(selected));}main.append(info,feed,notice,field,send,controls);
   function render(t){if(!alive(token))return;current=t;info.textContent=t.topic+' · '+(t.closed?'Solved':t.assigned?'Open':'Waiting for admin');
-   const key=JSON.stringify(t.messages);if(key!==fp){fp=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','','cc-bubble '+(m.mine?'mine':'other')),name=m.role==='admin'?'qzu-Support ✓':m.role==='verified-seller'?'Seller ✓':m.role==='seller'?'Seller':m.role==='system'?'Ticket':'Customer';b.append(el('small',name+' · '+date(m.at),m.role==='admin'?'cc-admin-mark':m.role==='verified-seller'?'cc-seller-mark':''),el('p',m.text));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
+   const key=JSON.stringify(t.messages);if(key!==fp){fp=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','','cc-bubble '+(m.mine?'mine':'other')),name=m.role==='admin'?'qzu-Support ✓':m.role==='verified-seller'?(m.name||'Seller')+' ✓':m.role==='seller'?(m.name||'Seller'):m.role==='system'?'Ticket':'Customer';b.append(el('small',name+' · '+date(m.at),m.role==='admin'?'cc-admin-mark':m.role==='verified-seller'?'cc-seller-mark':''),el('p',m.text));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
    accept.hidden=Boolean(t.closed||t.assigned);const editable=!t.closed&&t.canReply;field.disabled=!editable;send.hidden=!editable;seller.hidden=!editable;assign.hidden=!editable;share.hidden=!editable;remove.hidden=!editable;adminPicker.hidden=!editable;transfer.hidden=!editable;close.hidden=!editable;erase.hidden=!t.closed;updateSellerControls();notice.textContent=t.closed?'Ticket closed and archived.':t.assigned&&!editable?'Assigned to another administrator.':editable&&!available.length?'No available sellers.':'';
   }
   try{const d=await api('sellers');if(alive(token)){available=d.items.filter(p=>p.active).map(p=>p.account);for(const p of d.items.filter(p=>p.active)){const o=el('option',(p.name||'Seller')+' · '+p.account.slice(0,8)+(p.verified?' ✓':''));o.value=p.account;seller.append(o);}}updateSellerControls();}catch(e){if(alive(token))error(e);}
   try{const admins=await api('ticket-admins');if(alive(token))for(const a of admins.items){const o=el('option','Admin '+a.id.slice(0,8));o.value=a.id;adminPicker.append(o);}}catch(e){if(alive(token))error(e);}
-  async function poll(){if(!alive(token)||polling)return;polling=true;try{if(!busy&&!document.hidden){const t=await api('tickets/state',{id});if(!busy)render(t);}}catch(e){if(alive(token))error(e);}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}poll();
+  async function poll(){if(!alive(token)||polling)return;polling=true;try{if(!busy&&!document.hidden){const t=await api('tickets/state',{id});lastPollError='';if(!busy)render(t);}}catch(e){if(alive(token)&&lastPollError!==e.message){lastPollError=e.message;error(e);}}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}poll();
  }
  async function load(prefetched=null){
   listView=false;const token=++revision;if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
@@ -149,7 +149,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     listView=true;
    }else if(view==='Monitoring'){renderMonitoring(data,token);}else if(view==='Overview'){
     const metrics=el('div','','cc-metrics');for(const [label,val] of [['Accounts',data.accounts],['Active',data.active],['Admin accounts',data.admins],['Unused keys',data.keys],['Open reports',data.reports],['Open feedback',data.feedback],['Pending payments',data.payments],['Open payment tickets',data.paymentTickets],['Assigned support requests',data.supportRequests],['Verified revenue','$'+(data.revenue/100).toFixed(2)]]){const n=el('div','','cc-metric');n.append(el('strong',String(val)),el('span',label));metrics.append(n);}main.append(metrics,card('Inbox shortcuts',[button('Open payment tickets',()=>navigate('Payment tickets')),button('Support requests',()=>navigate('Support'),'cc-secondary')]));
-    if(pair)main.append(card('Desktop pairing',[el('p','Link a browser with a one-time code. Your admin PIN is required.'),button('Pair desktop',pair),action('Sign out all linked browsers',async()=>{await api('logout',{});main.prepend(el('p','Desktop sessions revoked.','cc-muted'));},'cc-secondary')]));
+    if(pair)main.append(card('Desktop pairing',[el('p','Link a browser with a one-time code. Your admin PIN is required.'),button('Pair desktop',pair),action('Sign out all linked browsers',async()=>{await api('logout',{});toast('Desktop sessions revoked','success');},'cc-secondary')]));
     main.append(card('Privacy boundary',[el('p','Only explicitly submitted report snapshots are available. Private encrypted conversations and consumed View Once content cannot be recovered.')]));
    }else if(view==='Accounts'){
     main.append(search('Account ID, key ID or fingerprint'));
@@ -194,7 +194,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     for(const a of data.items)main.append(card(a.action,[details([['Actor',a.actor],['Account',a.account],['Key',a.key_id],['At',date(a.at)],['Reason',a.reason]])]));
    }
    if(Array.isArray(data.items)&&!data.items.length&&!['Accounts','Keys'].includes(current))main.append(el('p','No records yet.','cc-muted'));
-  }catch(e){if(alive(token)){main.replaceChildren(el('h2',current),el('p',e.message||'Request failed.','cc-error'),button('Retry',load));}}
+  }catch(e){if(alive(token)){main.replaceChildren(el('h2',current),button('Retry',load));error(e);}}
  }
  load();pollInbox();
  return {close:stop};
