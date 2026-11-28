@@ -720,7 +720,7 @@ function lock(reopen = true) {
   $('message').value = '';
   $('enterCode').value = '';
   $('threadName').textContent = 'Chat';
-  $('threadBadge').hidden = true;
+  $('threadBadge').setAttribute('hidden','');
   $('threadAvatar').setAttribute('href', '#avatar');
   $('adminComposer').hidden = true;
   $('thread').classList.remove('admin-thread');
@@ -970,7 +970,7 @@ function renderChat() {
   const showDirectSecurity = encryptionRequired(current) && directRoom(current);
   encryptionStatus.hidden = !showDirectSecurity;
   encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? '🔒 Encrypted' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : 'Connecting securely';
-  $('threadBadge').hidden = !(current?.peerRole==='admin'||current?.peerRole==='verified-seller'||(isAdmin&&!current?.supportAgent));$('threadBadge').querySelector('use').setAttribute('href',current?.peerRole==='verified-seller'?'#sellerBadge':'#adminBadge');$('threadBadge').setAttribute('aria-label',current?.peerRole==='verified-seller'?'Verified Seller':'Verified Admin');
+  $('threadBadge').toggleAttribute('hidden',!(current?.peerRole==='admin'||current?.peerRole==='verified-seller'||(isAdmin&&!current?.supportAgent)));$('threadBadge').querySelector('use').setAttribute('href',current?.peerRole==='verified-seller'?'#sellerBadge':'#adminBadge');$('threadBadge').setAttribute('aria-label',current?.peerRole==='verified-seller'?'Verified Seller':'Verified Admin');
   $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#avatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
   $('chatOptions').hidden = true;
