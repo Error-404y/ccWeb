@@ -231,7 +231,8 @@ app.use('/api/control',(req,res,next)=>{
  next();
 });
 app.post('/api/control/logout',(req,res)=>{controlSessions.revoke(readControl(req));res.clearCookie(controlCookie,controlCookieOptions);res.json({ok:true});});
-app.get('/api/control/overview',(req,res)=>res.json(controlOverview(db)));
+app.get('/api/control/overview',(req,res)=>res.json({...controlOverview(db),paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length}));
+app.get('/api/control/inbox',(req,res)=>res.json({version,environment:production?'production':'development',paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length,adminId:req.account.id}));
 app.get('/api/control/accounts',(req,res)=>res.json({items:controlAccounts(db,req.query.q||'',req.query.after||'')}));
 app.get('/api/control/keys',(req,res)=>res.json({items:listAccessKeys(db,req.query.q||'')}));
 app.post('/api/control/keys/generate',(req,res)=>res.json(generatePlanKeys(db,req.body?.plan,req.body?.count,req.account.id)));
@@ -414,9 +415,12 @@ app.get('/api/admin/reports/media/:id',guard('report-media',40,60000),(req,res)=
 app.post('/api/admin/reports/collaborate',guard('report-collaborate',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.collaborate(req.body?.id,req.account.id,req.body?.status,req.body?.note??'');if(req.body?.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
 app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action,req.account.id,req.body?.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
 app.post('/api/admin/reports/reinstate',guard('reinstate',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json(compliance.reinstate(req.body?.target,req.account.id,req.body?.notes??''));});
-const activeSupportAccounts=()=>db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND login_hash IS NOT NULL AND device_id IS NOT NULL AND (suspended=0 OR suspended_until<=?)").all(Date.now());
+const activeSupportAccounts=()=>{
+ const mobile=db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND access_revoked=0 AND pin_state!='retired' AND login_hash IS NOT NULL AND device_id IS NOT NULL AND (suspended=0 OR suspended_until<=?)").all(Date.now()).map(a=>a.id);
+ return [...new Set([...mobile,...controlSessions.activeDesktopIds()])].map(id=>({id}));
+};
 const supportAccount=(user=null)=>{
-  const agents=activeSupportAccounts();
+  const agents=activeSupportAccounts().filter(agent=>agent.id!==user);
   if(user){
     const existing=[...chats.rooms.values()].find(room=>room.supportAgent&&room.users.includes(user)&&agents.some(agent=>agent.id===room.supportAgent));
     if(existing)return agents.find(agent=>agent.id===existing.supportAgent);
