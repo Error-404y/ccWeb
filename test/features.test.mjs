@@ -105,3 +105,45 @@ test('group and message timers work independently across restarts and staff join
     assert.equal(db.prepare('SELECT count(*) AS n FROM group_rooms').get().n,0);
   }finally{db.close();}
 });
+
+test('group posting settings restrict members and preserve verified roles after restart', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  const role = id => ({staff:'admin',owner:'verified-seller'}[id]);
+  let chats = new Chats();
+  chats.groupRole = role;
+  chats.activeSeller = id => id === 'owner';
+  chats.attachSupportStore(db);
+  const id = chats.createGroup('owner','Workshop');
+  chats.joinGroup('staff',id,null,true);
+  chats.joinGroup('member',id,'Member');
+  const earlier = chats.send('member',id,'Earlier message');
+  assert.throws(() => chats.updateGroupSettings('member',id,{posting:'owner',description:''}),{status:403});
+  const ordinary = chats.createGroup('member');
+  assert.throws(() => chats.updateGroupSettings('member',ordinary,{posting:'everyone',description:'',shopLinked:true}),{status:403});
+  chats.updateGroupSettings('owner',id,{posting:'admins',description:'',shopLinked:true});
+  assert.throws(() => chats.send('member',id,'Blocked'),{status:403});
+  assert.throws(() => chats.send('member',id,'',null,{kind:'image'}),{status:403});
+  assert.throws(() => chats.edit('member',id,earlier,'Blocked edit'),{status:403});
+  chats.setTyping('member',id,true);
+  const ownerMessage = chats.send('owner',id,'Shop update');
+  const staffMessage = chats.send('staff',id,'Moderator here');
+  let group = chats.snapshot('member').find(room=>room.id===id);
+  assert.equal(group.canWrite,false);
+  assert.equal(group.groupShop,true);
+  assert.deepEqual(group.typing,[]);
+  assert.equal(group.messages.find(message=>message.id===ownerMessage).senderRole,'verified-seller');
+  assert.equal(group.messages.find(message=>message.id===staffMessage).senderRole,'admin');
+  assert.equal(group.messages.find(message=>message.system&&message.senderRole)?.senderRole,'admin');
+  chats.updateGroupSettings('owner',id,{posting:'owner',description:'',shopLinked:false});
+  assert.throws(() => chats.send('staff',id,'Blocked staff'),{status:403});
+  chats = new Chats();
+  chats.groupRole = role;
+  chats.activeSeller = id => id === 'owner';
+  chats.attachSupportStore(db);
+  group = chats.snapshot('member').find(room=>room.id===id);
+  assert.equal(group.groupPosting,'owner');
+  assert.equal(group.groupShop,false);
+  chats.updateGroupSettings('owner',id,{posting:'everyone',description:''});
+  assert.ok(chats.send('member',id,'Members can send again'));
+});

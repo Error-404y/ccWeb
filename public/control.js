@@ -245,27 +245,39 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   const transcript=el('div','','cc-chat'),composer=el('form','','cc-detail-primary');
   const text=el('textarea');text.setAttribute('aria-label','Group message');text.required=true;text.maxLength=2000;
   const send=el('button','Send message','cc-button');send.type='submit';
-  let signature='';
+  const postingNotice=el('p','','cc-muted');postingNotice.hidden=true;postingNotice.setAttribute('role','status');
+  send.disabled=true;
+  let signature='',sending=false;
   async function refresh(){
    const current=await api('groups/'+encodeURIComponent(group.id));
    if(!alive(token))return;
+   text.disabled=current.canWrite===false;
+   send.disabled=text.disabled||sending;
+   postingNotice.hidden=!text.disabled;
+   postingNotice.textContent=text.disabled?'Only the group owner can post.':'';
    const fingerprint=JSON.stringify(current.messages);
    if(signature===fingerprint)return;
    signature=fingerprint;
    transcript.replaceChildren(...current.messages.map(message=>{
     const row=el('div','','cc-bubble '+(message.mine?'mine':'other'));
-    row.append(el('small',message.system?'Group activity':(message.sender||'Member')+' · '+date(message.at)),
-      el('p',message.deleted?'Message deleted':message.kind==='text'?message.text:'Attachment'));
+    const author=el('small',message.system?'Group activity':(message.sender||'Member')+' · '+date(message.at),'cc-group-author');
+    if(message.senderRole==='admin'||message.senderRole==='verified-seller'){
+     const seller=message.senderRole==='verified-seller';
+     const badge=el('span','','cc-chat-verified '+(seller?'seller':'admin'));
+     badge.setAttribute('role','img');badge.setAttribute('aria-label',seller?'Verified Seller':'Verified Admin');
+     author.append(badge);
+    }
+    row.append(author,el('p',message.deleted?'Message deleted':message.kind==='text'?message.text:'Attachment'));
     return row;
    }));
   }
   composer.addEventListener('submit',async event=>{
    event.preventDefault();if(send.disabled||!text.value.trim())return;
-   send.disabled=true;
-   try{await api('groups/send',{id:group.id,text:text.value});text.value='';await refresh();}catch(e){error(e);}finally{send.disabled=false;}
+   sending=send.disabled=true;
+   try{await api('groups/send',{id:group.id,text:text.value});text.value='';await refresh();}catch(e){error(e);}finally{sending=false;send.disabled=text.disabled;}
   });
   composer.append(text,send);
-  main.append(card('Group chat',[transcript,composer]));
+  main.append(card('Group chat',[transcript,postingNotice,composer]));
   async function poll(){
    if(!alive(token))return;
    try{await refresh();}catch(e){if(alive(token)){if(e.status===404){transcript.textContent='Group unavailable.';composer.hidden=true;return;}error(e);}}

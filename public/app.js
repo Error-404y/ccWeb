@@ -204,6 +204,12 @@ async function flushOutbox(){
       if(!room||room.readOnly||room.expires<=serverNow()){outbox.delete(key);continue;}
       waitingRooms.add(item.room);
       if(item.failed||item.sending)continue;
+      if(room.canWrite===false){
+        item.failed=true;
+        item.retryable=true;
+        item.error='Posting is restricted in this group.';
+        continue;
+      }
       if(item.attemptAfter>Date.now()){wakeAt=Math.min(wakeAt,item.attemptAfter);continue;}
       if(item.binding&&!encryptionReady(room))continue;
       if(item.binding&&roomKeys.get(room.id)?.context?.code!==item.binding){
@@ -846,6 +852,7 @@ function lock(reopen = true) {
   $('qzuInfoOpen').classList.remove('active');
   $('qzuInfoOpen').setAttribute('aria-pressed', 'false');
   $('groupInvite').hidden = true;
+  $('groupPostingNotice').hidden = true;
   revokeToken(old);
   stopCamera();
   pinPrompt = false;
@@ -1040,8 +1047,8 @@ async function askAboutSellerItem(contact, item, control, root, epoch) {
   }
 }
 
-function sellerListingTable(items, contact, root, epoch, preview = false) {
-  const editable = !contact && !preview;
+function sellerListingTable(items, contact, root, epoch, mode) {
+  const editable = !contact && !mode;
   const table = el('table','seller-catalog-table');
   table.setAttribute('aria-label',items[0]?.published===false?'Private drafts':'Items for sale');
   const header = table.createTHead().insertRow();
@@ -1063,14 +1070,14 @@ function sellerListingTable(items, contact, root, epoch, preview = false) {
       edit.setAttribute('aria-label','Edit ' + item.name);
       title.append(edit);
     } else {
-      const name = preview ? el('span','seller-listing-name',item.name)
-        : button(item.name, () => askAboutSellerItem(contact,item,name,root,epoch),'seller-listing-name');
-      if(!preview)name.setAttribute('aria-label','Ask about '+item.name);
+      const name = contact ? button(item.name, () => askAboutSellerItem(contact,item,name,root,epoch),'seller-listing-name')
+        : el('span','seller-listing-name',item.name);
+      if(contact)name.setAttribute('aria-label','Ask about '+item.name);
       title.append(name);
       if(item.description)title.append(description);
       title.append(el('small','seller-listing-method',sellerFulfillmentLabels[item.fulfillment]||sellerFulfillmentLabels.unspecified));
-      if(preview && !item.quantity)title.append(el('span','seller-catalog-edit','Notify me'));
-      if (!preview && state.capabilities?.sellerListingsV2 && !item.quantity) {
+      if(mode==='preview' && !item.quantity)title.append(el('span','seller-catalog-edit','Notify me'));
+      if (contact && state.capabilities?.sellerListingsV2 && !item.quantity) {
         const status = el('small','seller-listing-alert-status');
         status.setAttribute('role','status');
         const toggle = button('',async()=>{
@@ -1107,9 +1114,9 @@ function sellerDialogActive(root, epoch) {
   return epoch === authEpoch && !document.hidden && Boolean(unlockToken) && modal.open && root.isConnected;
 }
 
-function showSellerCatalog(contact) {
-  if (!canViewSellerCatalog(contact)) return;
-  if(contact.shopUpdate&&contact.shopUpdate>(viewedShopUpdates.get(contact.id)||0)){
+function showSellerCatalog(contact, group) {
+  if (!group && !canViewSellerCatalog(contact)) return;
+  if(contact?.shopUpdate&&contact.shopUpdate>(viewedShopUpdates.get(contact.id)||0)){
     const version=contact.shopUpdate;
     viewedShopUpdates.set(contact.id,version);
     renderShopDot(contact);
@@ -1118,12 +1125,12 @@ function showSellerCatalog(contact) {
   }
   const epoch = authEpoch, root = el('section','seller-catalog');
   const profile = el('header','seller-catalog-profile');
-  const name = el('h3','',contact.peerName || contact.nickname);
-  const status = el('span','seller-catalog-status',contact.peerRole === 'verified-seller' ? 'Verified seller' : 'Seller');
+  const name = el('h3','',contact?.peerName || contact?.nickname || 'Seller');
+  const status = el('span','seller-catalog-status',contact?.peerRole === 'verified-seller' ? 'Verified seller' : 'Seller');
   profile.append(name, status);
   const content = el('div','seller-catalog-content');
   const actions = el('div','seller-catalog-actions');
-  actions.append(button('Manage contact', () => showContactManagement(contact), 'secondary-button'));
+  if(contact)actions.append(button('Manage contact', () => showContactManagement(contact), 'secondary-button'));
   root.append(profile, content, actions);
   show('Seller shop', [root]);
 
@@ -1132,12 +1139,29 @@ function showSellerCatalog(contact) {
     loading.setAttribute('role','status');
     content.replaceChildren(loading);
     try {
-      const result = await api('sellers/catalog/contact/' + encodeURIComponent(contact.id));
+      const route=group?'group/shop/'+encodeURIComponent(group.id):'sellers/catalog/contact/'+encodeURIComponent(contact.id);
+      const result = await api(route);
       if (!sellerDialogActive(root, epoch)) return;
-      name.textContent = result.name || contact.nickname;
+      name.textContent = result.name || contact?.nickname || 'Seller';
       status.textContent = result.verified ? 'Verified seller' : 'Seller';
-      if (result.items.length) content.replaceChildren(sellerListingTable(result.items,contact,root,epoch));
+      const buyerContact=contact||state.contacts?.find(item=>item.id===result.contactId);
+      if (result.items.length) content.replaceChildren(sellerListingTable(result.items,buyerContact,root,epoch,buyerContact?undefined:'readonly'));
       else content.replaceChildren(el('p','seller-catalog-empty','List is empty'));
+      if(group)actions.replaceChildren(result.own?button('Manage shop',()=>{
+        closeModal();navigate('/settings/shop');
+      },'secondary-button'):button('Message seller',async event=>{
+        const control=event.currentTarget;
+        control.disabled=true;
+        try{
+          const result=await api('group/shop/connect',{id:group.id});
+          if(!sellerDialogActive(root,epoch))return;
+          closeModal();
+          await refresh();
+          if(result.id){navigate('/chat');selectRoom(result.id);}
+          else info('Request sent','You can message the seller after they accept your connection request.');
+        }catch(error){if(sellerDialogActive(root,epoch))modalError(error);}
+        finally{control.disabled=false;}
+      }));
     } catch (error) {
       if (!sellerDialogActive(root, epoch)) return;
       const message = el('p','seller-catalog-message',errorMessage(error));
@@ -1327,7 +1351,7 @@ function editSellerListing(item) {
         show(item?'Edit item':'Add item',[form]);
         preview.focus({preventScroll:true});
       },'secondary-button');
-      content.append(sellerListingTable([result.item],null,null,epoch,true),back);
+      content.append(sellerListingTable([result.item],null,null,epoch,'preview'),back);
       show('Buyer preview',[content]);
     }catch(failure){
       if(sellerDialogActive(form,epoch))error.textContent=errorMessage(failure);
@@ -1675,9 +1699,12 @@ function renderChat() {
 
   const isAdmin = Boolean(current?.admin);
   const readOnly = Boolean(current?.readOnly);
-  $('composer').hidden = !current || readOnly;
-  $('composerDock').hidden = !current || readOnly;
-  if(!current||readOnly||current.support||!unlockToken)closeInlineAttachments();
+  const postingRestricted = current?.canWrite === false;
+  $('composer').hidden = !current || readOnly || postingRestricted;
+  $('composerDock').hidden = !current || readOnly || postingRestricted;
+  $('groupPostingNotice').hidden = !postingRestricted;
+  $('groupPostingNotice').textContent = postingRestricted ? groupPostingNotice(current.groupPosting) : '';
+  if(!current||readOnly||postingRestricted||current.support||!unlockToken)closeInlineAttachments();
   renderEncryptionNotice(current);
   $('adminComposer').hidden = !readOnly;
   $('attachmentMenu').hidden = Boolean(current?.support || ((current?.encryption || (native && directRoom(current))) && !encryptionReady(current)));
@@ -1691,8 +1718,8 @@ function renderChat() {
   $('groupInvite').hidden = !current?.canInvite;
   $('chatOptions').hidden = !current || readOnly;
   $('profileAvatar').disabled = !current;
-  $('profileAvatar').setAttribute('aria-label', canViewSellerCatalog(current?.contact) ? 'Open seller profile' : 'Contact information');
-  $('openSellerShop').hidden = !canViewSellerCatalog(current?.contact);
+  $('profileAvatar').setAttribute('aria-label', current?.group?'Group members':canViewSellerCatalog(current?.contact)?'Open seller profile':'Contact information');
+  $('openSellerShop').hidden = !current?.groupShop && !canViewSellerCatalog(current?.contact);
   renderShopDot(current?.contact);
   updateNavigation();
   $('presenceLabel').hidden = !current || isAdmin;
@@ -1723,7 +1750,7 @@ function renderChat() {
   const container = $('messages');
   const signatures = new Map(current.messages.map(message => [message.id, JSON.stringify([
     message.text, message.sender, message.edited, message.opened, message.deleted, message.reactions,
-    message.reply, message.burnSeconds, message.burnAt, message.encryptedMedia, current.encryptionStatus
+    message.reply, message.burnSeconds, message.burnAt, message.encryptedMedia, current.encryptionStatus, message.senderRole, postingRestricted
   ])]));
   const sameRoom = renderedRoom === current.id;
 
@@ -1907,13 +1934,23 @@ function attachMessageGesture(bubble,reply,actions){
 
 function beginReply(room,message){
   if(!unlockToken||page!=='chat'||selected!==room.id||document.hidden)return;
-  const current=state.rooms.find(r=>r.id===room.id&&r.expires>serverNow()&&!r.readOnly),target=current?.messages.find(m=>m.id===message.id&&!m.deleted&&!m.once&&!m.burnSeconds);
+  const current=state.rooms.find(r=>r.id===room.id&&r.expires>serverNow()&&!r.readOnly&&r.canWrite!==false),target=current?.messages.find(m=>m.id===message.id&&!m.deleted&&!m.once&&!m.burnSeconds);
   if(!target||room.encryption&&!target.decrypted&&target.kind==='text')return;
   replyTarget={roomId:room.id,id:target.id,sender:target.sender,text:previewText(target)};renderReply();$('message').focus({preventScroll:true});
 }
+function appendGroupBadge(element,role){
+  if(role!=='admin'&&role!=='verified-seller')return;
+  const badge=svg(role==='admin'?'adminBadge':'sellerBadge','admin-badge group-role-badge');
+  badge.removeAttribute('aria-hidden');
+  badge.setAttribute('role','img');
+  badge.setAttribute('aria-label',role==='admin'?'Verified Admin':'Verified Seller');
+  element.append(badge);
+}
+
 function renderMessage(room, message) {
   if(message.system){
     const notice=el('div','group-notice',privacyMode?'Group activity':message.text);
+    if(!privacyMode)appendGroupBadge(notice,message.senderRole);
     notice.id='message-'+message.id;
     return notice;
   }
@@ -1924,7 +1961,11 @@ function renderMessage(room, message) {
   const content = el('div', 'message-content');
   const masked = privacyMode && !revealedMessages.has(message.id) && !message.once && !message.deleted && !(message.burnSeconds && !message.burnAt && !message.mine);
 
-  if (room.group && !message.mine) content.append(el('strong', 'message-author', message.sender));
+  if (room.group && (!message.mine || message.senderRole)) {
+    const author=el('strong','message-author',message.sender);
+    appendGroupBadge(author,message.senderRole);
+    content.append(author);
+  }
 
   if (message.reply) {
     const quote = el('div', 'message-quote');
@@ -1989,7 +2030,7 @@ function renderMessage(room, message) {
   }
 
   if (!room.readOnly && !message.deleted) {
-    const canReply=!message.once&&!message.burnSeconds&&(!room.encryption||(state.capabilities?.encryptedExtras&&encryptionReady(room)));
+    const canReply=room.canWrite!==false&&!message.once&&!message.burnSeconds&&(!room.encryption||(state.capabilities?.encryptedExtras&&encryptionReady(room)));
     attachMessageGesture(bubble,canReply?()=>beginReply(room,message):null,()=>messageActions(room,message));
     if (message.reactions?.length) {
       const bar=el('div','message-reactions');
@@ -2039,7 +2080,7 @@ function stopTyping() {
 
 function reportTyping() {
   const room = state.rooms.find(room => room.id === selected);
-  if (!online || !unlockToken || state.invisible || page !== 'chat' || !room || room.readOnly || !$('message').value.trim()) {
+  if (!online || !unlockToken || state.invisible || page !== 'chat' || !room || room.readOnly || room.canWrite===false || !$('message').value.trim()) {
     stopTyping();
     return;
   }
@@ -2924,16 +2965,17 @@ function updateSendButton() {
   const send = $('send');
   const reviewingVoice = !$('voicePreview').hidden;
   $('attachmentMenu').disabled = $('cameraShortcut').disabled = $('voiceShortcut').disabled = reviewingVoice;
-  const mediaReady=Boolean(room&&!room.admin&&!room.readOnly&&!needsSetup&&unlockToken&&!sendingMessage&&room.expires>serverNow());
+  const mediaAllowed=Boolean(room&&!room.admin&&!room.readOnly&&room.canWrite!==false&&!needsSetup);
+  const mediaReady=Boolean(mediaAllowed&&unlockToken&&!sendingMessage&&room.expires>serverNow());
   const hasText=Boolean($('message').value.trim());
-  $('composerActions').classList.toggle('has-media',Boolean(room&&!room.admin&&!room.readOnly&&!needsSetup));
+  $('composerActions').classList.toggle('has-media',mediaAllowed);
   $('cameraShortcut').hidden=!mediaReady||hasText;
   $('voiceShortcut').hidden=!mediaReady||hasText;
   send.hidden=mediaReady&&!hasText;
   $('viewOnceHint').hidden = !viewOnce || !hasText || !onceAllowed(room);
   $('onceShortcut').hidden=!unlockToken||!onceAllowed(room)||(!hasText&&!viewOnce);
   $('onceShortcut').disabled=sendingMessage;
-  send.disabled = !unlockToken || sendingMessage || !room || room.readOnly ||
+  send.disabled = !unlockToken || sendingMessage || !room || room.readOnly || room.canWrite===false ||
     room.expires <= serverNow() || (!$('message').value.trim() && !needsSetup);
   const sendLabel=needsSetup?'Set up or verify encryption':sendingMessage?'Sending':'Send';
   send.setAttribute('aria-label',sendLabel);
@@ -2972,7 +3014,7 @@ async function sendMessage() {
   const text = $('message').value.trim();
   const room = state.rooms.find(room => room.id === id);
 
-  if (!unlockToken || sendingMessage || !room || room.readOnly || room.expires <= serverNow()) {
+  if (!unlockToken || sendingMessage || !room || room.readOnly || room.canWrite===false || room.expires <= serverNow()) {
     updateSendButton();
     return;
   }
@@ -3177,23 +3219,52 @@ function groupDescriptionInput(value=''){
   return field;
 }
 
+const groupPostingLabels={everyone:'Everyone',admins:'Group owner and qzu. admins',owner:'Group owner only'};
+function groupPostingNotice(mode){
+  return mode==='owner'?'Only the group owner can post.':'Only the group owner and qzu. admins can post.';
+}
+
 function showGroupDetails(room){
   const heading=el('h3','',room.groupName);
   const close=button('Close',closeModal,'secondary-button');
+  const settings=Boolean(state.capabilities?.groupSettings);
   if(!room.canInvite){
-    show('Group details',[heading,el('p','group-description-text',room.groupDescription||'No description yet.'),close]);
+    const details=[heading,el('p','group-description-text',room.groupDescription||'No description yet.')];
+    if(settings)details.push(el('p','',room.groupPosting==='everyone'?'Everyone can post.':groupPostingNotice(room.groupPosting)));
+    show('Group details',[...details,close]);
     return;
   }
   const field=groupDescriptionInput(room.groupDescription);
-  const save=button('Save description',async()=>{
+  const fields=[heading,sellerField('Group description',field),el('p','','Anyone with an active invite code can see this description.')];
+  const posting=el('select','nickname-input');
+  posting.setAttribute('aria-label','Who can post');
+  const linkShop=el('input');
+  linkShop.type='checkbox';
+  linkShop.checked=Boolean(room.groupShop);
+  if(settings){
+    for(const [value,label] of Object.entries(groupPostingLabels)){
+      const option=el('option','',label);option.value=value;posting.append(option);
+    }
+    posting.value=room.groupPosting||'everyone';
+    fields.push(sellerField('Who can post',posting));
+    if(state.seller){
+      const link=el('label','group-shop-setting');
+      link.append(linkShop,el('span','','Link my shop'));
+      fields.push(link);
+    }
+  }
+  const save=button(settings?'Save settings':'Save description',async()=>{
     save.disabled=true;
     try{
-      await api('group/description',{id:room.id,description:field.value});
+      const payload={id:room.id,description:field.value};
+      if(settings)payload.posting=posting.value;
+      if(settings&&state.seller)payload.shopLinked=linkShop.checked;
+      await api(settings?'group/settings':'group/description',payload);
       if(save.isConnected)closeModal();
       await refresh();
     }catch(error){if(save.isConnected)modalError(error);}finally{save.disabled=false;}
   });
-  show('Group details',[heading,sellerField('Group description',field),el('p','','Anyone with an active invite code can see this description.'),save,close]);
+  show(settings?'Group settings':'Group details',[...fields,save,close]);
 }
 
 function editGroupTimers(room){
@@ -3837,11 +3908,11 @@ function messageActions(room, message) {
   });
   const extras=!room.encryption||(state.capabilities?.encryptedExtras&&encryptionReady(room));
   const controls = message.once || message.burnSeconds || !extras ? [] : [picker];
-  if(!message.once&&!message.burnSeconds&&extras)controls.push(button('Reply',()=>{closeModal();beginReply(room,message);},'secondary-button'));
+  if(room.canWrite!==false&&!message.once&&!message.burnSeconds&&extras)controls.push(button('Reply',()=>{closeModal();beginReply(room,message);},'secondary-button'));
   if(message.kind==='text'&&!message.once&&!message.burnSeconds&&(!room.encryption||message.decrypted))controls.push(button('Copy',async()=>{try{await navigator.clipboard.writeText(message.text);closeModal();}catch(error){modalError(error);}},'secondary-button'));
   if(!message.mine)controls.push(button('Report',()=>showReport(room,{messageId:message.id}),'secondary-button'));
 
-  if (!room.encryption && !message.once && !message.burnSeconds && message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
+  if (room.canWrite!==false && !room.encryption && !message.once && !message.burnSeconds && message.mine && message.kind === 'text' && serverNow() - message.at <= 60_000) {
     controls.push(button('Edit message', () => {
       const input = el('textarea', 'edit-input');
       input.value = message.text;
@@ -3888,13 +3959,16 @@ $('profileAvatar').addEventListener('click', () => {
   if (canViewSellerCatalog(room.contact)) { showSellerCatalog(room.contact); return; }
   if (room.contact) { showContactManagement(room.contact); return; }
   const title = nameFor(room);
-  const details = room.group ? [el('p', '', room.memberCount + ' members'), ...room.members.map(name => el('p', '', name))]
+  const details = room.group ? [el('p', '', room.memberCount + ' members'), ...room.members.map(name => {
+    const member=el('p','',name);appendGroupBadge(member,room.memberRoles?.[name]);return member;
+  })]
     : [el('p', '', room.support ? 'Support conversation' : room.readOnly ? 'Read-only announcements' : 'Temporary conversation')];
   show(title, [...details, button('Close', closeModal, 'secondary-button')]);
 });
 $('openSellerShop').addEventListener('click', () => {
   const room = state.rooms.find(item => item.id === selected);
-  if (canViewSellerCatalog(room?.contact)) showSellerCatalog(room.contact);
+  if(room?.groupShop)showSellerCatalog(null,room);
+  else if (canViewSellerCatalog(room?.contact)) showSellerCatalog(room.contact);
 });
 function renderShopDot(contact){
  const active=Boolean(contact?.shopUpdate&&contact.shopUpdate>(viewedShopUpdates.get(contact.id)||0));
@@ -3914,7 +3988,7 @@ $('chatOptions').addEventListener('click', () => {
   }
   if (room.admin&&!room.support) return;
   const controls = [];
-  if(room.group&&state.capabilities?.groupDetails)controls.push(button('Group details',()=>showGroupDetails(room),'secondary-button'));
+  if(room.group&&state.capabilities?.groupDetails)controls.push(button(room.canInvite&&state.capabilities?.groupSettings?'Group settings':'Group details',()=>showGroupDetails(room),'secondary-button'));
   if(room.group&&room.canInvite&&state.capabilities?.groupTimers)controls.push(button('Group deletion timers',()=>editGroupTimers(room),'secondary-button'));
   controls.push(button(room.mutedUntil>serverNow()?'Notifications muted':'Mute notifications',()=>showRoomMute(room),'secondary-button'));
   if(room.contact)controls.push(button(room.contact.favorite?'Unpin contact':'Pin contact',async()=>{
@@ -4107,7 +4181,7 @@ async function openOnceMessage(room, message) {
   finally{openingOnce.delete(message.id);if(epoch===authEpoch&&unlockToken)refresh().catch(()=>{});}
 }
 
-function currentMediaRoom(){const room=state.rooms.find(r=>r.id===selected);return room&&!room.admin&&!room.readOnly&&(!encryptionRequired(room)||encryptionReady(room))?room:null;}
+function currentMediaRoom(){const room=state.rooms.find(r=>r.id===selected);return room&&!room.admin&&!room.readOnly&&room.canWrite!==false&&(!encryptionRequired(room)||encryptionReady(room))?room:null;}
 $('cameraShortcut').addEventListener('click',()=>{const room=currentMediaRoom();if(room){choosePhoto(room,true);}});
 const voiceControl=$('voiceShortcut');
 let voiceGesture=null;

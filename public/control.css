@@ -868,3 +868,4 @@
 .cc-shop-changes thead { color: #aeb0ba; }
 .cc-shop-changes td { white-space: pre-wrap; }
 .cc-shop-changes td:last-child { background: #24352c; color: #e5f9ee; }
+.cc-group-author { display: flex; align-items: center; gap: 5px; }

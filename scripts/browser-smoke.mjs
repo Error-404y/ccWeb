@@ -326,10 +326,18 @@ try {
   await chatPage.evaluate(()=>refresh());
   await chatPage.locator('#messages').getByText('User.Name has joined the group.',{exact:true}).waitFor();
   await chatPage.locator('#chatOptions').click();
-  await chatPage.getByRole('button',{name:'Group details',exact:true}).click();
+  await chatPage.getByRole('button',{name:'Group settings',exact:true}).click();
   await chatPage.getByLabel('Group description',{exact:true}).fill('Monthly workshop');
-  await chatPage.getByRole('button',{name:'Save description',exact:true}).click();
-  assert.equal((await call(viewer,'state',undefined,viewerToken)).rooms.find(room=>room.id===groupFixture).groupDescription,'Monthly workshop');
+  await chatPage.getByLabel('Who can post',{exact:true}).selectOption('admins');
+  await chatPage.getByRole('button',{name:'Save settings',exact:true}).click();
+  const workshop=(await call(viewer,'state',undefined,viewerToken)).rooms.find(room=>room.id===groupFixture);
+  assert.equal(workshop.groupDescription,'Monthly workshop');
+  assert.equal(workshop.groupPosting,'admins');
+  await applicant.locator('#modalClose').click();
+  await applicant.evaluate(()=>refresh());
+  await applicant.locator('#contacts').getByText('Workshop group',{exact:true}).click();
+  await applicant.getByText('Only the group owner and qzu. admins can post.',{exact:true}).waitFor();
+  assert.equal(await applicant.locator('#composer').isVisible(),false);
   await chatPage.locator('#chatOptions').click();
   await chatPage.getByRole('button',{name:'Group deletion timers',exact:true}).click();
   await chatPage.getByRole('combobox',{name:'Delete group after',exact:true}).selectOption('never');
@@ -387,19 +395,20 @@ try {
       'x-qzu-signature':sign('sha256',Buffer.from(envelope),sellerKeys.privateKey).toString('base64'),
       'x-qzu-time':timestamp,'x-qzu-nonce':nonce};
   }
-  async function sellerPost(path, data) {
+  async function sellerRequest(path, data) {
+    const method=data===undefined?'GET':'POST';
     const body = JSON.stringify(data);
     const headers = {'Content-Type':'application/json','X-QZU':'1','X-QZU-Unlock':sellerUnlock,
-      ...sellerDeviceHeaders('POST',path,body,sellerUnlock)};
-    const response = await fetch(origin + path,{method:'POST',body,headers});
+      ...sellerDeviceHeaders(method,path,body||'',sellerUnlock)};
+    const response = await fetch(origin + path,{method,body,headers});
     assert.equal(response.status,200,path);
     const value = await response.json();
     if (value.token) sellerUnlock=value.token;
     return value;
   }
-  await sellerPost('/api/login/setup',{pin:'143258'});
-  await sellerPost('/api/terms/accept',{version:1});
-  await sellerPost('/api/sellers/profile',{name:'Studio seller'});
+  await sellerRequest('/api/login/setup',{pin:'143258'});
+  await sellerRequest('/api/terms/accept',{version:1});
+  await sellerRequest('/api/sellers/profile',{name:'Studio seller'});
   const shopStaff=await browser.newContext({userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
     extraHTTPHeaders:{'X-QZU':'1','sec-ch-ua-platform':'"macOS"'}});
   assert.equal((await shopStaff.request.post(origin+'/api/control/login',{data:{key:adminKey,pin:''}})).status(),200);
@@ -412,9 +421,9 @@ try {
   }
   const publishedItem = {id:randomUUID(),name:'Studio print',quantity:0,price:'12.50',currency:'CHF',fulfillment:'both',published:true};
   const draftItem = {...publishedItem,id:randomUUID(),name:'Private draft',quantity:4,fulfillment:'pickup',published:false};
-  await sellerPost('/api/sellers/catalog/manage',publishedItem);
+  await sellerRequest('/api/sellers/catalog/manage',publishedItem);
   await publishShop('Studio print');
-  await sellerPost('/api/sellers/catalog/manage',draftItem);
+  await sellerRequest('/api/sellers/catalog/manage',draftItem);
   const shopOwner = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
   shopOwner.setDefaultTimeout(10000);
   await shopOwner.route(origin+'/api/**',route=>{
@@ -476,6 +485,17 @@ try {
   await reviewPage.getByRole('dialog').getByRole('button',{name:'Confirm',exact:true}).click();
   await reviewPage.getByText('No listings waiting for review.',{exact:true}).waitFor();
   await reviewPage.close();
+  const {id:sellerGroup}=await sellerRequest('/api/group/create',{name:'Print workshop'});
+  const {code:sellerGroupCode}=await sellerRequest('/api/group/invite',{id:sellerGroup});
+  await shopOwner.locator('#bottomNav [data-tab=chat]').click();
+  await shopOwner.evaluate(()=>refresh());
+  await shopOwner.locator('#contacts').getByText('Print workshop',{exact:true}).click();
+  await shopOwner.locator('#chatOptions').click();
+  await shopOwner.getByRole('button',{name:'Group settings',exact:true}).click();
+  await shopOwner.getByLabel('Link my shop',{exact:true}).check();
+  await shopOwner.getByRole('button',{name:'Save settings',exact:true}).click();
+  await shopOwner.getByRole('button',{name:'Open seller shop',exact:true}).waitFor();
+  assert.equal((await shopStaff.request.post(origin+'/api/control/sellers/verify',{data:{id:sellerFixture.id,verified:true}})).status(),200);
   await shopOwner.context().close();
 
   const buyer = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
@@ -506,7 +526,7 @@ try {
   await buyer.waitForFunction(() => document.getElementById('message').value.includes('Studio print'));
   assert.match(await buyer.locator('#message').inputValue(), /Hello! I have a question\.[\s\S]*Studio print[\s\S]*(?:CHF[\s\S]*12[.,]50|12[.,]50[\s\S]*CHF)/);
   assert.equal(await buyer.locator('#messages').getByText(/Studio print/).count(),0);
-  await sellerPost('/api/sellers/catalog/manage',{...publishedItem,quantity:4});
+  await sellerRequest('/api/sellers/catalog/manage',{...publishedItem,quantity:4});
   await publishShop('Studio print');
   const stock = await call(buyer.context(),'sellers/catalog/alerts',undefined,buyerToken);
   assert.equal(stock.alerts.length,1);
@@ -514,7 +534,7 @@ try {
   await buyer.getByRole('button',{name:'Seller stock alert',exact:true}).click();
   await buyer.locator('dialog').getByText('Studio print',{exact:true}).waitFor();
   await buyer.locator('#modalClose').click();
-  await sellerPost('/api/sellers/catalog/manage',{...publishedItem,quantity:6});
+  await sellerRequest('/api/sellers/catalog/manage',{...publishedItem,quantity:6});
   await publishShop('Studio print');
   const updatedStock = await call(buyer.context(),'sellers/catalog/alerts',undefined,buyerToken);
   assert.deepEqual(updatedStock.alerts.map(({triggeredAt})=>triggeredAt),[stock.alerts[0].triggeredAt]);
@@ -528,6 +548,35 @@ try {
   await buyer.getByRole('button',{name:/Seller stock alerts/}).click();
   await buyer.locator('dialog').getByText('Studio print',{exact:true}).waitFor();
   await buyer.context().close();
+  const visitor=await browser.newPage();
+  await visitor.goto(origin);
+  await visitor.locator('dialog input').first().waitFor();
+  for(const field of await visitor.locator('dialog input').all())await field.fill('951786');
+  const visitorLogin=visitor.waitForResponse(response=>response.url()===origin+'/api/login/setup');
+  await visitor.getByRole('button',{name:'Create',exact:true}).click();
+  const {token:visitorToken}=await (await visitorLogin).json();
+  await visitor.locator('dialog input[type=checkbox]').check();
+  await visitor.getByRole('button',{name:'Accept and continue'}).click();
+  const visitorContext=visitor.context();
+  const linkedShop='group/shop/'+sellerGroup;
+  assert.equal((await visitorContext.request.get(origin+'/api/'+linkedShop,{headers:headers(visitorToken)})).status(),404);
+  assert.equal((await call(visitorContext,'connect',{code:sellerGroupCode,nickname:'Print fan'},visitorToken)).pending,true);
+  const sellerJoin=(await sellerRequest('/api/state')).requests.find(request=>request.group&&request.incoming);
+  await sellerRequest('/api/connection/respond',{id:sellerJoin.id,accept:true});
+  await sellerRequest('/api/message',{id:sellerGroup,text:'Welcome to the workshop'});
+  await visitor.evaluate(()=>refresh());
+  await visitor.locator('#contacts').getByText('Print workshop',{exact:true}).click();
+  await visitor.locator('#messages .message-author').getByRole('img',{name:'Verified Seller',exact:true}).waitFor();
+  await visitor.getByRole('button',{name:'Open seller shop',exact:true}).click();
+  const groupShop=visitor.locator('dialog:has(.seller-catalog)');
+  await groupShop.getByText('Studio print',{exact:true}).waitFor();
+  assert.equal(await groupShop.getByText('Private draft',{exact:true}).count(),0);
+  await groupShop.getByRole('button',{name:'Message seller',exact:true}).click();
+  await visitor.getByRole('heading',{name:'Request sent',exact:true}).waitFor();
+  assert.ok((await sellerRequest('/api/state')).requests.find(request=>!request.group&&request.incoming));
+  await sellerRequest('/api/group/settings',{id:sellerGroup,description:'',posting:'everyone',shopLinked:false});
+  assert.equal((await visitorContext.request.get(origin+'/api/'+linkedShop,{headers:headers(visitorToken)})).status(),404);
+  await visitorContext.close();
   await shopStaff.close();
   console.log('Seller Shop workspace, publishing, buyer discovery, inquiry drafts and stock alerts passed.');
 
@@ -544,9 +593,13 @@ try {
   await control.getByRole('navigation').getByRole('button',{name:'Groups',exact:true}).click();
   await control.getByText('Workshop group',{exact:true}).waitFor();
   assert.equal((await control.context().request.get(origin+'/api/control/groups/'+groupFixture)).status(),404);
-  await control.getByRole('button',{name:'Join as staff',exact:true}).click();
+  await control.locator('.cc-card').filter({hasText:'Workshop group'}).getByRole('button',{name:'Join as staff',exact:true}).click();
   await control.getByRole('dialog').getByRole('button',{name:'Confirm',exact:true}).click();
   await control.getByText('qzu. Staff has joined the group.',{exact:true}).waitFor();
+  await control.getByRole('img',{name:'Verified Admin',exact:true}).waitFor();
+  await control.getByLabel('Group message',{exact:true}).fill('Posting as verified staff');
+  await control.getByRole('button',{name:'Send message',exact:true}).click();
+  await control.getByText('Posting as verified staff',{exact:true}).waitFor();
   await control.getByRole('navigation').getByRole('button',{name:'Overview',exact:true}).click();
   await control.getByRole('heading', { name: 'Account and payment totals' }).waitFor();
   await control.getByText('Verified USD revenue', { exact: true }).waitFor();
