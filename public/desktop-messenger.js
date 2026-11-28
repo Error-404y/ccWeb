@@ -24,10 +24,10 @@ window.QzuDesktopMessenger=async function mount(root,api,alive,{error:reportErro
 
  const err=el('p','','cc-error'),layout=el('div','','cc-messenger'),sidebar=el('aside','','cc-messenger-side'),thread=el('section','','cc-messenger-thread'),list=el('div','','cc-messenger-list'),messages=el('div','','cc-messenger-messages'),header=el('h3','Private chats'),status=el('p','','cc-muted'),code=el('code','','cc-secret'),contact=el('input'),draft=el('textarea'),actions=el('div','','cc-actions');
  contact.placeholder='6-character connection code';contact.maxLength=6;draft.placeholder='Write encrypted message…';draft.maxLength=2000;draft.disabled=true;
- let lastPollError='';let selected=null,latest=null,busy=false,polling=false,localIdentity=null,admin=null,context=null,ready=false,signature='',pending=null,drawEpoch=0,onceMode=false;const roomJobs=new Map();
+ let lastPollError='';let selected=null,latest=null,busy=false,polling=false,localIdentity=null,admin=null,context=null,ready=false,signature='',pending=null,drawEpoch=0,onceMode=false;const roomJobs=new Map(),roomErrors=new Map();
  const drafts=new Map(),keys=new Map();
  const action=(label,fn,cls='cc-secondary')=>{const b=el('button',label,'cc-button '+cls);b.type='button';b.onclick=async()=>{if(!alive()||busy)return;busy=true;b.disabled=true;err.textContent='';try{await fn();}catch(e){fail(e);}finally{busy=false;if(alive())b.disabled=false;}};return b;};
- const refresh=async()=>{if(!alive()||polling||busy)return;polling=true;try{const d=await api('chats');if(!alive())return;latest=d;const active=new Set(d.rooms.map(r=>r.id));for(const id of keys.keys())if(!active.has(id))keys.delete(id);await pruneVault(admin,active);await draw();await prepareOtherRooms();lastPollError='';}catch(e){if(lastPollError!==e.message){lastPollError=e.message;fail(e);}}finally{polling=false;}};
+ const refresh=async()=>{if(!alive()||polling||busy)return;polling=true;try{const d=await api('chats');if(!alive())return;latest=d;const active=new Set(d.rooms.map(r=>r.id));for(const id of keys.keys())if(!active.has(id))keys.delete(id);for(const id of roomErrors.keys())if(!active.has(id))roomErrors.delete(id);await pruneVault(admin,active);await draw();await prepareOtherRooms();lastPollError='';}catch(e){if(lastPollError!==e.message){lastPollError=e.message;fail(e);}}finally{polling=false;}};
  const choose=id=>{if(selected)drafts.set(selected,draft.value);selected=id;draft.value=drafts.get(id)||'';context=null;ready=false;pending=null;onceMode=false;onceButton.textContent='View once: off';signature='';draw().catch(e=>{fail(e);});};
 
  const send=action('Send',async()=>{if(!selected||!context||!ready||!draft.value.trim())return;const id=selected,text=draft.value.trim();if(onceMode){const cipher=await QzuCrypto.encrypt(context,text);if(!alive()||selected!==id||document.hidden)throw Error('Chat unavailable.');await api('chats/once/send',{id,cipher});draft.value='';onceMode=false;onceButton.textContent='View once: off';return;}if(!pending||pending.id!==id||pending.text!==text){pending={id,text,requestId:crypto.randomUUID(),cipher:await QzuCrypto.encrypt(context,text)};}if(!alive()||selected!==id||document.hidden)throw Error('Chat unavailable.');await api('chats/send',{id,cipher:pending.cipher,requestId:pending.requestId});if(selected===id&&draft.value.trim()===text)draft.value='';pending=null;},'');
@@ -47,8 +47,9 @@ window.QzuDesktopMessenger=async function mount(root,api,alive,{error:reportErro
  }
  const connect=action('Connect',async()=>{const result=await api('chats/connect',{code:contact.value.trim().toUpperCase(),nickname:'Contact'});contact.value='';if(result.id)choose(result.id);});
  const copy=action('Copy my code',()=>navigator.clipboard.writeText(latest.invite.code));
+ const remove=action('Delete chat',async()=>{const id=selected;if(!id||!await confirmAction?.('Permanently delete this conversation for both participants?'))return;if(!alive()||selected!==id)return;await api('chats/delete',{id,confirmed:true});await vault('room:'+admin+':'+id,null);keys.delete(id);drafts.delete(id);draft.value='';selected=null;context=null;ready=false;pending=null;messages.replaceChildren();},'cc-danger');remove.hidden=true;
  const reset=action('Reset browser identity',async()=>{if(!await confirmAction?.('Reset the desktop messenger? Existing desktop private chats and contacts will be removed. Mobile account data is unaffected.'))return;await api('chats/reset',{confirmed:true});await vault('identity:'+admin,null);await pruneVault(admin,new Set());location.reload();},'cc-danger');
- actions.append(onceButton,attach,send,attachment);sidebar.append(el('h3','Your desktop connection code'),code,copy,contact,connect,list,reset);thread.append(header,status,messages,draft,actions);layout.append(sidebar,thread);root.append(layout);
+ actions.append(onceButton,attach,send,remove,attachment);sidebar.append(el('h3','Your desktop connection code'),code,copy,contact,connect,list,reset);thread.append(header,status,messages,draft,actions);layout.append(sidebar,thread);root.append(layout);
  async function getLocalRoomKey(r){
   const id=r.id;
   if(!roomJobs.has(id))roomJobs.set(id,(async()=>{let local=keys.get(id)||await vault('room:'+admin+':'+id);if(!local&&!r.encryption.own){local=await QzuCrypto.generate(id,localIdentity.sign);await vault('room:'+admin+':'+id,local);}if(local)keys.set(id,local);return local;})());
@@ -57,12 +58,12 @@ window.QzuDesktopMessenger=async function mount(root,api,alive,{error:reportErro
  async function prepareOtherRooms(){
   for(const r of latest.rooms.filter(r=>r.id!==selected&&!r.encryption.confirmed&&(!r.encryption.own||r.encryption.peer)).slice(0,2)){
    if(!alive()||document.hidden||busy)return;
-   try{const local=await getLocalRoomKey(r);if(!local||!alive()||document.hidden)return;
+   try{const local=await getLocalRoomKey(r);if(!alive()||document.hidden)return;if(!local)continue;
    if(!r.encryption.own){await api('chats/key',{id:r.id,record:local.record});continue;}
    if(!r.encryption.peer||r.contact?.peerIdentity&&r.contact.peerIdentity!==r.encryption.peer.identity)continue;
    const ctx=await QzuCrypto.establish(r.id,local,r.encryption.own,r.encryption.peer);if(!alive()||document.hidden)return;
-   await api('chats/confirm',{id:r.id,code:ctx.code});
-   }catch(e){if(lastPollError!==e.message){lastPollError=e.message;fail(e);}}
+   await api('chats/confirm',{id:r.id,code:ctx.code});roomErrors.delete(r.id);
+   }catch(e){if(roomErrors.get(r.id)!==e.message){roomErrors.set(r.id,e.message);fail(e);}}
   }
  }
  async function draw(){
@@ -72,7 +73,7 @@ window.QzuDesktopMessenger=async function mount(root,api,alive,{error:reportErro
   for(const r of latest.requests.filter(x=>x.incoming)){const box=el('div','','cc-card');box.append(el('p','Connection request'),action('Accept',async()=>{const x=await api('chats/respond',{id:r.id,accept:true,nickname:'Contact'});if(x.id)choose(x.id);}),action('Decline',()=>api('chats/respond',{id:r.id,accept:false})));list.append(box);}
   for(const r of latest.rooms){const n=el('button',r.contact?.nickname||'Chat '+r.id.slice(0,4),'cc-button cc-secondary');if(r.peerRole==='admin'||r.peerRole==='verified-seller')n.append(el('span',' ✓',r.peerRole==='admin'?'cc-admin-mark':'cc-seller-mark'));n.onclick=()=>{if(!busy)choose(r.id);};list.append(n);}
   for(const c of latest.contacts.filter(c=>!latest.rooms.some(r=>r.contact?.id===c.id)))list.append(action(c.nickname,async()=>{const x=await api('chats/contact',{id:c.id});choose(x.id);}));
-  const r=latest.rooms.find(r=>r.id===selected);ready=false;context=null;draft.disabled=true;send.disabled=true;
+  const r=latest.rooms.find(r=>r.id===selected);remove.hidden=!r;ready=false;context=null;draft.disabled=true;send.disabled=true;
   if(!r){header.textContent='Private chats';status.textContent='Choose a chat or connect using a code.';messages.replaceChildren();return;}
   const id=r.id;header.textContent=r.contact?.nickname||'Private chat';status.textContent='Connecting securely…';
   const local=await getLocalRoomKey(r);
