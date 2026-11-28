@@ -2491,3 +2491,24 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 @media(min-height:730px){#connectPage .page-content:not(:focus-within){overflow:hidden}}
 @media(max-height:729px){#connectPage .page-content{align-items:flex-start}}
 @media(max-height:600px){#connectPage .connect-panel{padding:4px 10px;gap:5px}#connectPage .qr-box{width:112px;height:112px}}
+
+/* Inline keyboard-replacement attachment menu and submitted report snapshots. */
+.inline-attachments{flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-content:start;gap:18px 6px;margin:0 5px 5px;padding:22px 12px max(22px,env(safe-area-inset-bottom));min-height:min(245px,31dvh);border-radius:24px;background:var(--sub);border:1px solid var(--line);animation:inlineAttachmentIn .22s ease-out both;overflow:auto}
+.inline-attachments[hidden]{display:none!important}
+.inline-attachment-tile{display:flex;flex-direction:column;align-items:center;justify-content:start;gap:8px;min-width:0;background:none;border:0;color:var(--ink);font-size:12px;padding:0;text-align:center}
+.inline-attachment-icon{width:56px;height:56px;border-radius:50%;display:grid;place-items:center;background:var(--hover)}
+.inline-attachment-icon svg{width:29px;height:29px}
+.inline-attachment-icon[data-icon=photosIcon]{color:#70a9f5}
+.inline-attachment-icon[data-icon=mic]{color:#62c9a0}
+.inline-attachment-icon[data-icon=clock]{color:#f2b94e}
+#attachmentMenu.inline-open{transform:none;color:var(--ink)}
+@keyframes inlineAttachmentIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@media(max-width:360px){.inline-attachment-icon{width:48px;height:48px}.inline-attachment-tile{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.inline-attachments{animation:none}}
+.case-status{font-weight:650;font-size:13px}
+.case-status.inspection{color:#b8860b}.case-status.help{color:#e04444}.case-status.solved{color:#2c9b60}
+.report-transcript{display:flex;flex-direction:column;gap:8px;padding:10px;background:var(--surface);border-radius:14px}
+.report-transcript .report-evidence{max-width:87%;border-radius:14px;padding:10px;overflow-wrap:anywhere}
+.report-transcript .snapshot-mine{align-self:flex-end;background:var(--active)}
+.report-transcript .snapshot-other{align-self:flex-start;background:var(--sub)}
+.report-transcript .reported{outline:1px solid var(--accent)}
