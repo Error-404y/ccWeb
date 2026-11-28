@@ -5,12 +5,15 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { chromium } from 'playwright-core';
 import { createAccount, openAccounts } from '../lib/accounts.mjs';
 import { createSupportKey, generatePlanKeys, initAccess } from '../lib/access.mjs';
 import { complianceStore } from '../lib/compliance.mjs';
+import { contactStore } from '../lib/contacts.mjs';
 import { deviceProfiles, initDevices } from '../lib/devices.mjs';
 import { officialStore } from '../lib/official.mjs';
+import { redeemSellerKey, sellerStore } from '../lib/sellers.mjs';
 import { playAssets } from './play-assets.mjs';
 
 const dir = mkdtempSync(join(tmpdir(), 'qzu-browser-'));
@@ -23,6 +26,14 @@ try {
   initAccess(db);
   initDevices(db);
   const adminKey = createSupportKey(db);
+  const sellerKeys = generateKeyPairSync('ec',{namedCurve:'prime256v1'});
+  const {x,y} = sellerKeys.publicKey.export({format:'jwk'});
+  const sellerPublicBytes = Buffer.concat([Buffer.from([4]),Buffer.from(x,'base64url'),Buffer.from(y,'base64url')]);
+  const sellerDeviceId = createHash('sha256').update(sellerPublicBytes).digest('hex');
+  const {key:sellerAccess} = sellerStore(db).generateKey('browser-fixture');
+  const sellerFixture = redeemSellerKey(db,sellerAccess,Date.now(),sellerDeviceId);
+  const buyerFixture = createAccount(db);
+  contactStore(db).add(buyerFixture.id,sellerFixture.id,'Studio seller','Buyer');
   const reports = complianceStore(db);
   const deviceFingerprint='a'.repeat(64), reported=createAccount(db,deviceFingerprint), reporter=createAccount(db);
   deviceProfiles(db).update({id:reported.id,device_id:deviceFingerprint},deviceFingerprint,'ios',{model:'iPhone15,4',osVersion:'26.1',appVersion:'0.17.9'});
@@ -197,6 +208,44 @@ try {
   await recordVoicePreview();
   await voicePreview.getByRole('button', {name:'Send recording', exact:true}).click();
   await chatPage.getByRole('button', {name:'Play voice message', exact:true}).waitFor();
+
+  let releaseSend;
+  const allowSend = new Promise(resolve => { releaseSend=resolve; });
+  const sendAttempts=[];
+  let permitDelivery=false;
+  await chatPage.route(origin+'/api/message',async route=>{
+    const payload=route.request().postDataJSON();
+    if(!payload?.text?.startsWith('Offline queue'))return route.continue();
+    sendAttempts.push(payload);
+    if(sendAttempts.length===1)await allowSend;
+    if(!permitDelivery)return route.fulfill({status:503,json:{error:'Temporary send failure.'}});
+    return route.continue();
+  });
+  await viewer.setOffline(true);
+  await chatPage.locator('#connectionState').getByText('Waiting for connection',{exact:true}).waitFor();
+  for (const text of ['Offline queue first','Offline queue second']) {
+    await chatPage.locator('#message').fill(text);
+    await chatPage.getByRole('button',{name:'Send',exact:true}).click();
+    await chatPage.locator('.pending-row').filter({hasText:text}).getByText('Waiting for connection',{exact:true}).waitFor();
+  }
+  assert.equal(sendAttempts.length,0);
+  await viewer.setOffline(false);
+  const firstPending=chatPage.locator('.pending-row').filter({hasText:'Offline queue first'});
+  await firstPending.getByText('Sending',{exact:true}).waitFor();
+  releaseSend();
+  await firstPending.getByText('Failed',{exact:true}).waitFor({timeout:14000});
+  await firstPending.getByText('Temporary send failure.',{exact:true}).waitFor();
+  assert.equal(sendAttempts.length,3);
+  assert.ok(sendAttempts.every(attempt=>attempt.text==='Offline queue first'&&attempt.requestId===sendAttempts[0].requestId));
+  permitDelivery=true;
+  await firstPending.getByRole('button',{name:'Retry message'}).click();
+  await chatPage.locator('.message-row:not(.pending-row)').getByText('Offline queue second',{exact:true}).waitFor();
+  const delivered=(await call(peer,'state',undefined,peerToken)).rooms.find(room=>room.id===roomId);
+  assert.deepEqual(delivered.messages.filter(message=>message.text.startsWith('Offline queue')).map(message=>message.text),['Offline queue first','Offline queue second']);
+  assert.equal(sendAttempts[3].requestId,sendAttempts[0].requestId);
+  assert.notEqual(sendAttempts[4].requestId,sendAttempts[3].requestId);
+  await chatPage.unroute(origin+'/api/message');
+
   await chatPage.locator('#message').fill('Local draft');
   await chatPage.locator('#backToChats').click();
   await contact.getByText('Draft', { exact: true }).waitFor();
@@ -228,7 +277,7 @@ try {
   assert.equal(await chatPage.locator('#chatBackgroundLabel').textContent(), 'Mist Paper');
   await viewer.close();
   await peer.close();
-  console.log('Chat scroll anchoring, reply, media previews, drafts and appearance passed.');
+  console.log('Chat scroll anchoring, reply, media previews, ordered offline retries, drafts and appearance passed.');
 
   const play = await browser.newPage({
     viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, reducedMotion: 'reduce'
@@ -269,6 +318,70 @@ try {
   assert.equal(activation, sellerKey);
   await play.context().close();
   console.log('Packaged Google Play client accepts seller activation keys.');
+
+  let sellerUnlock = '';
+  async function sellerPost(path, data) {
+    const body = JSON.stringify(data), timestamp = String(Date.now()), nonce = randomBytes(16).toString('hex');
+    const envelope = JSON.stringify(['qzu-device-v1','POST',path,timestamp,nonce,sellerUnlock,body]);
+    const response = await fetch(origin + path,{method:'POST',body,headers:{
+      'Content-Type':'application/json','X-QZU':'1','X-QZU-Unlock':sellerUnlock,'X-QZU-Device':sellerPublicBytes.toString('base64'),
+      'X-QZU-Signature':sign('sha256',Buffer.from(envelope),sellerKeys.privateKey).toString('base64'),
+      'X-QZU-Time':timestamp,'X-QZU-Nonce':nonce
+    }});
+    assert.equal(response.status,200,path);
+    const value = await response.json();
+    if (value.token) sellerUnlock=value.token;
+    return value;
+  }
+  await sellerPost('/api/login/setup',{pin:'143258'});
+  await sellerPost('/api/terms/accept',{version:1});
+  await sellerPost('/api/sellers/profile',{name:'Studio seller'});
+  const publishedItem = {id:randomUUID(),name:'Studio print',quantity:0,price:'12.50',currency:'CHF',fulfillment:'both',published:true};
+  const draftItem = {...publishedItem,id:randomUUID(),name:'Private draft',quantity:4,fulfillment:'pickup',published:false};
+  await sellerPost('/api/sellers/catalog/manage',publishedItem);
+  await sellerPost('/api/sellers/catalog/manage',draftItem);
+  const buyer = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
+  buyer.setDefaultTimeout(10000);
+  await buyer.context().addCookies([{name:'qzu',value:buyerFixture.token,url:origin,httpOnly:true}]);
+  await buyer.goto(origin);
+  await buyer.locator('dialog input').first().waitFor();
+  for (const field of await buyer.locator('dialog input').all()) await field.fill('682491');
+  const buyerSignIn = buyer.waitForResponse(response => response.url() === origin + '/api/login/setup');
+  await buyer.getByRole('button',{name:'Create',exact:true}).click();
+  const {token:buyerToken} = await (await buyerSignIn).json();
+  await buyer.locator('dialog input[type=checkbox]').check();
+  await buyer.getByRole('button',{name:'Accept and continue'}).click();
+  await buyer.locator('#contacts .contact').filter({hasText:'Studio seller'}).click();
+  await buyer.getByRole('button',{name:'Open seller profile',exact:true}).waitFor();
+  await buyer.locator('#message').fill('Hello! I have a question.');
+  await buyer.getByRole('button',{name:'Open seller profile',exact:true}).click();
+  const sellerDialog = buyer.locator('dialog:has(.seller-catalog)');
+  await sellerDialog.getByText('Studio print',{exact:true}).waitFor();
+  assert.equal(await sellerDialog.getByText('Private draft',{exact:true}).count(),0);
+  await sellerDialog.getByText(/pickup.*delivery/i).waitFor();
+  await sellerDialog.getByRole('button',{name:'Notify me when Studio print is back in stock',exact:true}).click();
+  await sellerDialog.getByRole('button',{name:'Cancel stock alert for Studio print',exact:true}).waitFor();
+  await sellerDialog.getByRole('button',{name:'Ask about Studio print',exact:true}).click();
+  await buyer.waitForFunction(() => document.getElementById('message').value.includes('Studio print'));
+  assert.match(await buyer.locator('#message').inputValue(), /Hello! I have a question\.[\s\S]*Studio print[\s\S]*(?:CHF[\s\S]*12[.,]50|12[.,]50[\s\S]*CHF)/);
+  assert.equal(await buyer.locator('#messages').getByText(/Studio print/).count(),0);
+  await sellerPost('/api/sellers/catalog/manage',{...publishedItem,quantity:4});
+  const stock = await call(buyer.context(),'sellers/catalog/alerts',undefined,buyerToken);
+  assert.equal(stock.alerts.length,1);
+  assert.ok(stock.alerts[0].triggeredAt);
+  await buyer.getByRole('button',{name:'Seller stock alert',exact:true}).click();
+  await buyer.locator('dialog').getByText('Studio print',{exact:true}).waitFor();
+  await buyer.locator('#modalClose').click();
+  await sellerPost('/api/sellers/catalog/manage',{...publishedItem,quantity:6});
+  const updatedStock = await call(buyer.context(),'sellers/catalog/alerts',undefined,buyerToken);
+  assert.deepEqual(updatedStock.alerts.map(({triggeredAt})=>triggeredAt),[stock.alerts[0].triggeredAt]);
+  await buyer.locator('#backToChats').click();
+  await buyer.locator('#bottomNav [data-tab=settings]').click();
+  await buyer.getByRole('link',{name:'Notifications',exact:true}).click();
+  await buyer.getByRole('button',{name:/Seller stock alerts/}).click();
+  await buyer.locator('dialog').getByText('Studio print',{exact:true}).waitFor();
+  await buyer.context().close();
+  console.log('Seller contact listings, inquiry drafts, private listings, methods and stock alerts passed.');
 
   const control = await browser.newPage({
     viewport: { width: 1440, height: 900 },
@@ -330,13 +443,51 @@ try {
   await control.getByRole('button', { name: 'Back to report', exact: true }).click();
   await control.getByText('Viewed reported chat', { exact: true }).waitFor();
   await control.getByText('Viewed report attachment', { exact: true }).waitFor();
+  const reportUser=await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
+  reportUser.setDefaultTimeout(10000);
+  await reportUser.context().addCookies([{name:'qzu',value:reporter.token,url:origin,httpOnly:true}]);
+  await reportUser.goto(origin);
+  await reportUser.locator('dialog input').first().waitFor();
+  for(const field of await reportUser.locator('dialog input').all())await field.fill('468291');
+  await reportUser.getByRole('button',{name:'Create',exact:true}).click();
+  await reportUser.locator('dialog input[type=checkbox]').check();
+  await reportUser.getByRole('button',{name:'Accept and continue'}).click();
+  await reportUser.locator('#bottomNav [data-tab=settings]').click();
+  await reportUser.getByRole('link',{name:'Help & Support',exact:true}).click();
+  await reportUser.getByRole('button',{name:'My reports',exact:true}).click();
+  await reportUser.getByRole('button',{name:/^Other/}).click();
+  const reportStep=reportUser.locator('.my-report-step[aria-current=step]');
+  await reportStep.getByText('Received',{exact:true}).waitFor();
+  await control.bringToFront();
   await control.getByRole('button', { name: 'Claim case', exact: true }).click();
   await control.getByRole('button', { name: 'Release assignment', exact: true }).waitFor();
+  await control.getByRole('textbox',{name:'Evidence to request'}).fill('Which message should we focus on?');
+  await control.getByRole('button',{name:'Request evidence',exact:true}).click();
+  await control.getByText('Waiting for the reporter',{exact:true}).waitFor();
+  await reportUser.bringToFront();
+  await reportUser.getByRole('button',{name:'Refresh',exact:true}).click();
+  await reportStep.getByText('In review',{exact:true}).waitFor();
+  await reportUser.getByText('Which message should we focus on?',{exact:true}).waitFor();
+  assert.equal(await reportUser.getByText('Submitted snapshot message',{exact:true}).count(),0);
+  await reportUser.getByRole('textbox',{name:'Additional evidence'}).fill('Focus on the second message.');
+  await reportUser.getByRole('button',{name:'Send evidence',exact:true}).click();
+  await reportUser.getByText('Evidence sent.',{exact:true}).waitFor();
+  await control.bringToFront();
+  await control.getByRole('navigation').getByRole('button',{name:/^Reports/}).click();
+  await control.getByText(/Evidence submitted/).waitFor();
+  await control.getByRole('button',{name:'Review report',exact:true}).click();
+  await control.getByText('Focus on the second message.',{exact:true}).waitFor();
   await control.getByRole('textbox', { name: 'Moderation note', exact: true }).fill('Browser review completed.');
   await control.getByRole('combobox', { name: 'Moderation decision' }).selectOption('dismiss');
   await control.getByRole('button', { name: 'Resolve report', exact: true }).click();
   await control.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click();
   await control.getByText('Browser review completed.', { exact: true }).waitFor();
+  await reportUser.bringToFront();
+  await reportUser.getByRole('button',{name:'Refresh',exact:true}).click();
+  await reportStep.getByText('Closed',{exact:true}).waitFor();
+  assert.equal(await reportUser.getByText('Browser review completed.',{exact:true}).count(),0);
+  await reportUser.context().close();
+  await control.bringToFront();
   await control.getByRole('navigation').getByRole('button', { name: 'Keys', exact: true }).click();
   await control.getByRole('table', { name: 'Access key results' }).waitFor();
   await control.getByRole('button', { name: 'Next page', exact: true }).click();
@@ -374,7 +525,7 @@ try {
   await desktopChats;
   await control.getByRole('button', { name: 'Add contact' }).click();
   await control.getByRole('button', { name: 'Copy my code' }).waitFor();
-  console.log('Control Center cases, audited snapshots, device details, key inventory and removal, totals, announcements and private chat startup passed.');
+  console.log('Control Center cases, reporter follow-ups, audited snapshots, device details, keys, totals and private chat startup passed.');
 } finally {
   await browser?.close();
   if (child?.pid && child.exitCode === null && child.signalCode === null) {

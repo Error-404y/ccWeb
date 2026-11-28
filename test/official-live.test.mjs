@@ -100,6 +100,9 @@ test('backup excludes support content and push tokens while preserving account a
     const entry=feedback.submit('sensitive-feedback',true);
     feedback.status(true,entry.id,'help','admin','sensitive-feedback-note');
     db.exec("CREATE TABLE report_collaboration (note TEXT);INSERT INTO report_collaboration VALUES ('sensitive-moderation-note')");
+    db.exec(`CREATE TABLE report_followups (reply_text TEXT); INSERT INTO report_followups VALUES ('sensitive-reporter-reply');
+      CREATE TABLE seller_stock_alerts (buyer TEXT); INSERT INTO seller_stock_alerts VALUES ('sensitive-stock-watcher');
+      CREATE TABLE seller_catalog_drafts (name TEXT); INSERT INTO seller_catalog_drafts VALUES ('sensitive-listing-draft')`);
     officialStore(db,()=>100).publish('Official post',true);db.close();
     execFileSync(process.execPath,[fileURLToPath(new URL('../scripts/privacy-backup.mjs',import.meta.url)),output],{env:{...process.env,QZU_DB:input}});
     const copy=new DatabaseSync(output,{readOnly:true});
@@ -109,8 +112,12 @@ test('backup excludes support content and push tokens while preserving account a
     assert.equal(copy.prepare('SELECT count(*) AS n FROM push_devices').get().n,0);
     assert.equal(copy.prepare('SELECT count(*) AS n FROM feedback_events').get().n,0);
     assert.equal(copy.prepare('SELECT count(*) AS n FROM report_collaboration').get().n,0);
+    assert.equal(copy.prepare('SELECT count(*) AS n FROM report_followups').get().n,0);
+    assert.equal(copy.prepare('SELECT count(*) AS n FROM seller_stock_alerts').get().n,0);
+    assert.equal(copy.prepare('SELECT count(*) AS n FROM seller_catalog_drafts').get().n,0);
     copy.close();
     const bytes=readFileSync(output);
-    for(const content of ['sensitive-support-text','sensitive-push-token','sensitive-feedback','sensitive-feedback-note','sensitive-moderation-note'])assert.equal(bytes.includes(content),false);
+    for(const content of ['sensitive-support-text','sensitive-push-token','sensitive-feedback','sensitive-feedback-note',
+      'sensitive-moderation-note','sensitive-reporter-reply','sensitive-stock-watcher','sensitive-listing-draft'])assert.equal(bytes.includes(content),false);
   }finally{rmSync(dir,{recursive:true,force:true});}
 });

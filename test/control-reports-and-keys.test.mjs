@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
+import {generateKeyPairSync, randomBytes, randomUUID, sign} from 'node:crypto';
 import {once} from 'node:events';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -12,6 +12,26 @@ import {accessKeyInventory, applyRenewal, createSupportKey, generatePlanKeys, in
 import {complianceStore} from '../lib/compliance.mjs';
 import {initPayments} from '../lib/crypto-payments.mjs';
 import {deviceProfiles, initDevices} from '../lib/devices.mjs';
+
+function testDevice() {
+  const keys=generateKeyPairSync('ec',{namedCurve:'prime256v1'});
+  const point=keys.publicKey.export({format:'jwk'});
+  const bytes=Buffer.concat([Buffer.from([4]),Buffer.from(point.x,'base64url'),Buffer.from(point.y,'base64url')]);
+  const fingerprint=digest(bytes);
+  let unlock='';
+  return {fingerprint,async fetch(origin,path,payload){
+    const method=payload===undefined?'GET':'POST', body=payload===undefined?'':JSON.stringify(payload);
+    const at=String(Date.now()), nonce=randomBytes(16).toString('hex');
+    const message=JSON.stringify(['qzu-device-v1',method,path,at,nonce,unlock,body]);
+    const response=await globalThis.fetch(origin+path,{method,body:method==='POST'?body:undefined,headers:{
+      'X-QZU':'1','X-QZU-Unlock':unlock,'X-QZU-Device':bytes.toString('base64'),'X-QZU-Time':at,'X-QZU-Nonce':nonce,
+      'X-QZU-Signature':sign('sha256',Buffer.from(message),keys.privateKey).toString('base64'),'Content-Type':'application/json'
+    }});
+    const value=await response.json();
+    if(path==='/api/login/setup'&&response.ok)unlock=value.token;
+    return {status:response.status,value};
+  }};
+}
 
 test('key inventory paginates stable rows sharing a timestamp', () => {
   const db = openAccounts(':memory:');
@@ -66,14 +86,15 @@ test('Control reports audit submitted chat access and key removal preserves the 
   initPayments(db);
   const adminKey = createSupportKey(db);
   const [used, renewal, unused, paid, protectedKey] = generatePlanKeys(db,'1M',5).keys;
-  const target = redeemAccess(db,used.key,Date.now(),'a'.repeat(64)).id;
+  const targetDevice=testDevice(), reporterDevice=testDevice(), otherDevice=testDevice();
+  const target = redeemAccess(db,used.key,Date.now(),targetDevice.fingerprint).id;
   applyRenewal(db,renewal.key,target);
-  const other = redeemAccess(db,paid.key).id;
-  const seller = redeemAccess(db,protectedKey.key).id;
+  const other = redeemAccess(db,paid.key,Date.now(),reporterDevice.fingerprint).id;
+  const seller = redeemAccess(db,protectedKey.key,Date.now(),otherDevice.fingerprint).id;
   db.prepare("UPDATE accounts SET access_plan='seller' WHERE id=?").run(seller);
   db.prepare("UPDATE access_invoices SET generated=0, coin='LTC', usd_cents=599, txid=?, vout=1, verified_at=? WHERE id=?")
     .run('f'.repeat(64),Date.now(),paid.id);
-  deviceProfiles(db).update({id:target,device_id:'a'.repeat(64)},'a'.repeat(64),'android',{model:'Test phone',osVersion:'16',appVersion:'0.17.9'});
+  deviceProfiles(db).update({id:target,device_id:targetDevice.fingerprint},targetDevice.fingerprint,'android',{model:'Test phone',osVersion:'16',appVersion:'0.17.9'});
   const reports = complianceStore(db);
   const messageId = randomUUID(), now = Date.now();
   const context = [{id:messageId,at:now,sender:'Reported account',text:'Submitted chat excerpt',source:'reporter',reported:true}];
@@ -110,8 +131,14 @@ test('Control reports audit submitted chat access and key removal preserves the 
     return {status:response.status,value:response.headers.get('Content-Type')?.includes('json')?await response.json():await response.text()};
   }
   const evidence = 'reports/'+report+'/evidence';
+  const reportPath = '/api/reports/mine/'+report;
   assert.equal((await control(evidence)).status,401);
+  assert.equal((await control('reports/follow-up',{id:report,requestId:randomUUID(),text:'Request'})).status,401);
   assert.equal((await control('keys/purge-used/preview',{})).status,401);
+  assert.equal((await reporterDevice.fetch(origin,reportPath)).status,423);
+  for(const device of [targetDevice,reporterDevice,otherDevice]){
+    assert.equal((await device.fetch(origin,'/api/login/setup',{pin:'146298'})).status,200);
+  }
   assert.equal((await control('login',{key:adminKey,pin:''})).status,200);
   const overview = (await control('overview')).value.totals;
   assert.deepEqual(overview.payments,{submitted:0,confirmed:1,verifiedUsdCents:599,confirmedLegacyEurCents:0});
@@ -131,6 +158,43 @@ test('Control reports audit submitted chat access and key removal preserves the 
   assert.equal((await control('reports/'+agedReport+'/evidence')).status,404);
   assert.deepEqual((await control('audit?type=report')).value.items.map(row=>row.action),['reports/evidence-attachment','reports/evidence-view']);
   assert.equal((await control('accounts?q='+report)).value.items[0].id,target);
+  const reportState=async()=> (await reporterDevice.fetch(origin,reportPath)).value;
+  const received=await reportState();
+  assert.deepEqual(Object.keys(received).sort(),['awaitingReply','closedAt','followUps','id','reason','receivedAt','reviewedAt','status']);
+  assert.equal(received.status,'received');
+  assert.equal(received.reviewedAt,null);
+  assert.equal((await targetDevice.fetch(origin,reportPath)).status,404);
+  assert.equal((await otherDevice.fetch(origin,reportPath)).status,404);
+  assert.equal((await reporterDevice.fetch(origin,'/api/reports/mine/'+agedReport)).status,404);
+  const followUp={id:report,requestId:randomUUID(),text:'What happened before the reported message?'};
+  assert.equal((await reporterDevice.fetch(origin,'/api/control/reports/follow-up',followUp)).status,403);
+  assert.equal((await control('cases/report/'+report,{action:'claim'})).status,200);
+  const reviewing=await reportState();
+  assert.equal(reviewing.status,'in-review');
+  assert.ok(reviewing.reviewedAt>=received.receivedAt);
+  assert.equal((await control('reports/follow-up',followUp)).status,200);
+  assert.equal((await control('reports/follow-up',followUp)).status,200);
+  assert.equal((await control('reports/follow-up',{...followUp,requestId:randomUUID()})).status,409);
+  const awaiting=await reportState();
+  assert.equal(awaiting.awaitingReply,true);
+  assert.equal(awaiting.followUps[0].request,followUp.text);
+  assert.equal(awaiting.followUps[0].requested_by,undefined);
+  assert.equal((await reporterDevice.fetch(origin,'/api/state')).value.pendingReportFollowups,1);
+  const reply={requestId:followUp.requestId,text:'They sent the same offer twice.'};
+  assert.equal((await targetDevice.fetch(origin,reportPath+'/reply',reply)).status,404);
+  assert.equal((await otherDevice.fetch(origin,reportPath+'/reply',reply)).status,404);
+  assert.equal((await reporterDevice.fetch(origin,reportPath+'/reply',reply)).status,200);
+  assert.equal((await reporterDevice.fetch(origin,reportPath+'/reply',reply)).status,200);
+  assert.equal((await reporterDevice.fetch(origin,reportPath+'/reply',{...reply,text:'Replacement'})).status,409);
+  assert.equal((await control('cases/report/'+report)).value.record.followUps[0].reply,reply.text);
+  assert.equal((await reporterDevice.fetch(origin,'/api/state')).value.pendingReportFollowups,0);
+  assert.equal((await control('reports/resolve',{id:report,action:'dismiss',notes:'Internal review note'})).status,200);
+  const closed=await reportState();
+  assert.equal(closed.status,'closed');
+  assert.equal(closed.reviewedAt,reviewing.reviewedAt);
+  assert.ok(closed.closedAt>=closed.reviewedAt);
+  assert.equal(JSON.stringify(closed).includes('Internal review note'),false);
+  assert.equal((await control('reports/follow-up',{...followUp,requestId:randomUUID()})).status,409);
   const preview = (await control('keys/purge-used/preview',{})).value;
   const {previewToken,...counts} = preview;
   assert.deepEqual(counts,{keys:3,accounts:2,retainedPayments:1});
@@ -139,6 +203,7 @@ test('Control reports audit submitted chat access and key removal preserves the 
   assert.equal((await control('keys/purge-used',{confirmation,previewToken:'stale'})).status,409);
   assert.equal((await control('keys?q='+used.id)).value.items.length,1);
   assert.deepEqual((await control('keys/purge-used',{confirmation,previewToken})).value,{removedKeys:3,deletedAccounts:2,retainedPayments:1});
+  assert.equal((await reporterDevice.fetch(origin,reportPath)).status,401);
   assert.equal((await control('keys/purge-used',{confirmation,previewToken})).status,409);
   assert.deepEqual((await control('keys')).value.items.map(row=>row.id).sort(),[unused.id,protectedKey.id].sort());
   assert.equal((await control('accounts/'+target)).status,404);

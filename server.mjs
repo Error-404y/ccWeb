@@ -59,7 +59,17 @@ chats.contacts = contacts;
 const unlocks = new Unlocks(), sendingResets = new Map();
 const controlSessions=createControlSessions(db),auditLedger=adminAudit(db);
 const sellers=sellerStore(db);chats.sellerInvites=sellers;chats.profileRole=id=>sellers.role(id);sellers.sync(chats);
-const catalog=sellerCatalog(db,{isSeller:id=>sellers.isActive(id)});
+const catalogBuyer=db.prepare('SELECT access_plan,paid_until,access_revoked,suspended,suspended_until,pin_state FROM accounts WHERE id=?');
+const customerAccount=account=>account&&!['admin','seller'].includes(account.access_plan);
+const catalog=sellerCatalog(db,{isSeller:id=>sellers.isActive(id),canView:(buyer,seller,contact)=>{
+  const account=catalogBuyer.get(buyer);
+  const now=Date.now();
+  return customerAccount(account)&&account.pin_state!=='retired'&&accessStatus(account,now).active&&
+    (!account.suspended||account.suspended_until&&account.suspended_until<=now)&&
+    contacts.between(buyer,seller)?.id===contact&&!chats.isBlocked(buyer,seller);
+}});
+catalog.sweep();
+setInterval(()=>catalog.sweep(),3600000).unref();
 const keyCleanup=usedKeyCleanup(db,deleteAccount);
 const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN support_keys k ON k.account=a.id WHERE a.id=? AND a.access_plan='admin' AND a.access_revoked=0 AND (a.suspended=0 OR a.suspended_until<=?) AND k.expires>?").get(id,Date.now(),Date.now()));
 const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.adminAccount=id=>desktopChats.role(id)==='admin'?desktopChats.principal(id).admin:chats.profileRole(id)==='admin'?id:null;chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
@@ -374,8 +384,15 @@ function reportAttachment(req,res){
   res.type(media.mime).send(Buffer.from(media.body));
 }
 app.get('/api/control/reports/media/:id',reportAttachment);
+app.post('/api/control/reports/follow-up',(req,res)=>{
+  const body=req.body||{};
+  workspace.requireAssignedOrUnclaimed(req.account.id,'report',body.id);
+  const result=compliance.followUps.request(body.id,req.account.id,body);
+  if(!result.duplicate)push.notify([result.reporter]);
+  res.json({ok:true});
+});
 app.post('/api/control/reports/collaborate',(req,res)=>{const b=req.body||{},result=compliance.collaborate(b.id,req.account.id,b.status,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
-app.post('/api/control/reports/resolve',(req,res)=>{const b=req.body||{};workspace.requireAssignedOrUnclaimed(req.account.id,'report',b.id);const result=compliance.resolve(b.id,b.action,req.account.id,b.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
+app.post('/api/control/reports/resolve',(req,res)=>{const b=req.body||{};workspace.requireAssignedOrUnclaimed(req.account.id,'report',b.id);const result=compliance.resolve(b.id,b.action,req.account.id,b.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}if(result.reporter)push.notify([result.reporter]);res.json({ok:true});});
 app.get('/api/control/feedback',(req,res)=>res.json({items:feedback.list(true,req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before),req.query.archived==='1')}));
 app.post('/api/control/feedback/status',(req,res)=>{const b=req.body||{},result=feedback.status(true,b.id,b.status,req.account.id,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
 app.post('/api/control/chats/identity',(req,res)=>res.json(desktopChats.bind(req.account.id,req.body?.record)));
@@ -545,13 +562,39 @@ app.use('/api',(req,res,next)=>{
 });
 app.get('/api/sellers/directory',guard('seller-directory',30,60000),(req,res)=>res.json({items:sellers.directory(req.account.id)}));
 app.get('/api/sellers/catalog',guard('seller-catalog',40,60000),(req,res)=>res.json(catalog.list(req.account.id)));
-app.post('/api/sellers/catalog',guard('seller-catalog-write',40,60000),(req,res)=>res.json(catalog.save(req.account.id,req.body)));
+app.get('/api/sellers/catalog/manage',guard('seller-catalog',40,60000),(req,res)=>res.json(catalog.list(req.account.id,true)));
+function saveSellerListing(req,res,managed=false) {
+  const {items,notified}=catalog.save(req.account.id,req.body,managed);
+  if(notified.length)push.notify(notified);
+  res.json({items});
+}
+app.post('/api/sellers/catalog',guard('seller-catalog-write',40,60000),(req,res)=>saveSellerListing(req,res));
+app.post('/api/sellers/catalog/manage',guard('seller-catalog-write',40,60000),(req,res)=>saveSellerListing(req,res,true));
 app.post('/api/sellers/catalog/remove',guard('seller-catalog-write',40,60000),(req,res)=>res.json(catalog.remove(req.account.id,req.body?.id)));
+app.post('/api/sellers/catalog/manage/remove',guard('seller-catalog-write',40,60000),(req,res)=>res.json(catalog.remove(req.account.id,req.body?.id,true)));
 app.get('/api/sellers/catalog/contact/:id',guard('seller-catalog-contact',40,60000),(req,res)=>{
-  if(['admin','seller'].includes(req.account.access_plan))return res.status(403).json({error:'Customer contact required.'});
+  if(!customerAccount(req.account))return res.status(403).json({error:'Customer contact required.'});
   const peer=contacts.peer(req.account.id,req.params.id);
-  if(!sellers.isActive(peer)||chats.isBlocked(req.account.id,peer))return res.status(404).json({error:'Seller list unavailable.'});
-  res.json({...catalog.list(peer),name:sellers.name(peer),verified:sellers.role(peer)==='verified-seller'});
+  res.json({...catalog.forContact(req.account.id,peer,req.params.id),name:sellers.name(peer),verified:sellers.role(peer)==='verified-seller'});
+});
+app.get('/api/sellers/catalog/alerts',guard('seller-stock-alerts',40,60000),(req,res)=>{
+  if(!customerAccount(req.account))return res.status(403).json({error:'Customer contact required.'});
+  const alerts=catalog.alerts(req.account.id).map(row=>({contactId:row.contact,itemId:row.item,name:row.name,
+    seller:sellers.name(row.owner),quantity:row.quantity,triggeredAt:row.notified}));
+  res.json({alerts});
+});
+app.post('/api/sellers/catalog/alerts/watch',guard('seller-stock-write',40,60000),(req,res)=>{
+  if(!customerAccount(req.account))return res.status(403).json({error:'Customer contact required.'});
+  const {contactId,itemId}=req.body||{};
+  res.json(catalog.watch(req.account.id,contacts.peer(req.account.id,contactId),contactId,itemId));
+});
+app.post('/api/sellers/catalog/alerts/dismiss',guard('seller-stock-write',40,60000),(req,res)=>{
+  if(!customerAccount(req.account))return res.status(403).json({error:'Customer contact required.'});
+  res.json(catalog.dismiss(req.account.id,req.body?.contactId,req.body?.itemId));
+});
+app.post('/api/sellers/catalog/alerts/seen',guard('seller-stock-write',40,60000),(req,res)=>{
+  if(!customerAccount(req.account))return res.status(403).json({error:'Customer contact required.'});
+  res.json(catalog.markSeen(req.account.id,req.body?.noticeId));
 });
 app.post('/api/sellers/profile',guard('seller-profile',10,60000),(req,res)=>res.json(sellers.rename(req.account.id,req.body?.name)));
 app.post('/api/sellers/connect',guard('seller-connect',10,60000),(req,res)=>{if(!sellers.isActive(req.account.id)||!sellers.isActive(req.body?.id))return res.status(403).json({error:'Seller unavailable.'});if(req.account.restricted_until>Date.now())return res.status(403).json({error:'Messaging is temporarily restricted.'});const invite=sellers.ensureCode(req.body.id,chats);res.json(chats.requestConnection(req.account.id,invite.code,sellers.name(req.body.id)));});
@@ -560,6 +603,13 @@ app.post('/api/tickets/open',guard('user-ticket-open',10,60000),(req,res)=>{if(r
 app.post('/api/tickets/state',guard('user-ticket-state',60,60000),(req,res)=>res.json(helpTickets.view(req.body?.id,req.account.id)));
 app.post('/api/tickets/read',guard('user-ticket-read',60,60000),(req,res)=>res.json(helpTickets.markRead(req.body?.id,req.account.id,req.body?.message)));
 app.post('/api/tickets/send',guard('user-ticket-send',30,60000),(req,res)=>{const b=req.body||{},t=helpTickets.send(b.id,req.account.id,false,b.text,b.requestId);notifyHelp(t.id,req.account.id);if(!t.assigned)notifyPaymentAdmins();res.json(t);});
+app.get('/api/reports/mine',guard('my-reports',30,60000),(req,res)=>res.json({items:compliance.followUps.list(req.account.id)}));
+app.get('/api/reports/mine/:id',guard('my-report',40,60000),(req,res)=>res.json(compliance.followUps.get(req.account.id,req.params.id)));
+app.post('/api/reports/mine/:id/reply',guard('my-report-reply',15,60000),(req,res)=>{
+  const result=compliance.followUps.reply(req.account.id,req.params.id,req.body||{});
+  if(!result.duplicate&&result.staff&&isTicketAdmin(result.staff))push.notify([result.staff]);
+  res.json(result.report);
+});
 app.post('/api/report',guard('report',5,60000),(req,res)=>{
   const room=chats.requireRoom(req.account.id,req.body?.id);
   const messageId=req.body?.messageId;
@@ -608,6 +658,7 @@ app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)
     push.notify([result.warn]);
   }
   if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}
+  if(result.reporter)push.notify([result.reporter]);
   res.json({ok:true});
 });
 app.post('/api/admin/reports/reinstate',guard('reinstate',20,60000),(req,res)=>{
@@ -672,8 +723,8 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Write and share with an updated chat composer, explore fresh wallpapers, and view listings from your seller contacts.',
-  changes: ['Chat search, pinned contacts and unread navigation','Voice previews and photo editing','Ticket receipts and payment progress','Control Center case management and audit history'],
+  notes: 'Ask sellers about listings, follow the reports you submit, and see when a message is waiting to send.',
+  changes: ['Seller listing inquiries through chat','Private drafts and pickup or delivery options','One-time stock alerts and report follow-ups','Clearer outgoing message status and retry'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
@@ -730,7 +781,7 @@ function stateData(a, paged) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, encryptedOnce:true, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, queuedTextSends:true, encryptedOnce:true, sellerListingsV2:true, reportFollowups:true, live: true },
     prekeyCount:prekeys.count(a.id),
     official:official.snapshot(a.id,{paged}),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
@@ -738,7 +789,9 @@ function stateData(a, paged) {
     supportAgent: a.access_plan==='admin',
     seller:a.access_plan==='seller',sellerName:sellers.name(a.id),sellerVerified:sellers.role(a.id)==='verified-seller',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
+    sellerStockUpdate: customerAccount(a) ? catalog.latestNotice(a.id,new Set(savedContacts.filter(contact=>contact.peerSeller).map(contact=>contact.id))) : null,
     ticketUpdate: a.access_plan==='admin'?null:helpTickets.unread(a.id),
+    pendingReportFollowups: compliance.followUps.pendingCount(a.id),
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
     supportDeletions:a.access_plan==='admin'?deletionInbox(a.id):[],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
@@ -834,11 +887,9 @@ function notifyRoom(sender,id){
   push.notify(room.users.filter(account=>account!==sender&&!contacts.between(account,sender)?.muted&&!chats.isRoomMuted(account,id)));
 }
 app.post('/api/message', guard('send', 80, 60_000), (req, res) => {
-  chats.send(req.account.id, req.body?.id, req.body?.text, req.body?.replyTo ?? null, req.body || {});
-  notifyRoom(req.account.id,req.body.id);
-  res.json({
-    ok: true
-  });
+  const sent=chats.send(req.account.id, req.body?.id, req.body?.text, req.body?.replyTo ?? null, req.body || {});
+  if(!sent?.duplicate)notifyRoom(req.account.id,req.body.id);
+  res.json(typeof sent==='string'?{ok:true}:{ok:true,...sent});
 });
 app.post('/api/connection/respond', guard('connection-response', 30, 60_000), (req, res) => {
   res.json(chats.respondConnection(req.account.id, req.body?.id, req.body?.accept === true, req.body?.nickname));

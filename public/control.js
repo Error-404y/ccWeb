@@ -147,7 +147,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  }
  function displayAction(event){
   const names={
-   'reports/resolve':'Resolved report','reports/collaborate':'Updated report review',
+   'reports/resolve':'Resolved report','reports/collaborate':'Updated report review','reports/follow-up':'Requested evidence from reporter',
    'support/respond':'Responded to support request','support/finish':'Updated support status',
    'support/send':'Replied to support case','support/delete':'Approved deletion',
    'tickets/action':'Updated ticket','tickets/send':'Replied to ticket',
@@ -460,6 +460,40 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    if(alive(token)){loading.textContent=e.message||'Submitted evidence unavailable.';main.append(button('Retry',()=>openReportEvidence(id,back),'cc-secondary cc-fit'));}
   }
  }
+ function reportCorrespondence(report,investigation,reopen){
+  const panel=card('Reporter correspondence');
+  const entries=el('div','','cc-report-correspondence');
+  for(const followUp of report.followUps||[]){
+   const thread=el('article','','cc-report-follow-up');
+   thread.append(el('strong','Request to reporter'),el('time',date(followUp.requestedAt),'cc-muted'),el('p',followUp.request,'cc-case-note'));
+   if(followUp.repliedAt!=null){
+    const reply=el('div','','cc-report-reply');
+    reply.append(el('strong','Reporter’s evidence'),el('time',date(followUp.repliedAt),'cc-muted'),el('p',followUp.reply,'cc-case-note'));
+    thread.append(reply);
+   }else thread.append(el('p',report.resolved?'Closed before a reply':'Waiting for the reporter','cc-muted'));
+   entries.append(thread);
+  }
+  if(entries.childElementCount)panel.append(entries);
+  const mayContact=report.reporter&&!report.resolved&&(!investigation.assignee||investigation.assignedToMe||investigation.canClaim);
+  if(mayContact&&report.followUpStatus!=='awaiting-reporter'){
+   const label=el('label','Evidence to request','cc-report-follow-up-label');
+   const field=el('textarea');
+   field.maxLength=1000;field.rows=3;
+   field.placeholder='Describe what evidence would help your review';
+   label.append(field);
+   let pending;
+   const send=action('Request evidence',async()=>{
+    const text=field.value.trim();
+    if(!text){field.focus();throw Error('Enter what evidence you need.');}
+    if(pending?.text!==text)pending={text,requestId:crypto.randomUUID()};
+    await api('reports/follow-up',{id:report.id,...pending});
+    toast('Evidence request sent','success');
+    await reopen();
+   },'cc-secondary cc-fit');
+   panel.append(label,el('p','The reporter can see and reply to this request.','cc-muted'),send);
+  }else if(!entries.childElementCount)panel.append(el('p','No evidence has been requested from the reporter.','cc-muted'));
+  return panel;
+ }
  async function openReportCase(id,back=()=>load()){
   const {token}=detailView('Report details',back),loading=el('p','Loading report…','cc-muted');
   main.append(loading);
@@ -526,7 +560,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     side.append(card('Prior moderation decisions',[timeline(events)]));
    }
    loading.remove();
-   main.append(splitDetail([metadata,parties,context,controls],side));
+   main.append(splitDetail([metadata,parties,context,reportCorrespondence(report,investigation,reopen),controls],side));
   }catch(e){
    if(alive(token)){loading.textContent=e.message;main.append(button('Retry',()=>openReportCase(id,back),'cc-secondary'));}
   }
@@ -1051,7 +1085,8 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     const pending=data.items.filter(item=>!item.resolved),resolved=data.items.filter(item=>item.resolved);
     const entry=r=>({
      title:r.reason+' · '+r.id.slice(0,8),
-     description:'Received '+date(r.created)+' · '+(r.previousReports||0)+' previous reports',
+     description:'Received '+date(r.created)+' · '+(r.previousReports||0)+' previous reports'+
+       (r.followUpStatus==='awaiting-reporter'?' · Waiting for reporter':r.followUpStatus==='reporter-replied'?' · Evidence submitted':''),
      status:status(r.resolved?'solved':r.workflow||'inspection'),
      action:'Review report',
      open:()=>openReportCase(r.id)
