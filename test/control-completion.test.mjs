@@ -105,7 +105,7 @@ test('expired pending invoices can be archived and a late valid submission retur
  const o=createCryptoInvoice(db,'week','BTC',100000,null,now,null,true),later=now+3600000;
  assert.throws(()=>archiveControlRecord(db,'payments',o.id,'admin',false,now));
  archiveControlRecord(db,'payments',o.id,'admin',false,later);
- assert.equal(controlPayments(db,true)[0].id,o.id);assert.equal(invoiceStatus(db,o.orderKey,later).state,'pending');
+ assert.equal(controlPayments(db,true)[0].id,o.id);assert.equal(invoiceStatus(db,o.orderKey,later).state,'expired');
  submitPayment(db,o.orderKey,'b'.repeat(64),later);assert.equal(controlPayments(db)[0].id,o.id);assert.equal(controlPayments(db,true).length,0);
  }finally{db.close();}
 });
