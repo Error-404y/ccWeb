@@ -248,7 +248,11 @@ app.use('/api/control',(req,res,next)=>{
  auditLedger.capture(req,res);next();
 });
 app.post('/api/control/logout',(req,res)=>{controlSessions.revoke(readControl(req));res.clearCookie(controlCookie,controlCookieOptions);res.json({ok:true});});
-const supportInboxCount=id=>new Set([...chats.supportRequests(id,true),...chats.supportDeletions(id,true)].map(r=>r.id)).size;
+const adminPrincipals=id=>[id,db.prepare('SELECT principal FROM desktop_messenger WHERE admin=?').get(id)?.principal].filter(Boolean);
+const deletionInbox=id=>[...chats.supportDeletions(id,true),...adminPrincipals(id).flatMap(p=>chats.directDeletionRequests(p))];
+const notifyDeletionAdmin=peer=>push.notify([desktopChats.principal(peer)?.admin||peer]);
+function approveDeletion(admin,id){const principal=adminPrincipals(admin).find(p=>chats.directDeletionRequests(p).some(d=>d.id===id));if(principal){const result=chats.approveDirectDeletion(principal,id);push.notify([result.requester]);return {ok:true};}const recipients=chats.rooms.get(id)?.users.filter(x=>x!==admin)||[];const result=chats.approveSupportDeletion(admin,id,true);push.notify(recipients);return result;}
+const supportInboxCount=id=>new Set([...chats.supportRequests(id,true),...deletionInbox(id)].map(r=>r.id)).size;
 app.get('/api/control/overview',(req,res)=>res.json({...controlOverview(db),paymentTickets:tickets.counts().open,supportRequests:supportInboxCount(req.account.id)}));
 app.get('/api/control/monitoring',(req,res)=>res.json({...monitoring.snapshot(),version,environment:production?'production':'development',activeDesktopSessions:controlSessions.activeDesktopIds().length,liveRequests:liveTotal,paymentTickets:tickets.counts().open,supportRequests:supportInboxCount(req.account.id)}));
 app.get('/api/control/inbox',(req,res)=>res.json({version,environment:production?'production':'development',paymentTickets:tickets.counts().open,supportRequests:supportInboxCount(req.account.id),userTickets:helpTickets.count(),adminId:req.account.id}));
@@ -270,9 +274,9 @@ app.post('/api/control/payment-tickets/reject',(req,res)=>{tickets.reject(req.bo
 app.post('/api/control/payment-tickets/close',(req,res)=>{tickets.close(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
 app.get('/api/control/support',(req,res)=>{
  const archived=req.query.archived==='1',id=req.account.id;
- res.json({requests:archived?[]:chats.supportRequests(id,true),deletions:archived?[]:chats.supportDeletions(id,true),rooms:archived?[]:chats.snapshot(id).filter(r=>r.support&&r.supportAgent&&r.supportStatus==='accepted').map(r=>({id:r.id,expires:r.expires,deletionRequested:r.deletionRequested,messages:r.messages.slice(-50).map(m=>({mine:m.mine,at:m.at,text:m.deleted?'Deleted message':m.once||m.burnSeconds?'Temporary message':m.kind==='text'?m.text:'Attachment',sender:m.sender}))})),finished:chats.finishedSupport(id,archived)});
+ res.json({requests:archived?[]:chats.supportRequests(id,true),deletions:archived?[]:deletionInbox(id),rooms:archived?[]:chats.snapshot(id).filter(r=>r.support&&r.supportAgent&&r.supportStatus==='accepted').map(r=>({id:r.id,expires:r.expires,deletionRequested:r.deletionRequested,messages:r.messages.slice(-50).map(m=>({mine:m.mine,at:m.at,text:m.deleted?'Deleted message':m.once||m.burnSeconds?'Temporary message':m.kind==='text'?m.text:'Attachment',sender:m.sender}))})),finished:chats.finishedSupport(id,archived)});
 });
-app.post('/api/control/support/delete',(req,res)=>{const id=req.body?.id;if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});const room=chats.rooms.get(id),recipients=room?.users.filter(x=>x!==req.account.id)||[];const result=chats.approveSupportDeletion(req.account.id,id,true);push.notify(recipients);res.json(result);});
+app.post('/api/control/support/delete',(req,res)=>{const id=req.body?.id;if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});res.json(approveDeletion(req.account.id,id));});
 app.post('/api/control/support/finish',(req,res)=>res.json(chats.finishSupport(req.account.id,req.body?.id,req.body?.action)));
 app.post('/api/control/archive',(req,res)=>{const b=req.body||{};if(b.category==='support')return res.json(chats.finishSupport(req.account.id,b.id,b.restore===true?'restore':'archive'));res.json(archiveControlRecord(db,b.category,b.id,req.account.id,b.restore===true));});
 app.post('/api/control/support/respond',(req,res)=>res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true)));
@@ -290,6 +294,7 @@ app.post('/api/control/chats/reset',(req,res)=>{if(req.body?.confirmed!==true)re
 app.post('/api/control/chats/connect',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);sellers.sync(chats);chats.sweep();const code=String(req.body?.code||'').trim().toUpperCase(),invite=chats.codes.get(code);if(!invite||invite.group||!desktopChats.valid(invite.user))return res.status(404).json({error:'Direct connection code unavailable.'});res.json(chats.requestConnection(p.principal,code,req.body?.nickname));});
 app.post('/api/control/chats/respond',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{},request=chats.requests.get(b.id);if(request?.group)return res.status(403).json({error:'Direct chats only.'});res.json(chats.respondConnection(p.principal,b.id,b.accept===true,b.nickname));});
 app.post('/api/control/chats/contact',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);res.json({id:chats.openContact(p.principal,req.body?.id)});});
+app.post('/api/control/chats/contact/delete',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(b.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});const peer=contacts.peer(p.principal,b.id),result=chats.removeContact(p.principal,b.id);push.notify([peer]);res.json(result);});
 app.post('/api/control/chats/delete',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(b.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});const room=chats.requireRoom(p.principal,b.id);if(room.group||room.admin||room.support||!room.encryption)return res.status(403).json({error:'Private encrypted chat required.'});const recipients=room.users.filter(x=>x!==p.principal);chats.remove(p.principal,b.id,true);push.notify(recipients);res.json({ok:true});});
 app.post('/api/control/chats/key',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);res.json(chats.publishRoomKey(p.principal,req.body?.id,p.device,req.body?.record));});
 app.post('/api/control/chats/confirm',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(typeof b.code!=='string')return res.status(400).json({error:'Safety code required.'});res.json(chats.confirmRoomKey(p.principal,b.id,b.code,true));});
@@ -493,14 +498,14 @@ app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
   if(!agent||agent.id===req.account.id)return res.status(404).json({error:'Support unavailable.'});
   res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
 });
-app.post('/api/support/delete',guard('support-delete',20,60000),(req,res)=>{if(req.account.access_plan!=='admin'||req.body?.confirmed!==true)return res.status(403).json({error:'Confirmed support admin required.'});const room=chats.rooms.get(req.body?.id),recipients=room?.users.filter(x=>x!==req.account.id)||[];const result=chats.approveSupportDeletion(req.account.id,req.body.id,true);auditLedger.record(req.account.id,'mobile','support/delete','support',req.body.id);push.notify(recipients);res.json(result);});
+app.post('/api/support/delete',guard('support-delete',20,60000),(req,res)=>{if(req.account.access_plan!=='admin'||req.body?.confirmed!==true)return res.status(403).json({error:'Confirmed support admin required.'});const result=approveDeletion(req.account.id,req.body.id);auditLedger.record(req.account.id,'mobile','support/delete','support',req.body.id);res.json(result);});
 app.post('/api/support/respond', guard('support-respond', 40, 60000), (req,res) => {
   if(req.account.access_plan!=='admin')return res.status(403).json({error:'Support admin required.'});
   res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true));
 });
 app.post('/api/contacts/open', guard('contacts-open', 30, 60000), (req,res) => res.json({id:chats.openContact(req.account.id,req.body?.id)}));
 app.post('/api/contacts/update', guard('contacts-update', 30, 60000), (req,res) => res.json(chats.updateContact(req.account.id,req.body?.id,req.body||{})));
-app.post('/api/contacts/remove', guard('contacts-remove', 20, 60000), (req,res) => res.json(chats.removeContact(req.account.id,req.body?.id,req.body?.block===true)));
+app.post('/api/contacts/remove', guard('contacts-remove', 20, 60000), (req,res) => {const peer=contacts.peer(req.account.id,req.body?.id),result=chats.removeContact(req.account.id,req.body.id,req.body.block===true);if(!result.duplicate)notifyDeletionAdmin(peer);res.json(result);});
 app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
   const result = changeLogin(db, req.account.id, req.body?.current, req.body?.next);
   if (result !== 'ok') return loginError(res, result);
@@ -583,7 +588,7 @@ function stateData(a) {
     seller:a.access_plan==='seller',sellerName:sellers.name(a.id),sellerVerified:sellers.role(a.id)==='verified-seller',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
-    supportDeletions:a.access_plan==='admin'?chats.supportDeletions(a.id,true):[],
+    supportDeletions:a.access_plan==='admin'?deletionInbox(a.id):[],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
     rooms: chats.snapshot(a.id),
     contacts: contacts.list(a.id).map(c=>({...c,peerRole:chats.profileRole(contacts.peer(a.id,c.id)),peerName:chats.profileName(contacts.peer(a.id,c.id))})),
@@ -752,7 +757,7 @@ app.post('/api/receipts', guard('receipts', 100, 60_000), (req, res) => {
 app.post('/api/chat/delete', (req, res) => {
   const room=chats.rooms.get(req.body?.id),alreadyRequested=room?.deletionRequested;
   const result=chats.remove(req.account.id, req.body?.id, req.account.access_plan==='admin');
-  if(result?.requested&&!alreadyRequested&&room?.supportAgent)push.notify([room.supportAgent]);
+  if(result?.requested&&!result.duplicate&&!alreadyRequested&&room)notifyDeletionAdmin(room.users.find(x=>x!==req.account.id));else if(!result?.requested&&room)push.notify(room.users.filter(x=>x!==req.account.id));
   res.json({ok:true,...result});
 });
 app.post('/api/pin/issue', guard('pin-issue', 5, 60_000), (req, res) => {
