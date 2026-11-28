@@ -94,7 +94,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use((req, res, next) => express.json({
-  limit: ['/api/message', '/api/encryption/message','/api/encryption/once/send','/api/report','/api/access/ticket/send'].includes(req.path) ? '3mb' : '12kb',
+  limit: ['/api/message', '/api/encryption/message','/api/encryption/once/send','/api/report','/api/access/ticket/send','/api/control/chats/media/send'].includes(req.path) ? '3mb' : '12kb',
   verify: (req, res, buffer) => { req.rawBody = buffer.toString('utf8'); }
 })(req, res, next));
 const cookieName = production ? '__Host-qzu': 'qzu';
@@ -285,6 +285,11 @@ app.post('/api/control/chats/contact',(req,res)=>{const p=desktopChats.requireId
 app.post('/api/control/chats/key',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);res.json(chats.publishRoomKey(p.principal,req.body?.id,p.device,req.body?.record));});
 app.post('/api/control/chats/confirm',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(typeof b.code!=='string')return res.status(400).json({error:'Safety code required.'});res.json(chats.confirmRoomKey(p.principal,b.id,b.code,false));});
 app.post('/api/control/chats/send',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{},sent=chats.sendEncrypted(p.principal,b.id,b.cipher,'text',null,b.requestId??null);if(!sent?.duplicate)notifyRoom(p.principal,b.id);res.json(typeof sent==='string'?{id:sent}:sent);});
+app.post('/api/control/chats/media/send',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(!['image','audio'].includes(b.kind))return res.status(400).json({error:'Invalid attachment.'});const id=chats.sendEncrypted(p.principal,b.id,b.cipher,b.kind,null,null,b.once===true);notifyRoom(p.principal,b.id);res.json({id});});
+app.post('/api/control/chats/media',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};res.json(chats.getEncryptedMedia(p.principal,b.id,b.messageId));});
+app.post('/api/control/chats/once',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};res.json(chats.openOnce(p.principal,b.id,b.messageId,false,true));});
+app.post('/api/control/chats/once/send',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{},id=chats.sendEncrypted(p.principal,b.id,b.cipher,'text',null,null,true);notifyRoom(p.principal,b.id);res.json({id});});
+app.post('/api/control/chats/receipts',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};chats.requireRoom(p.principal,b.id);const ids=Array.isArray(b.ids)?b.ids.slice(0,50):[];chats.acknowledge(p.principal,[{id:b.id,delivered:ids,read:ids,seen:ids}]);res.json({ok:true});});
 app.get('/api/control/sellers',(req,res)=>res.json({items:sellers.list(chats)}));
 app.post('/api/control/sellers/generate',(req,res)=>res.json(sellers.generateKey(req.account.id)));
 app.post('/api/control/sellers/verify',(req,res)=>res.json(sellers.verify(req.body?.id,req.body?.verified,req.account.id)));
