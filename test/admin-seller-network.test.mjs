@@ -48,7 +48,7 @@ test('tickets are one per customer, admin first, seller restricted to assigned t
  t.adminAction(a.id,'admin','share',seller,'ABC234');assert.equal(t.view(a.id,'customer').messages.at(-1).text,'Seller connection code: ABC234');
  t.adminAction(a.id,'admin','close');assert.equal(t.count(),0);assert.equal(t.list('admin',true,true)[0].id,a.id);assert.throws(()=>t.send(a.id,'customer',false,'closed',randomUUID()));
  assert.notEqual(t.open('customer','Other','Another request',randomUUID()).id,a.id);
- now+=7*86400000;t.sweep();assert.throws(()=>t.view(a.id,'customer'));assert.equal(t.count(),1);
+ now+=7*86400000;t.sweep();assert.equal(t.view(a.id,'customer').messages.length,0);assert.ok(!t.list('customer').some(x=>x.id===a.id));assert.equal(t.list('admin',true,true)[0].id,a.id);assert.equal(t.count(),1);
  }finally{db.close();}
 });
 test('announcement deletion removes record for every reader without placeholder, and requires admin',()=>{
@@ -79,4 +79,48 @@ test('new desktop routes sit behind admin auth; mobile ticket UI is integrated',
  const gate=server.indexOf("app.use('/api/control',(req,res,next)=>");
  for(const path of ['/api/control/sellers','/api/control/chats','/api/control/tickets','/api/control/announcements'])assert.ok(server.indexOf("app.get('"+path+"'")>gate);
  assert.ok(html.includes('data-tab="tickets"'));assert.ok(app.includes('QZU-SELLER-'));assert.ok(app.includes('deletedRevision'));
+});
+
+test('multiple sellers, transfer, immediate removal and permanent archive',()=>{
+ const db=setup();try{
+ const admins=new Set(['a','b']), sellers=new Set(['s1','s2']);let now=start;
+ const t=userTickets(db,{now:()=>now,isAdmin:id=>admins.has(id),isSeller:id=>sellers.has(id)});
+ const {id}=t.open('owner','Other','Hello',randomUUID());t.adminAction(id,'a','accept');
+ t.adminAction(id,'a','assign','s1');t.adminAction(id,'a','assign','s2');assert.deepEqual(t.view(id,'a',true).sellers,['s1','s2']);
+ assert.ok(t.list('s2').some(x=>x.id===id));t.adminAction(id,'a','remove','s1');assert.throws(()=>t.view(id,'s1'));assert.equal(t.list('s1').length,0);assert.throws(()=>t.send(id,'s1',false,'bad',randomUUID()));
+ t.adminAction(id,'a','transfer','b');assert.throws(()=>t.send(id,'a',true,'bad',randomUUID()));t.send(id,'b',true,'ok',randomUUID());
+ assert.throws(()=>t.adminAction(id,'b','delete'));t.adminAction(id,'b','close');assert.equal(t.list('owner').length,0);assert.equal(t.list('s2').length,0);assert.deepEqual(t.view(id,'s2').messages,[]);
+ now+=365*86400000;t.sweep();assert.equal(t.list('b',true,true).length,1);assert.throws(()=>t.adminAction(id,'s2','delete'));t.adminAction(id,'b','delete');assert.equal(t.list('b',true,true).length,0);
+ }finally{db.close();}
+});
+
+test('seller directory reveals only public profile fields; rotating codes invalidates prior code',()=>{
+ const db=setup();try{
+ const s=sellerStore(db),chats=new Chats();chats.sellerInvites=s;
+ const a=redeemAccess(db,s.generateKey('admin').key,start,'seller-one').id,b=redeemAccess(db,s.generateKey('admin').key,start,'seller-two').id;
+ s.rename(b,'Example seller');s.verify(b,true,'admin');assert.throws(()=>s.rename(b,'qzu-Support'));assert.throws(()=>s.directory('stranger'));
+ assert.deepEqual(s.directory(a),[{id:b,name:'Example seller',verified:true}]);
+ const old=s.ensureCode(b,chats);const next=s.rotate(b,chats,'admin');assert.notEqual(next.code,old.code);assert.ok(!chats.codes.has(old.code));assert.ok(s.reserved(old.code));assert.throws(()=>chats.requestConnection(a,old.code));
+ db.prepare('UPDATE accounts SET access_revoked=1 WHERE id=?').run(b);s.sync(chats);assert.deepEqual(s.directory(a),[]);assert.throws(()=>s.rename(b,'No'));assert.throws(()=>s.rotate(b,chats,'admin'));
+ }finally{db.close();}
+});
+test('admin starts encrypted direct chat without request, user starts pending request, fixed name and no block',()=>{
+ const db=setup();try{
+ const c=new Chats();c.contacts=contactStore(db);c.profileRole=id=>id==='admin'?'admin':null;
+ const code=c.ensureInvite('user').code;const first=c.requestConnection('admin',code);assert.ok(first.id);assert.equal(c.connectionRequests('user').length,0);assert.ok(c.rooms.get(first.id).encryption);assert.equal(c.requestConnection('admin',code).id,first.id);
+ const contact=c.contacts.between('user','admin');assert.equal(contact.nickname,'qzu-Support');
+ c.updateContact('user',contact.id,{nickname:'changed'});assert.equal(c.contacts.between('user','admin').nickname,'qzu-Support');
+ assert.throws(()=>c.blockContact('user',first.id));assert.throws(()=>c.removeContact('user',contact.id,true));
+ const adminCode=c.ensureInvite('admin').code;assert.deepEqual(c.requestConnection('other',adminCode),{pending:true});const req=c.connectionRequests('admin').find(x=>x.incoming);assert.ok(req);
+ const accepted=c.respondConnection('admin',req.id,true);assert.ok(c.rooms.get(accepted.id).encryption);assert.equal(c.contacts.between('other','admin').nickname,'qzu-Support');
+ }finally{db.close();}
+});
+test('legacy ticket seller migration preserves membership and never resurrects removed sellers',()=>{
+ const db=setup();try{
+ const options={isAdmin:id=>id==='admin',isSeller:id=>id==='seller'};
+ const t=userTickets(db,options);const {id}=t.open('owner','Other','hello',randomUUID());t.adminAction(id,'admin','accept');
+ db.prepare('UPDATE user_tickets SET seller=? WHERE id=?').run('seller',id);
+ const migrated=userTickets(db,options);assert.equal(migrated.view(id,'seller').mine,'seller');migrated.adminAction(id,'admin','remove','seller');
+ const restarted=userTickets(db,options);assert.throws(()=>restarted.view(id,'seller'));assert.deepEqual(restarted.view(id,'admin',true).sellers,[]);
+ }finally{db.close();}
 });
