@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.13.0';
+const installedVersion = window.QZU_APP_VERSION || '0.14.0';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -2477,14 +2477,14 @@ function openControlCenter(){
   const generate=button('Generate one-time pairing code',async()=>{generate.disabled=true;try{const result=await api('control/pair',{pin:pin.value});pin.value='';if(epoch!==authEpoch||!unlockToken||document.hidden||!body.contains(generate))return;const value=el('p','access-address',result.pairingCode);show('Pair desktop',[el('p','','Open '+apiOrigin+'/control in your browser. This code expires in 2 minutes and works only once.'),value,button('Copy code',()=>navigator.clipboard.writeText(result.pairingCode)),button('Back',openControlCenter,'secondary-button')]);}catch(e){dialogError(e);generate.disabled=false;}});
   show('Pair desktop',[el('p','','Verify your admin PIN to authorize a browser.'),pin,generate,button('Back',openControlCenter,'secondary-button')]);
  }
- window.QzuControl.mount(root,call,{mobile:true,isActive:active,onExit:closeModal,pair,media});
+ const mounted=window.QzuControl.mount(root,call,{mobile:true,isActive:active,onExit:closeModal,pair,media});controlCleanup=()=>mounted.close();
 }
 $('adminControl').addEventListener('click',openControlCenter);
 $('recoverySettings').addEventListener('click',()=>{
  if(!unlockToken||state.supportAgent)return;
  const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Current login PIN';pin.autocomplete='off';
  const issue=button('Create recovery code',async()=>{issue.disabled=true;try{const result=await api('account/recovery-code',{pin:pin.value});pin.value='';if(!body.contains(issue)||!unlockToken||document.hidden)return;show('Save your recovery code',[el('p','','Keep this code offline. It requires your existing login PIN. Creating a new code invalidates the old one.'),el('p','access-address',result.recoveryCode),button('Copy recovery code',()=>navigator.clipboard.writeText(result.recoveryCode)),button('Done',closeModal,'secondary-button')]);}catch(e){dialogError(e);issue.disabled=false;}});
- show('Account recovery',[el('p','','Recover your account and paid access on a new device using your recovery code and current login PIN. Old encrypted conversations cannot be transferred. This replaces any existing recovery code.'),pin,issue,button('Cancel',closeModal,'secondary-button')]);
+ show('Account recovery',[el('p','','Recover your account and paid access on a new device using your recovery code and current login PIN. Old encrypted conversations and saved contacts cannot be transferred. This replaces any existing recovery code.'),pin,issue,button('Cancel',closeModal,'secondary-button')]);
 });
 function messageActions(room, message) {
   const picker = el('div', 'reaction-picker');
@@ -2623,7 +2623,9 @@ $('accentSettings').addEventListener('click', () => {
   show('Accent color', [picker, button('Close', closeModal)]);
 });
 
+let controlCleanup=null;
 function clearMedia() {
+  if(controlCleanup){const cleanup=controlCleanup;controlCleanup=null;cleanup();}
   if (recordingCleanup) {
     const cleanup = recordingCleanup;
     recordingCleanup = null;
@@ -3197,7 +3199,7 @@ function showAccountRecovery(){
  if(!native){dialogError(Error('Recover your account in the mobile app.'));return;}
  const code=el('input','access-key-input');code.placeholder='Recovery code';code.autocomplete='off';code.spellcheck=false;code.maxLength=56;
  const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Existing login PIN';pin.autocomplete='off';
- const check=el('input');check.type='checkbox';const label=el('label','feedback-confirm');label.append(check,el('span','','I understand this disconnects the old device and deletes its active conversations. Paid access and account ID are preserved.'));
+ const check=el('input');check.type='checkbox';const label=el('label','feedback-confirm');label.append(check,el('span','','I understand this disconnects the old device and deletes its active conversations and saved contacts. Paid access and account ID are preserved.'));
  const submit=button('Recover account',async()=>{if(!check.checked)return;submit.disabled=true;try{const result=await api('access/recover',{code:code.value.trim().toUpperCase(),pin:pin.value,confirmed:true});if(!result.ok)throw Error('Recovery unavailable.');code.value='';pin.value='';forgetInvoice(false);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=false;showLogin();}catch(e){dialogError(e);submit.disabled=false;}});
  showCheckout('Recover account',[el('p','','Enter the recovery code saved on your old device and your existing login PIN.'),code,pin,label,submit,button('Back',showAccess,'secondary-button')]);
 }
