@@ -144,7 +144,12 @@ try {
   await control.getByRole('heading', { name: 'Announcements', exact: true }).first().waitFor();
   await control.getByText(/^Announcement 90 /).waitFor();
   assert.equal(await control.getByText(/^Announcement 1 /).count(), 0);
-  console.log('Control Center sign-in and announcement pagination passed.');
+  const desktopChats = control.waitForResponse(response => response.url() === origin + '/api/control/chats' && response.ok());
+  await control.getByRole('navigation').getByRole('button', { name: 'Chats', exact: true }).click();
+  await desktopChats;
+  await control.getByRole('button', { name: 'Add contact' }).click();
+  await control.getByRole('button', { name: 'Copy my code' }).waitFor();
+  console.log('Control Center sign-in, announcement pagination and private chat startup passed.');
 } finally {
   await browser?.close();
   if (child?.pid && child.exitCode === null && child.signalCode === null) {
