@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {openAccounts,createAccount,setLogin,findAccount} from '../lib/accounts.mjs';
-import {initDevices,findDeviceAccount} from '../lib/devices.mjs';
+import {initDevices,findDeviceAccount,deviceProfiles} from '../lib/devices.mjs';
+import {DEVICE_CHANGE_RETENTION,deviceChanges} from '../lib/device-changes.mjs';
+import {initActivity} from '../lib/activity.mjs';
 import {initAccess,createSupportKey,rotateSupportKey,releaseSupportKey,invoiceRow,invoiceStatus,submitPayment,approvePayment,redeemAccess,applyRenewal} from '../lib/access.mjs';
 import {initPayments,createCryptoInvoice,inspectTransaction,verifyCryptoInvoice,COINS} from '../lib/crypto-payments.mjs';
-import {initControl,issueRecovery,recoverAccount,createControlSessions,desktopControlAllowed,accountAction,archiveControlRecord,controlPayments} from '../lib/control.mjs';
+import {initControl,issueRecovery,recoverAccount,createControlSessions,desktopControlAllowed,accountAction,archiveControlRecord,controlPayments,controlAccounts} from '../lib/control.mjs';
 import {complianceStore} from '../lib/compliance.mjs';
 import {feedbackStore} from '../lib/feedback.mjs';
 import {initPaymentTickets,paymentTickets} from '../lib/payment-tickets.mjs';
@@ -45,6 +47,61 @@ test('recovery requires PIN and one-time code, retains entitlement, invalidates 
  assert.throws(()=>recoverAccount(db,recoveryCode,'654321','new-device',now+1));
  const result=recoverAccount(db,recoveryCode,'123456','new-device',now+2);assert.equal(result.id,a.id);assert.equal(findDeviceAccount(db,'old-device'),null);assert.equal(findDeviceAccount(db,'new-device').paid_until,now+365*86400000);
  assert.equal(findAccount(db,a.token),null);assert.throws(()=>recoverAccount(db,recoveryCode,'123456','other-device',now+3));
+ }finally{db.close();}
+});
+test('device changes are atomic, keep the alarm until review, and disappear on account deletion',()=>{
+ const db=setup();
+ try{
+  initActivity(db);
+  let time=now, reviews=0;
+  const changes=deviceChanges(db,()=>time), profiles=deviceProfiles(db,()=>time);
+  const {id}=createAccount(db,'first-device');
+  const other=createAccount(db,'unrelated-device');
+  setLogin(db,id,'312456');
+  const alarm=()=>controlAccounts(db,id,'',time)[0].deviceAlarm;
+  const observe=(fingerprint,details)=>profiles.update(findDeviceAccount(db,fingerprint),fingerprint,'ios',details);
+  observe('first-device',{model:'iPhone16,2',osVersion:'27.0',appVersion:'0.17.10'});
+  observe('first-device',{model:'iPhone16,2',osVersion:'27.0.1'});
+  assert.equal(alarm(),false);
+  assert.deepEqual(changes.history(id),[]);
+  const {recoveryCode}=issueRecovery(db,id,'312456',time);
+  assert.throws(()=>recoverAccount(db,recoveryCode,'654321','second-device',++time),{status:403});
+  assert.throws(()=>recoverAccount(db,recoveryCode,'312456','first-device',++time),{status:409});
+  assert.equal(alarm(),false);
+  db.exec("CREATE TRIGGER block_device_change BEFORE INSERT ON account_device_changes BEGIN SELECT RAISE(ABORT,'device history write failed'); END");
+  assert.throws(()=>recoverAccount(db,recoveryCode,'312456','second-device',++time),/device history write failed/);
+  assert.equal(findDeviceAccount(db,'first-device').id,id);
+  assert.equal(findDeviceAccount(db,'second-device'),null);
+  db.exec('DROP TRIGGER block_device_change');
+  recoverAccount(db,recoveryCode,'312456','second-device',++time);
+  const [first]=changes.history(id);
+  assert.equal(alarm(),true);
+  assert.equal(first.previousFingerprint,'first-device');
+  assert.equal(first.currentFingerprint,'second-device');
+  assert.equal(first.previousDevice.model,'iPhone 15 Pro Max');
+  assert.equal(first.previousDevice.osVersion,'27.0.1');
+  assert.equal(first.reviewedAt,null);
+  assert.throws(()=>changes.review(other.id,first.id,()=>reviews++),{status:404});
+  assert.throws(()=>changes.review(id,first.id,()=>{throw Error('audit write failed');}),/audit write failed/);
+  assert.equal(alarm(),true);
+  const next=issueRecovery(db,id,'312456',time).recoveryCode;
+  recoverAccount(db,next,'312456','third-device',++time);
+  const [second]=changes.history(id);
+  assert.equal(second.currentFingerprint,'third-device');
+  changes.review(id,first.id,()=>reviews++);
+  changes.review(id,first.id,()=>reviews++);
+  assert.equal(reviews,1);
+  assert.equal(changes.history(id)[0].id,second.id);
+  assert.equal(alarm(),true);
+  time+=DEVICE_CHANGE_RETENTION;
+  changes.sweep();
+  assert.equal(alarm(),true);
+  assert.deepEqual(changes.history(id).map(row=>row.id),[second.id]);
+  changes.review(id,second.id,()=>reviews++);
+  assert.equal(alarm(),false);
+  assert.equal(changes.history(id)[0].reviewedAt,time);
+  db.prepare('DELETE FROM accounts WHERE id=?').run(id);
+  assert.deepEqual(changes.history(id),[]);
  }finally{db.close();}
 });
 test('desktop admin keys do not consume or transfer mobile slots, and reject normal keys',()=>{

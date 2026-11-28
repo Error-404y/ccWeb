@@ -29,7 +29,7 @@ function testDevice() {
       'X-QZU-Signature':sign('sha256',Buffer.from(message),keys.privateKey).toString('base64'),'Content-Type':'application/json'
     }});
     const value=await response.json();
-    if(path==='/api/login/setup'&&response.ok)unlock=value.token;
+    if((path==='/api/login/setup'||path==='/api/login/unlock')&&response.ok)unlock=value.token;
     return {status:response.status,value};
   }};
 }
@@ -72,7 +72,7 @@ test('device profiles accept the registered app identity and reset on device cha
     assert.equal(profiles.get(id).model,null);
     profiles.update(account.get(id),'b'.repeat(64),'ios');
     assert.deepEqual(profiles.get(id),{platform:'ios',model:null,osVersion:null,appVersion:null,
-      fingerprint:'b'.repeat(64),registeredAt:1000,lastSeenAt:1000,source:'signed-session'});
+      fingerprint:'b'.repeat(64),registeredAt:null,firstSeenAt:1000,lastSeenAt:1000,lastSignedInAt:null,source:'signed-session'});
   } finally {
     db.close();
   }
@@ -289,6 +289,39 @@ test('Control reports audit submitted chat access and key removal preserves the 
     assert.ok(audit.some(item=>item.action==='keys/reveal'&&item.target===unused.id));
     assert.ok(audit.some(item=>item.action==='keys/delete'&&item.target===generated.id));
     assert.equal(JSON.stringify(audit).includes(unused.key),false);
+
+    const previousDevice = testDevice(), replacementDevice = testDevice();
+    const transferKey = generatePlanKeys(after,'1M').keys[0];
+    const transferring = redeemAccess(after,transferKey.key,Date.now(),previousDevice.fingerprint).id;
+    const pin = '146298';
+    assert.equal((await previousDevice.fetch(origin,'/api/login/setup',{pin})).status,200);
+    assert.equal((await previousDevice.fetch(origin,'/api/login/unlock',{pin})).status,200);
+    assert.equal((await control('accounts/'+transferring)).value.account.deviceAlarm,false);
+    const {recoveryCode} = (await previousDevice.fetch(origin,'/api/account/recovery-code',{pin})).value;
+    assert.equal((await replacementDevice.fetch(origin,'/api/access/recover',{code:recoveryCode,pin:'000000',confirmed:true})).status,403);
+    assert.equal((await control('accounts/'+transferring)).value.account.deviceAlarm,false);
+    assert.equal((await replacementDevice.fetch(origin,'/api/access/recover',{code:recoveryCode,pin,confirmed:true})).status,200);
+    assert.equal((await previousDevice.fetch(origin,'/api/account/support-reference')).status,401);
+    assert.equal((await replacementDevice.fetch(origin,'/api/login/unlock',{pin})).status,200);
+    const afterTransfer = (await control('accounts/'+transferring)).value;
+    assert.equal(afterTransfer.account.deviceAlarm,true);
+    assert.equal(afterTransfer.account.device.fingerprint,replacementDevice.fingerprint);
+    assert.equal((await control('accounts?q='+transferring)).value.items[0].deviceAlarm,true);
+    const [change] = afterTransfer.deviceChanges;
+    assert.equal(change.previousFingerprint,previousDevice.fingerprint);
+    assert.equal(change.currentFingerprint,replacementDevice.fingerprint);
+    assert.equal(change.reviewedAt,null);
+    const review = {id:transferring,changeId:change.id};
+    assert.equal((await replacementDevice.fetch(origin,'/api/control/accounts/device-alarm/review',review)).status,403);
+    assert.equal((await control('accounts/device-alarm/review',{...review,id:existingCustomer})).status,404);
+    assert.deepEqual((await control('accounts/device-alarm/review',review)).value,{ok:true});
+    assert.deepEqual((await control('accounts/device-alarm/review',review)).value,{ok:true});
+    const reviewedTransfer = (await control('accounts/'+transferring)).value;
+    assert.equal(reviewedTransfer.account.deviceAlarm,false);
+    assert.ok(reviewedTransfer.deviceChanges[0].reviewedAt>=change.changedAt);
+    const reviewAudit = (await control('audit?q='+change.id)).value.items;
+    assert.equal(reviewAudit.filter(item=>item.action==='accounts/device-alarm/review'&&item.target===transferring).length,1);
+    assert.equal(JSON.stringify(reviewAudit).includes(previousDevice.fingerprint),false);
   } finally {
     after.close();
   }

@@ -17,11 +17,11 @@ const keyState=key=>key.state==='revoked'?'revoked':key.redeemed?'redeemed':'unu
 const evidenceSource=source=>({'reporter-submitted':'Reporter submitted','server-confirmed':'Server confirmed','server-stored':'Server stored'})[source]||'Source unavailable';
 const chatTypeLabel=value=>({direct:'Direct chat','encrypted direct':'Encrypted direct chat',group:'Group chat',support:'Support chat',room:'Room',world:'World chat',public:'Public chat',unknown:'Type unavailable'})[value]||'Type unavailable';
 const platformName=value=>({ios:'iOS',android:'Android',web:'Web',desktop:'Desktop'})[value]||value;
-const deviceName=device=>[platformName(device?.platform),device?.model].filter(Boolean).join(' · ')||'Unavailable';
+const deviceName=device=>device?.model||platformName(device?.platform)||'Unavailable';
 const sections=[
  ['Workspace',['Overview','Chats','Announcements']],
- ['Inbox',['Tickets','Support','Payment tickets','Reports','Feedback']],
- ['Management',['Accounts','Keys','Sellers','Payments']],
+ ['Inbox',['Tickets','Support','Payment tickets','Reports','Shop reviews','Feedback']],
+ ['Management',['Accounts','Keys','Sellers','Groups','Payments']],
  ['Operations',['Monitoring','Audit','Archive']]
 ];
 function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{},media=null,mobileChat=null,initialTab=null}={}){
@@ -73,7 +73,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  function navigate(tab,nextScope='all',nextQuery=''){if(mobile&&tab==='Chats'&&mobileChat){stop();mobileChat();return;}current=tab;query=nextQuery;cursor='';keyPages=[];scope=nextScope;if(tab!=='Accounts')lookupField.value='';if(!mobile&&location.pathname==='/control/monitoring'&&tab!=='Monitoring')history.replaceState(null,'','/control');else if(!mobile&&tab==='Monitoring')history.replaceState(null,'','/control/monitoring');load();}
  function updateCount(tab,count){const n=tabs.get(tab).lastElementChild;n.textContent=count>0?String(count):'';n.hidden=!count;}
  function routeFor(view,archived=false){
-  const route=view==='Payment tickets'?'payment-tickets':view.toLowerCase();
+  const route=view==='Payment tickets'?'payment-tickets':view==='Shop reviews'?'shop-reviews':view.toLowerCase();
   if(archived)return route+'?archived=1';
   if(['Tickets','Payments'].includes(view))return route+'?scope='+encodeURIComponent(scope);
   if(!['Accounts','Keys','Audit'].includes(view))return route;
@@ -98,6 +98,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    updateCount('Support',info.supportRequests);
    updateCount('Tickets',work.claimableTickets??info.userTickets);
    updateCount('Reports',work.reports);
+   updateCount('Shop reviews',work.shopReviews);
    updateCount('Feedback',work.feedback);
    updateOverview?.(work);
    if(listView){
@@ -154,12 +155,14 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   const names={
    'reports/resolve':'Resolved report','reports/collaborate':'Updated report review','reports/follow-up':'Requested evidence from reporter',
    'sellers/rename':'Changed seller display name','seller-rename':'Changed seller display name',
+   'shop-reviews/review':'Reviewed shop listing','groups/join':'Joined group as staff','groups/send':'Sent group message',
    'support/respond':'Responded to support request','support/finish':'Updated support status',
    'support/send':'Replied to support case','support/delete':'Approved deletion',
    'tickets/action':'Updated ticket','tickets/send':'Replied to ticket',
    'payment-tickets/release':'Released access key','payment-tickets/verify':'Checked payment',
    'keys/reveal':'Revealed access key','keys/delete':'Deleted access key',
    'cases/claim':'Claimed case','cases/unassign':'Released assignment','cases/note':'Added an internal note',
+   'accounts/device-alarm/review':'Reviewed a device change',
    note:'Added an internal note','accounts/view':'Viewed account','reports/evidence-view':'Viewed reported chat','reports/evidence-attachment':'Viewed report attachment'
   };
   const name=String(event.action||event.event||'Activity');
@@ -236,6 +239,77 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   primary.append(...content);
   layout.append(primary,sidebar);
   return layout;
+ }
+ async function openGroup(group){
+  const {token}=detailView(group.name);
+  const transcript=el('div','','cc-chat'),composer=el('form','','cc-detail-primary');
+  const text=el('textarea');text.setAttribute('aria-label','Group message');text.required=true;text.maxLength=2000;
+  const send=el('button','Send message','cc-button');send.type='submit';
+  let signature='';
+  async function refresh(){
+   const current=await api('groups/'+encodeURIComponent(group.id));
+   if(!alive(token))return;
+   const fingerprint=JSON.stringify(current.messages);
+   if(signature===fingerprint)return;
+   signature=fingerprint;
+   transcript.replaceChildren(...current.messages.map(message=>{
+    const row=el('div','','cc-bubble '+(message.mine?'mine':'other'));
+    row.append(el('small',message.system?'Group activity':(message.sender||'Member')+' · '+date(message.at)),
+      el('p',message.deleted?'Message deleted':message.kind==='text'?message.text:'Attachment'));
+    return row;
+   }));
+  }
+  composer.addEventListener('submit',async event=>{
+   event.preventDefault();if(send.disabled||!text.value.trim())return;
+   send.disabled=true;
+   try{await api('groups/send',{id:group.id,text:text.value});text.value='';await refresh();}catch(e){error(e);}finally{send.disabled=false;}
+  });
+  composer.append(text,send);
+  main.append(card('Group chat',[transcript,composer]));
+  async function poll(){
+   if(!alive(token))return;
+   try{await refresh();}catch(e){if(alive(token)){if(e.status===404){transcript.textContent='Group unavailable.';composer.hidden=true;return;}error(e);}}
+   if(alive(token))setTimeout(poll,4000);
+  }
+  void poll();
+ }
+ function renderGroupDirectory(data,token){
+  const filter=input('Search by group name or ID'),list=el('div','','cc-detail-primary');
+  function draw(){
+   const q=filter.value.trim().toLowerCase();
+   const items=data.items.filter(group=>group.name.toLowerCase().includes(q)||group.id.includes(q));
+   list.replaceChildren(...items.map(group=>{
+    const row=card(group.name,[details([['Group ID',group.id],['Owner account',group.owner],['Members',group.memberCount],
+      ['Scheduled deletion',group.persistent?'Never':date(group.expires)]])]);
+    if(group.joined)row.append(button('Open group',()=>openGroup(group),'cc-secondary'));
+    else row.append(action('Join as staff',async()=>{
+     if(!await modalConfirm('Join this group as qzu. Staff? Members will see the join notice.')||!alive(token))return;
+     await api('groups/join',{id:group.id});
+     if(alive(token))await openGroup(group);
+    }));
+    return row;
+   }));
+   if(!items.length)list.append(el('p','No groups found.','cc-muted'));
+  }
+  filter.addEventListener('input',draw);draw();
+  main.append(filter,list);
+ }
+ function renderShopReviews(data,token){
+  if(!data.items.length){main.append(el('p','No listings waiting for review.','cc-muted'));return;}
+  for(const item of data.items){
+   const row=card(item.name,[details([['Seller',item.seller],['Seller account',item.owner],['Quantity',item.quantity],
+     ['Price per item',currency(item.priceMinor,item.currency)],['Fulfillment',item.fulfillment],['Submitted',date(item.submitted)]])]);
+   const actions=el('div','','cc-actions');
+   for(const [label,approve] of [['Publish listing',true],['Return to seller',false]]){
+    actions.append(action(label,async()=>{
+     if(!await modalConfirm(approve?'Approve this listing for the seller’s shop?':'Return this submission for edits?')||!alive(token))return;
+     await api('shop-reviews/review',{id:item.id,approve});
+     toast(approve?'Listing published':'Listing returned','success');
+     if(alive(token))await load();
+    },approve?'':'cc-secondary'));
+   }
+   row.append(actions);main.append(row);
+  }
  }
  function timeline(entries,empty='No activity recorded.'){
   if(!entries?.length)return el('p',empty,'cc-muted');
@@ -315,6 +389,14 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   return {panel,refresh};
  }
  function accountState(account){return account.accessStatus||(account.suspended?'suspended':account.access_revoked?'revoked':account.access?.active?'active':'expired');}
+ function deviceAlarmBadge(){return el('span','Alarm','cc-status red cc-device-alarm');}
+ function accountBadges(account){
+  const access=status(accountState(account));
+  if(!account.deviceAlarm)return access;
+  const badges=el('div','','cc-device-badges');
+  badges.append(deviceAlarmBadge(),access);
+  return badges;
+ }
  function accountDevice(account){
   const device=account.device;
   const panel=card('Registered device');
@@ -322,16 +404,42 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    panel.append(el('p','No device has been recorded for this account.','cc-muted'));
    return panel;
   }
-  panel.append(details([
-   ['Platform',platformName(device.platform)],['Model',device.model],['OS version',device.osVersion],['App version',device.appVersion],
-   ['First registered',date(device.registeredAt)],['Last seen',date(device.lastSeenAt)],
-   ['Details source',({'app-reported':'App reported','signed-session':'Signed device session'})[device.source]]
-  ],'cc-detail-facts'));
-  if(device.platform==='ios'&&/^i(?:Phone|Pad|Pod)\d+,\d+$/.test(device.model||'')){
-   panel.append(el('p','iOS reports the Apple model identifier.','cc-muted'));
-  }
+  const facts=[['Platform',platformName(device.platform)],['Model',device.model]];
+  if(device.modelIdentifier)facts.push(['Model identifier',device.modelIdentifier]);
+  facts.push(['OS version',device.osVersion],['App version',device.appVersion]);
+  if(device.registeredAt)facts.push(['First registered',date(device.registeredAt)]);
+  else if(device.firstSeenAt)facts.push(['First observed',date(device.firstSeenAt)]);
+  if(device.lastSignedInAt)facts.push(['Last successful sign-in',date(device.lastSignedInAt)]);
+  if(!device.lastSignedInAt||device.lastSeenAt!==device.lastSignedInAt)facts.push(['Last device update',date(device.lastSeenAt)]);
+  facts.push(['Details source',({'app-reported':'App-reported device details','signed-session':'Verified app signing key'})[device.source]]);
+  panel.append(details(facts,'cc-detail-facts'));
   if(device.fingerprint){
    panel.append(el('h4','Qzu device fingerprint'),recordId(device.fingerprint,'fingerprint'),el('p','Identifies the app’s registered device.','cc-muted'));
+  }
+  return panel;
+ }
+ function deviceHistory(account,changes,token,reload){
+  const panel=card('Device changes',[
+   el('p','qzu. records verified changes to an account’s registered app key. Review the previous and new fingerprints here.','cc-muted')
+  ]);
+  for(const change of changes){
+   const row=el('section','','cc-device-change');
+   const heading=el('div','','cc-panel-heading cc-device-change-heading');
+   heading.append(el('h4','Registered device changed'),change.reviewedAt?el('span','Reviewed','cc-status neutral'):deviceAlarmBadge());
+   const facts=[['Changed',date(change.changedAt)]];
+   if(change.previousDevice)facts.push(['Previous device',deviceName(change.previousDevice)]);
+   if(change.reviewedAt)facts.push(['Reviewed',date(change.reviewedAt)]);
+   row.append(heading,details(facts,'cc-detail-facts'),
+    el('h4','Previous fingerprint'),recordId(change.previousFingerprint,'previous fingerprint'),
+    el('h4','New fingerprint'),recordId(change.currentFingerprint,'new fingerprint'));
+   if(!change.reviewedAt)row.append(action('Mark reviewed',async()=>{
+    if(!alive(token))return;
+    await api('accounts/device-alarm/review',{id:account.id,changeId:change.id});
+    if(!alive(token))return;
+    toast('Device change marked reviewed','success');
+    await reload();
+   },'cc-secondary cc-compact-button cc-fit'));
+   panel.append(row);
   }
   return panel;
  }
@@ -365,11 +473,11 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   const loading=el('p','Loading account…','cc-muted');
   main.append(loading);
   try{
-   const {account,cases=[],activity=[],audit=[]}=await api('accounts/'+encodeURIComponent(id));
+   const {account,cases=[],activity=[],audit=[],deviceChanges=[]}=await api('accounts/'+encodeURIComponent(id));
    if(!alive(token))return;
    const summary=card('Account record');
    summary.classList.add('cc-record-panel');
-   summary.firstElementChild.after(status(accountState(account)));
+   summary.firstElementChild.after(accountBadges(account));
    summary.append(recordId(account.id,'account ID'),details([
     ['Name',account.name],['Access plan',planName(account.access_plan)],['Access ends',date(account.paid_until)],
     ['Last activity',date(account.last_activity)],['Reports received',number.format(account.reports??0)]
@@ -406,7 +514,9 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    const trail=el('aside','','cc-detail-primary');
    trail.append(card('Account activity',[timeline(activity)]),card('Administrative actions',[timeline(audit)]));
    loading.remove();
-   main.append(splitDetail([summary,accountDevice(account),access,related],trail));
+   const panels=[summary,accountDevice(account)];
+   if(deviceChanges.length)panels.push(deviceHistory(account,deviceChanges,token,()=>openAccount(id,back)));
+   main.append(splitDetail([...panels,access,related],trail));
   }catch(e){
    if(alive(token)){loading.textContent=e.message;main.append(button('Retry',()=>openAccount(id,back),'cc-secondary'));}
   }
@@ -433,10 +543,11 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  }
  function reportAccount(title,id,back,account,description){
   const panel=card(title,[recordId(id,'account ID')]);
+  if(account?.deviceAlarm)panel.firstElementChild.after(deviceAlarmBadge());
   if(account)panel.append(details([
    ['Name',account.name],['Access',statusLabels[account.accessStatus]||account.accessStatus],['Plan',planName(account.plan)],
    ['Device',deviceName(account.device)],['OS version',account.device?.osVersion],['App version',account.device?.appVersion],
-   ['Device last seen',date(account.device?.lastSeenAt)]
+   ['Last device update',date(account.device?.lastSeenAt)]
   ],'cc-detail-facts'));
   if(account?.device?.fingerprint)panel.append(el('h4','Qzu device fingerprint'),recordId(account.device.fingerprint,'fingerprint'));
   if(description)panel.append(el('p',description,'cc-muted'));
@@ -616,6 +727,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   empty.setAttribute('role','status');
   const items=[
    ['Open reports','Review reports awaiting a moderation decision.','Reports','all',work=>work.reports],
+   ['Shop reviews','Review seller changes before they go live.','Shop reviews','all',work=>work.shopReviews??0],
    ['Deletion requests','Review customer requests assigned to you.','Support','all',work=>work.deletionRequests],
    ['Verified payments','Release access for verified payments.','Payment tickets','all',work=>work.paymentReleases],
    ['Payments to review','Recheck older submissions and review legacy orders.','Payments','review',work=>work.stalePayments+work.legacyPayments],
@@ -1171,6 +1283,10 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
      open:()=>openUserTicket(t.id)
     })));
     listView=!archived;
+   }else if(view==='Groups'){
+    renderGroupDirectory(data,token);
+   }else if(view==='Shop reviews'){
+    renderShopReviews(data,token);listView=true;
    }else if(view==='Sellers'){
      const controls=el('div','','cc-actions');controls.append(action('Generate Seller key',async()=>{const result=await api('sellers/generate',{});if(!alive(token))return;const d=el('dialog','','cc-seller-dialog');d.append(el('h2','Seller key generated'),el('p','Save this one-time activation secret privately.','cc-muted'),el('code',result.key,'cc-secret'),action('Copy key',()=>navigator.clipboard.writeText(result.key)),button('Done',()=>{d.close();d.remove();},'cc-secondary'));main.append(d);d.addEventListener('close',()=>d.remove());d.showModal();}));main.append(controls);
      for(const p of data.items){
@@ -1199,11 +1315,12 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     main.append(caseQueue('Account directory',data.items,a=>({
      title:a.id,
      description:a.access_plan+' · '+(a.last_activity?'Last activity '+date(a.last_activity):'No recent activity')+' · '+a.reports+' reports',
-     status:status(accountState(a)),
+     status:accountBadges(a),
      action:'Open account',
      open:()=>openAccount(a.id)
     }),'No matching accounts.'));
     if(data.items.length===100)main.append(button('Next page',()=>{cursor=data.items.at(-1).id;load();},'cc-secondary'));
+    listView=true;
    }else if(view==='Keys'){
     renderKeys(data,token);
    }else if(view==='Payments'){

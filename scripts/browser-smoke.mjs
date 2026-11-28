@@ -7,10 +7,11 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { chromium } from 'playwright-core';
-import { createAccount, openAccounts } from '../lib/accounts.mjs';
+import { createAccount, openAccounts, setLogin } from '../lib/accounts.mjs';
 import { createSupportKey, generatePlanKeys, initAccess } from '../lib/access.mjs';
 import { complianceStore } from '../lib/compliance.mjs';
 import { contactStore } from '../lib/contacts.mjs';
+import { initControl, issueRecovery, recoverAccount } from '../lib/control.mjs';
 import { deviceProfiles, initDevices } from '../lib/devices.mjs';
 import { officialStore } from '../lib/official.mjs';
 import { redeemSellerKey, sellerStore } from '../lib/sellers.mjs';
@@ -25,6 +26,7 @@ try {
   const db = openAccounts(database);
   initAccess(db);
   initDevices(db);
+  initControl(db);
   const adminKey = createSupportKey(db);
   const sellerKeys = generateKeyPairSync('ec',{namedCurve:'prime256v1'});
   const {x,y} = sellerKeys.publicKey.export({format:'jwk'});
@@ -35,8 +37,15 @@ try {
   const buyerFixture = createAccount(db);
   contactStore(db).add(buyerFixture.id,sellerFixture.id,'Studio seller','Buyer');
   const reports = complianceStore(db);
-  const deviceFingerprint='a'.repeat(64), reported=createAccount(db,deviceFingerprint), reporter=createAccount(db);
-  deviceProfiles(db).update({id:reported.id,device_id:deviceFingerprint},deviceFingerprint,'ios',{model:'iPhone15,4',osVersion:'26.1',appVersion:'0.17.9'});
+  const deviceFingerprint='a'.repeat(64), previousFingerprint='d'.repeat(64);
+  const reported=createAccount(db,previousFingerprint), reporter=createAccount(db);
+  const reportedPin='867249';
+  assert.ok(setLogin(db,reported.id,reportedPin));
+  const devices=deviceProfiles(db);
+  devices.update({id:reported.id,device_id:previousFingerprint},previousFingerprint,'ios',{model:'iPhone16,2',osVersion:'26.0',appVersion:'0.17.9'});
+  const {recoveryCode}=issueRecovery(db,reported.id,reportedPin);
+  recoverAccount(db,recoveryCode,reportedPin,deviceFingerprint);
+  devices.update({id:reported.id,device_id:deviceFingerprint},deviceFingerprint,'ios',{model:'iPhone15,4',osVersion:'26.1',appVersion:'0.17.9'});
   const messageId='15090c60-1d0f-45c8-b945-9d98b7ed231d';
   const now=Date.now();
   const evidenceImage=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aI2kAAAAASUVORK5CYII=','base64');
@@ -277,6 +286,22 @@ try {
   }
   await chatPage.getByRole('button', {name:'Done', exact:true}).click();
   assert.equal(await chatPage.locator('#chatBackgroundLabel').textContent(), 'Mist Paper');
+  const {id:groupFixture}=await call(viewer,'group/create',{name:'Workshop group'},viewerToken);
+  const {code:groupCode}=await call(viewer,'group/invite',{id:groupFixture},viewerToken);
+  assert.equal((await call(peer,'connect',{code:groupCode,nickname:'User.Name'},peerToken)).pending,true);
+  assert.equal((await call(peer,'state',undefined,peerToken)).rooms.some(room=>room.id===groupFixture),false);
+  const groupRequest=(await call(viewer,'state',undefined,viewerToken)).requests.find(request=>request.group);
+  await call(viewer,'connection/respond',{id:groupRequest.id,accept:true},viewerToken);
+  await chatPage.locator('#bottomNav [data-tab=chat]').click();
+  await chatPage.getByRole('searchbox').fill('');
+  await chatPage.evaluate(()=>refresh());
+  await chatPage.locator('#contacts').getByText('Workshop group',{exact:true}).click();
+  await chatPage.locator('#messages').getByText('User.Name has joined the group.',{exact:true}).waitFor();
+  await chatPage.locator('#chatOptions').click();
+  await chatPage.getByRole('button',{name:'Group deletion timers',exact:true}).click();
+  await chatPage.getByRole('combobox',{name:'Delete group after',exact:true}).selectOption('never');
+  await chatPage.getByRole('button',{name:'Save timers',exact:true}).click();
+  await chatPage.getByText('No expiry',{exact:true}).waitFor();
   await viewer.close();
   await peer.close();
   console.log('Chat scroll anchoring, reply, media previews, ordered offline retries, drafts and appearance passed.');
@@ -322,14 +347,18 @@ try {
   console.log('Packaged Google Play client accepts seller activation keys.');
 
   let sellerUnlock = '';
+  function sellerDeviceHeaders(method, path, body, unlock) {
+    const timestamp = String(Date.now()), nonce = randomBytes(16).toString('hex');
+    const envelope = JSON.stringify(['qzu-device-v1',method,path,timestamp,nonce,unlock,body]);
+    return {'x-qzu-device':sellerPublicBytes.toString('base64'),
+      'x-qzu-signature':sign('sha256',Buffer.from(envelope),sellerKeys.privateKey).toString('base64'),
+      'x-qzu-time':timestamp,'x-qzu-nonce':nonce};
+  }
   async function sellerPost(path, data) {
-    const body = JSON.stringify(data), timestamp = String(Date.now()), nonce = randomBytes(16).toString('hex');
-    const envelope = JSON.stringify(['qzu-device-v1','POST',path,timestamp,nonce,sellerUnlock,body]);
-    const response = await fetch(origin + path,{method:'POST',body,headers:{
-      'Content-Type':'application/json','X-QZU':'1','X-QZU-Unlock':sellerUnlock,'X-QZU-Device':sellerPublicBytes.toString('base64'),
-      'X-QZU-Signature':sign('sha256',Buffer.from(envelope),sellerKeys.privateKey).toString('base64'),
-      'X-QZU-Time':timestamp,'X-QZU-Nonce':nonce
-    }});
+    const body = JSON.stringify(data);
+    const headers = {'Content-Type':'application/json','X-QZU':'1','X-QZU-Unlock':sellerUnlock,
+      ...sellerDeviceHeaders('POST',path,body,sellerUnlock)};
+    const response = await fetch(origin + path,{method:'POST',body,headers});
     assert.equal(response.status,200,path);
     const value = await response.json();
     if (value.token) sellerUnlock=value.token;
@@ -338,10 +367,53 @@ try {
   await sellerPost('/api/login/setup',{pin:'143258'});
   await sellerPost('/api/terms/accept',{version:1});
   await sellerPost('/api/sellers/profile',{name:'Studio seller'});
+  const shopStaff=await browser.newContext({userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+    extraHTTPHeaders:{'X-QZU':'1','sec-ch-ua-platform':'"macOS"'}});
+  assert.equal((await shopStaff.request.post(origin+'/api/control/login',{data:{key:adminKey,pin:''}})).status(),200);
+  async function publishShop(name) {
+    const result=await shopStaff.request.get(origin+'/api/control/shop-reviews');
+    assert.equal(result.status(),200);
+    const pending=(await result.json()).items.find(item=>item.name===name);
+    assert.ok(pending,name+' is pending review');
+    assert.equal((await shopStaff.request.post(origin+'/api/control/shop-reviews/review',{data:{id:pending.id,approve:true}})).status(),200);
+  }
   const publishedItem = {id:randomUUID(),name:'Studio print',quantity:0,price:'12.50',currency:'CHF',fulfillment:'both',published:true};
   const draftItem = {...publishedItem,id:randomUUID(),name:'Private draft',quantity:4,fulfillment:'pickup',published:false};
   await sellerPost('/api/sellers/catalog/manage',publishedItem);
+  await publishShop('Studio print');
   await sellerPost('/api/sellers/catalog/manage',draftItem);
+  const shopOwner = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
+  shopOwner.setDefaultTimeout(10000);
+  await shopOwner.route(origin+'/api/**',route=>{
+    const request=route.request(), url=new URL(request.url()), headers=request.headers();
+    return route.continue({headers:{...headers,
+      ...sellerDeviceHeaders(request.method(),url.pathname+url.search,request.postData()||'',headers['x-qzu-unlock']||'')}});
+  });
+  await shopOwner.goto(origin+'/settings');
+  await shopOwner.getByLabel('Login PIN',{exact:true}).fill('143258');
+  await shopOwner.getByRole('button',{name:'Unlock',exact:true}).click();
+  await shopOwner.getByRole('link',{name:'Shop',exact:true}).click();
+  await shopOwner.getByRole('heading',{name:'Shop',exact:true}).waitFor();
+  const draftsPanel = shopOwner.getByRole('table',{name:'Private drafts',exact:true});
+  const listingsPanel = shopOwner.getByRole('table',{name:'Items for sale',exact:true});
+  await draftsPanel.getByText('Private draft',{exact:true}).waitFor();
+  await listingsPanel.getByText('Studio print',{exact:true}).waitFor();
+  await shopOwner.getByRole('button',{name:'Add item',exact:true}).click();
+  await shopOwner.getByLabel('Item name',{exact:true}).fill('Desk print');
+  await shopOwner.getByRole('button',{name:'Save draft',exact:true}).click();
+  await draftsPanel.getByText('Desk print',{exact:true}).waitFor();
+  await draftsPanel.getByRole('button',{name:'Edit Desk print',exact:true}).click();
+  await shopOwner.getByLabel('Price per item',{exact:true}).fill('9.50');
+  await shopOwner.getByLabel('How buyers receive it',{exact:true}).selectOption('delivery');
+  await shopOwner.getByRole('button',{name:'Submit for review',exact:true}).click();
+  await shopOwner.getByRole('heading',{name:'Waiting for review',exact:true}).waitFor();
+  assert.equal(await listingsPanel.getByText('Desk print',{exact:true}).count(),0);
+  await publishShop('Desk print');
+  await shopOwner.getByRole('button',{name:'Refresh listings',exact:true}).click();
+  await listingsPanel.getByText('Desk print',{exact:true}).waitFor();
+  assert.equal(await draftsPanel.getByText('Desk print',{exact:true}).count(),0);
+  await shopOwner.context().close();
+
   const buyer = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
   buyer.setDefaultTimeout(10000);
   await buyer.context().addCookies([{name:'qzu',value:buyerFixture.token,url:origin,httpOnly:true}]);
@@ -356,9 +428,11 @@ try {
   await buyer.locator('#contacts .contact').filter({hasText:'Studio seller'}).click();
   await buyer.getByRole('button',{name:'Open seller profile',exact:true}).waitFor();
   await buyer.locator('#message').fill('Hello! I have a question.');
-  await buyer.getByRole('button',{name:'Open seller profile',exact:true}).click();
+  await buyer.getByRole('button',{name:/Open seller shop.*Seller updated/}).click();
+  await buyer.getByRole('button',{name:'Open seller shop',exact:true}).waitFor();
   const sellerDialog = buyer.locator('dialog:has(.seller-catalog)');
   await sellerDialog.getByText('Studio print',{exact:true}).waitFor();
+  await sellerDialog.getByText('Desk print',{exact:true}).waitFor();
   assert.equal(await sellerDialog.getByText('Private draft',{exact:true}).count(),0);
   await sellerDialog.getByText(/pickup.*delivery/i).waitFor();
   await sellerDialog.getByRole('button',{name:'Notify me when Studio print is back in stock',exact:true}).click();
@@ -368,6 +442,7 @@ try {
   assert.match(await buyer.locator('#message').inputValue(), /Hello! I have a question\.[\s\S]*Studio print[\s\S]*(?:CHF[\s\S]*12[.,]50|12[.,]50[\s\S]*CHF)/);
   assert.equal(await buyer.locator('#messages').getByText(/Studio print/).count(),0);
   await sellerPost('/api/sellers/catalog/manage',{...publishedItem,quantity:4});
+  await publishShop('Studio print');
   const stock = await call(buyer.context(),'sellers/catalog/alerts',undefined,buyerToken);
   assert.equal(stock.alerts.length,1);
   assert.ok(stock.alerts[0].triggeredAt);
@@ -375,15 +450,21 @@ try {
   await buyer.locator('dialog').getByText('Studio print',{exact:true}).waitFor();
   await buyer.locator('#modalClose').click();
   await sellerPost('/api/sellers/catalog/manage',{...publishedItem,quantity:6});
+  await publishShop('Studio print');
   const updatedStock = await call(buyer.context(),'sellers/catalog/alerts',undefined,buyerToken);
   assert.deepEqual(updatedStock.alerts.map(({triggeredAt})=>triggeredAt),[stock.alerts[0].triggeredAt]);
   await buyer.locator('#backToChats').click();
   await buyer.locator('#bottomNav [data-tab=settings]').click();
+  assert.equal(await buyer.getByRole('link',{name:'Shop',exact:true}).count(),0);
+  await buyer.evaluate(()=>navigate('/settings/shop'));
+  await buyer.getByRole('heading',{name:'Settings',exact:true}).waitFor();
+  assert.equal(await buyer.getByRole('heading',{name:'Shop',exact:true}).count(),0);
   await buyer.getByRole('link',{name:'Notifications',exact:true}).click();
   await buyer.getByRole('button',{name:/Seller stock alerts/}).click();
   await buyer.locator('dialog').getByText('Studio print',{exact:true}).waitFor();
   await buyer.context().close();
-  console.log('Seller contact listings, inquiry drafts, private listings, methods and stock alerts passed.');
+  await shopStaff.close();
+  console.log('Seller Shop workspace, publishing, buyer discovery, inquiry drafts and stock alerts passed.');
 
   const control = await browser.newPage({
     viewport: { width: 1440, height: 900 },
@@ -395,6 +476,13 @@ try {
   await control.getByLabel('Admin key', { exact: true }).fill(adminKey);
   await control.getByRole('button', { name: 'Sign in securely' }).click();
   await control.getByRole('heading', { name: 'Overview', exact: true }).first().waitFor();
+  await control.getByRole('navigation').getByRole('button',{name:'Groups',exact:true}).click();
+  await control.getByText('Workshop group',{exact:true}).waitFor();
+  assert.equal((await control.context().request.get(origin+'/api/control/groups/'+groupFixture)).status(),404);
+  await control.getByRole('button',{name:'Join as staff',exact:true}).click();
+  await control.getByRole('dialog').getByRole('button',{name:'Confirm',exact:true}).click();
+  await control.getByText('qzu. Staff has joined the group.',{exact:true}).waitFor();
+  await control.getByRole('navigation').getByRole('button',{name:'Overview',exact:true}).click();
   await control.getByRole('heading', { name: 'Account and payment totals' }).waitFor();
   await control.getByText('Verified USD revenue', { exact: true }).waitFor();
   await control.getByRole('button', { name: /^Unassigned tickets/ }).click();
@@ -423,6 +511,10 @@ try {
   await control.getByRole('button', { name: 'Find account', exact: true }).click();
   await control.getByRole('heading', { name: 'Account directory', exact: true }).waitFor();
   await control.getByRole('button', { name: 'Open account', exact: true }).waitFor();
+  await control.getByRole('textbox', { name: 'Find an account or reference' }).fill(reported.id);
+  await control.getByRole('button', { name: 'Find account', exact: true }).click();
+  const flaggedRow=control.locator('.cc-work-row').filter({has:control.getByRole('heading',{name:reported.id,exact:true})});
+  await flaggedRow.getByText('Alarm',{exact:true}).waitFor();
   await control.getByRole('navigation').getByRole('button', { name: 'Audit', exact: true }).click();
   await control.getByRole('combobox', { name: 'Audit record type' }).selectOption('ticket');
   await control.getByRole('heading', { name: 'Added an internal note', exact: true }).waitFor();
@@ -431,9 +523,21 @@ try {
   await control.getByText('Browser report evidence', { exact: true }).waitFor();
   assert.equal(await control.getByText('Submitted snapshot message', { exact: true }).count(), 0);
   await control.getByRole('button', { name: 'Open reported account', exact: true }).click();
-  await control.getByRole('heading', { name: 'Registered device' }).waitFor();
-  await control.getByText('iPhone15,4', { exact: true }).waitFor();
-  await control.getByText(deviceFingerprint, { exact: true }).waitFor();
+  const registeredDevice=control.locator('.cc-card').filter({has:control.getByRole('heading',{name:'Registered device',exact:true})});
+  await registeredDevice.getByText('iPhone 15', { exact: true }).waitFor();
+  await registeredDevice.getByText('iPhone15,4', { exact: true }).waitFor();
+  await registeredDevice.getByText(deviceFingerprint, { exact: true }).waitFor();
+  const deviceChange=control.locator('.cc-device-change');
+  await deviceChange.getByText('iPhone 15 Pro Max',{exact:true}).waitFor();
+  await deviceChange.getByText(previousFingerprint,{exact:true}).waitFor();
+  await deviceChange.getByText(deviceFingerprint,{exact:true}).waitFor();
+  await control.setViewportSize({width:390,height:844});
+  assert.equal(await control.evaluate(()=>document.documentElement.scrollWidth),390);
+  await deviceChange.getByRole('button',{name:'Mark reviewed',exact:true}).click();
+  await deviceChange.locator('.cc-status').getByText('Reviewed',{exact:true}).waitFor();
+  await control.getByText('Reviewed a device change',{exact:true}).waitFor();
+  assert.equal(await control.locator('.cc-record-panel').getByText('Alarm',{exact:true}).count(),0);
+  await control.setViewportSize({width:1440,height:900});
   await control.getByRole('button', { name: 'Back', exact: true }).click();
   await control.getByRole('button', { name: 'View reported chat', exact: true }).click();
   const snapshotMessages = control.locator('.cc-report-message');

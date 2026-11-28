@@ -6,6 +6,28 @@ import {sellerCatalog} from '../lib/seller-catalog.mjs';
 
 const listing = (data = {}) => ({id:randomUUID(),name:'Print',quantity:2,price:'10.05',currency:'CHF',...data});
 
+test('only the current approved revision replaces the visible shop listing',t=>{
+  const db=new DatabaseSync(':memory:');
+  t.after(()=>db.close());
+  const catalog=sellerCatalog(db,{reviewRequired:true,isSeller:id=>id==='seller',canView:()=>true});
+  const item=listing({published:true,fulfillment:'delivery'});
+  catalog.save('seller',item,true);
+  assert.deepEqual(catalog.forContact('buyer','seller','contact').items,[]);
+  const [first]=catalog.queue();
+  catalog.save('seller',{...item,name:'Updated print'},true);
+  const [latest]=catalog.queue();
+  assert.throws(()=>catalog.review(first.id,true),{status:409});
+  catalog.review(latest.id,false);
+  assert.deepEqual(catalog.forContact('buyer','seller','contact').items,[]);
+  assert.equal(catalog.list('seller',true).items[0].reviewStatus,'returned');
+  catalog.save('seller',item,true);
+  catalog.review(catalog.queue()[0].id,true);
+  catalog.save('seller',{...item,quantity:8},true);
+  assert.equal(catalog.forContact('buyer','seller','contact').items[0].quantity,2);
+  catalog.review(catalog.queue()[0].id,true);
+  assert.equal(catalog.forContact('buyer','seller','contact').items[0].quantity,8);
+});
+
 test('seller listing IDs are scoped to the owner and repeated actions do not create duplicates',t => {
   const db = new DatabaseSync(':memory:');
   t.after(() => db.close());

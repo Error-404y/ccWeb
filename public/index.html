@@ -103,7 +103,7 @@
             <button id="backToChats" class="icon-button mobile-back" aria-label="Back to chats"><svg><use href="#back"/></svg></button>
             <button id="profileAvatar" type="button" class="profile-avatar" aria-label="Contact information"><svg class="avatar"><use id="threadAvatar" href="#avatar"/></svg></button>
             <div class="thread-title">
-              <div class="thread-name-wrap"><div class="thread-name-line"><span class="profile-name" id="threadName">Chat</span><svg id="threadBadge" class="admin-badge" role="img" aria-label="Verified Admin" hidden><use href="#adminBadge"/></svg></div><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span><button id="encryptionStatus" class="encryption-status" type="button" hidden></button></div>
+              <div class="thread-name-wrap"><div class="thread-name-line"><span class="profile-name" id="threadName">Chat</span><svg id="threadBadge" class="admin-badge" role="img" aria-label="Verified Admin" hidden><use href="#adminBadge"/></svg><button id="openSellerShop" class="thread-shop-link" type="button" aria-label="Open seller shop" hidden>Shop</button></div><span id="memberCount" class="member-count" hidden></span><span id="presenceLabel" class="presence-label" hidden></span><button id="encryptionStatus" class="encryption-status" type="button" hidden></button></div>
             </div>
             <button class="expiry" id="expiryDetails" type="button" aria-label="Chat expiry information"><svg aria-hidden="true"><use href="#clock"/></svg><span id="chatTimer"></span></button>
             <button id="groupInvite" class="icon-button" aria-label="Group invite" title="Group invite" hidden><svg><use href="#plus"/></svg></button>
@@ -202,6 +202,7 @@
             <h1>Settings</h1>
             <div id="userInterfaceHeading" class="settings-section-heading" hidden>User Interface</div><div class="settings-section-heading">General</div><div class="settings-group">
             <a class="settings-row settings-category-link" href="/settings/account"><svg><use href="#key"/></svg><span>Account</span><svg class="chevron"><use href="#chevron"/></svg></a>
+            <a class="settings-row settings-category-link" id="sellerShopSettings" href="/settings/shop" hidden><svg aria-hidden="true"><use href="#ticketIcon"/></svg><span>Shop</span><svg aria-hidden="true" class="chevron"><use href="#chevron"/></svg></a>
             <a class="settings-row settings-category-link" href="/settings/privacy"><svg><use href="#lock"/></svg><span>Privacy &amp; Security</span><svg class="chevron"><use href="#chevron"/></svg></a>
             <a class="settings-row settings-category-link" href="/settings/appearance"><svg><use href="#moon"/></svg><span>Appearance</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/notifications"><svg><use href="#info"/></svg><span>Notifications</span><svg class="chevron"><use href="#chevron"/></svg></a><a class="settings-row settings-category-link" href="/settings/connections"><svg><use href="#avatar"/></svg><span>Connections</span><svg class="chevron"><use href="#chevron"/></svg></a>
             </div><div class="settings-section-heading">qzu.</div><div class="settings-group"><button class="settings-row" id="updateCenter" type="button"><svg><use href="#clock"/></svg><span>Update center</span><svg class="chevron"><use href="#chevron"/></svg></button>
@@ -226,6 +227,13 @@
             <button class="settings-row" id="resetPin"><svg><use href="#key"/></svg><span id="resetLabel">Request Reset</span><svg class="chevron"><use href="#chevron"/></svg></button>
 
           </div>
+          <section class="panel settings-panel shop-panel" data-settings-category="shop" aria-labelledby="sellerShopTitle" hidden>
+            <h1 id="sellerShopTitle">Shop</h1>
+            <div class="seller-catalog-profile"><h2 id="sellerShopName"></h2><button id="sellerShopProfile" class="seller-catalog-edit" type="button">Edit profile</button></div>
+            <button id="sellerShopAdd" class="primary-button" type="button" disabled>Add item</button>
+            <button id="sellerShopRefresh" class="seller-catalog-edit" type="button">Refresh listings</button>
+            <div id="sellerShopItems" class="seller-catalog-content"></div>
+          </section>
           <div class="panel settings-panel" data-settings-category="privacy" hidden>
             <h1>Privacy</h1>
             <div class="settings-row">

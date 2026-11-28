@@ -37,8 +37,8 @@ async function transport(path, options = {}) {
     if (path === '/api/session') console.info('[qzu] Session HTTP status:', response.status);
     return response;
   } catch (error) {
-    console.error('[qzu] HTTPS request failed:', String(error?.message || error));
-    throw new Error('HTTPS connection unavailable.');
+    if (!options.signal?.aborted) console.error('[qzu] HTTPS request failed:', String(error?.message || error));
+    throw Object.assign(Error('HTTPS connection unavailable.'),{aborted:options.signal?.aborted===true});
   }
 }
 
@@ -320,7 +320,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('a[href]');
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const url = new URL(a.href);
-  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/tickets', '/'].includes(url.pathname)) return;
+  if (url.origin !== location.origin || !['/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/shop', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about', '/tickets', '/'].includes(url.pathname)) return;
   e.preventDefault();
   if (unlockToken) {if(a.dataset.tab==='chat'){rememberRoom();mobileOpen=false;selected=null;renderedRoom=null;$('message').value='';}navigate(url.pathname);}
 });
@@ -341,7 +341,7 @@ function threadClock(room, now) {
   if (remaining >= 60000) return Math.ceil(remaining / 60000) + ' min left';
   return Math.max(0, Math.ceil(remaining / 1000)) + ' sec left';
 }
-const nameFor = room => room.peerRole==='admin'?'qzu-Support':room.support ? (room.supportAgent ? 'Contact ' + room.id.slice(0,4).toUpperCase() : 'qzu-Support') : room.admin ? 'Announcements' : room.peerName || room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
+const nameFor = room => room.peerRole==='admin'?'qzu-Support':room.support ? (room.supportAgent ? 'Contact ' + room.id.slice(0,4).toUpperCase() : 'qzu-Support') : room.admin ? 'Announcements' : room.groupName || room.peerName || room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
   cancelAnimationFrame(scanFrame);
@@ -441,7 +441,7 @@ async function api(path, data, quiet = false) {
   }
   if (token) headers['X-QZU-Unlock'] = token;
   let res;
-  const slowRequest = path === 'push/test' || path.startsWith('access/')
+  const slowRequest = path === 'push/test' || path.startsWith('access/') || path.startsWith('state/live?')
     || path === 'control/payment-tickets/verify' || path === 'control/payments/verify';
   try {
     res = await transport('/api/' + path, {
@@ -455,7 +455,7 @@ async function api(path, data, quiet = false) {
   }
   catch (error) {
     if (native) {
-      console.error('[qzu] API startup/request error:', String(error?.message || error));
+      if(!error?.aborted)console.error('[qzu] API startup/request error:', String(error?.message || error));
       const message=['Mobile server unavailable.', 'Native device plugin unavailable.', 'Device signing failed.', 'HTTPS connection unavailable.'].includes(error?.message) ? error.message : 'Mobile request failed. See Xcode console.';
       throw Object.assign(Error(message),{connectionUnavailable:message==='HTTPS connection unavailable.'});
     }
@@ -809,6 +809,7 @@ function lock(reopen = true) {
   stopCheckout();
   accessDue = false;termsPending=false;suspendedAccount=false;
   drafts.clear();scrollMemory.clear();clearOutgoing();
+  viewedShopUpdates.clear();
   authEpoch++;
   sequence++;
   const old = unlockToken;
@@ -876,6 +877,8 @@ function lock(reopen = true) {
   $('message').value = '';
   $('enterCode').value = '';
   $('threadName').textContent = 'Chat';
+  $('openSellerShop').hidden = true;
+  clearSellerShop();
   $('threadBadge').setAttribute('hidden','');
   $('threadAvatar').setAttribute('href', '#avatar');
   $('adminComposer').hidden = true;
@@ -985,6 +988,8 @@ const sellerCurrencyLabels = {CHF: 'Swiss franc', EUR: 'Euro', GBP: 'British pou
 const sellerFulfillmentLabels = {unspecified:'Ask seller', pickup:'Pickup', delivery:'Delivery', both:'Pickup or delivery'};
 const sellerPriceFormatters = new Map();
 let lastSellerStockNotice = null;
+let sellerShopSession = null;
+const viewedShopUpdates = new Map();
 
 function formatListingPrice({priceMinor, currency}) {
   if (priceMinor === null) return 'Price not set';
@@ -1096,60 +1101,37 @@ function sellerDialogActive(root, epoch) {
   return epoch === authEpoch && !document.hidden && Boolean(unlockToken) && modal.open && root.isConnected;
 }
 
-function showSellerCatalog(contact = null, savedItems) {
-  const owner = !contact;
-  if (owner ? !state.seller : !canViewSellerCatalog(contact)) return;
+function showSellerCatalog(contact) {
+  if (!canViewSellerCatalog(contact)) return;
+  if(contact.shopUpdate&&contact.shopUpdate>(viewedShopUpdates.get(contact.id)||0)){
+    const version=contact.shopUpdate;
+    viewedShopUpdates.set(contact.id,version);
+    renderShopDot(contact);
+    void api('sellers/catalog/contact/'+encodeURIComponent(contact.id)+'/seen',{version},true)
+      .catch(()=>{if(viewedShopUpdates.get(contact.id)===version)viewedShopUpdates.delete(contact.id);});
+  }
   const epoch = authEpoch, root = el('section','seller-catalog');
   const profile = el('header','seller-catalog-profile');
-  const name = el('h3','',owner ? state.sellerName || 'Seller' : contact.nickname);
-  const status = el('span','seller-catalog-status',owner && state.sellerVerified ? 'Verified seller' : 'Seller');
+  const name = el('h3','',contact.peerName || contact.nickname);
+  const status = el('span','seller-catalog-status',contact.peerRole === 'verified-seller' ? 'Verified seller' : 'Seller');
   profile.append(name, status);
   const content = el('div','seller-catalog-content');
   const actions = el('div','seller-catalog-actions');
-  const add = button('Add item', () => editSellerListing());
-  if (owner) {
-    add.disabled = true;
-    actions.append(add, button('Back to profile', showOwnSellerProfile, 'secondary-button'));
-  } else {
-    actions.append(button('Manage contact', () => showContactManagement(contact), 'secondary-button'));
-  }
+  actions.append(button('Manage contact', () => showContactManagement(contact), 'secondary-button'));
   root.append(profile, content, actions);
-  show(owner ? 'Manage listings' : 'Seller profile', [root]);
-
-  function display(items) {
-    add.disabled = false;
-    if (items.length) {
-      if (!owner || !state.capabilities?.sellerListingsV2) content.replaceChildren(sellerListingTable(items,contact,root,epoch));
-      else {
-        const live = items.filter(item=>item.published!==false), drafts = items.filter(item=>item.published===false);
-        content.replaceChildren();
-        for (const [label,list] of [['Published listings',live],['Private drafts',drafts]]) {
-          if (list.length) content.append(el('h4','seller-catalog-subtitle',label),sellerListingTable(list,contact,root,epoch));
-        }
-      }
-    }
-    else {
-      const empty = el('div','seller-catalog-empty');
-      empty.setAttribute('role','status');
-      empty.append(el('strong','','List is empty'));
-      if (owner) empty.append(el('p','','Add an item to prepare or publish it.'));
-      content.replaceChildren(empty);
-    }
-  }
+  show('Seller shop', [root]);
 
   async function load() {
     const loading = el('p','seller-catalog-message','Loading listings…');
     loading.setAttribute('role','status');
     content.replaceChildren(loading);
-    const route = owner ? 'sellers/catalog'+(state.capabilities?.sellerListingsV2?'/manage':'') : 'sellers/catalog/contact/' + encodeURIComponent(contact.id);
     try {
-      const result = await api(route);
+      const result = await api('sellers/catalog/contact/' + encodeURIComponent(contact.id));
       if (!sellerDialogActive(root, epoch)) return;
-      if (!owner) {
-        name.textContent = result.name || contact.nickname;
-        status.textContent = result.verified ? 'Verified seller' : 'Seller';
-      }
-      display(result.items);
+      name.textContent = result.name || contact.nickname;
+      status.textContent = result.verified ? 'Verified seller' : 'Seller';
+      if (result.items.length) content.replaceChildren(sellerListingTable(result.items,contact,root,epoch));
+      else content.replaceChildren(el('p','seller-catalog-empty','List is empty'));
     } catch (error) {
       if (!sellerDialogActive(root, epoch)) return;
       const message = el('p','seller-catalog-message',errorMessage(error));
@@ -1158,8 +1140,71 @@ function showSellerCatalog(contact = null, savedItems) {
     }
   }
 
-  if (savedItems) display(savedItems);
-  else void load();
+  void load();
+}
+
+function sellerShopRoute() {
+  return 'sellers/catalog'+(state.capabilities?.sellerListingsV2?'/manage':'');
+}
+
+function clearSellerShop() {
+  if (!sellerShopSession) return;
+  sellerShopSession = null;
+  $('sellerShopItems').replaceChildren();
+  $('sellerShopName').textContent = '';
+  $('sellerShopAdd').disabled = true;
+}
+
+function showSellerShopListings(items) {
+  const content = $('sellerShopItems');
+  $('sellerShopAdd').disabled = false;
+  if (!items.length) {
+    content.replaceChildren(el('p','seller-catalog-empty','Add an item to save a draft or publish it.'));
+    return;
+  }
+  const sections = [];
+  for (const [label, group] of [
+    ['Published listings',items.filter(item=>item.published!==false)],
+    ['Waiting for review',items.filter(item=>item.reviewStatus==='pending')],
+    ['Returned for edits',items.filter(item=>item.reviewStatus==='returned')],
+    ['Private drafts',items.filter(item=>item.published===false&&!item.reviewStatus)]
+  ]) {
+    if (!group.length) continue;
+    const section = el('section','seller-shop-section');
+    section.append(el('h2','seller-catalog-subtitle',label),sellerListingTable(group));
+    sections.push(section);
+  }
+  content.replaceChildren(...sections);
+}
+
+function renderSellerShop() {
+  const active = page==='settings' && location.pathname==='/settings/shop' && unlockToken && state.seller &&
+    !accessDue && !termsPending && !suspendedAccount;
+  if (!active) {
+    if (sellerShopSession) closeModal();
+    clearSellerShop();
+    return;
+  }
+  $('sellerShopName').textContent = state.sellerName || 'Seller';
+  if (sellerShopSession) return;
+  const session = sellerShopSession = {epoch:authEpoch};
+  const content = $('sellerShopItems');
+  async function load() {
+    $('sellerShopAdd').disabled = true;
+    const loading = el('p','seller-catalog-message','Loading listings…');
+    loading.setAttribute('role','status');
+    content.replaceChildren(loading);
+    try {
+      const {items} = await api(sellerShopRoute());
+      if (sellerShopSession === session && authEpoch === session.epoch) showSellerShopListings(items);
+    } catch (error) {
+      if (sellerShopSession !== session || authEpoch !== session.epoch) return;
+      const message = el('p','seller-catalog-message',errorMessage(error));
+      message.setAttribute('role','alert');
+      content.replaceChildren(message,button('Retry',load,'secondary-button'));
+    }
+  }
+  void load();
 }
 
 function sellerField(label, field) {
@@ -1188,14 +1233,19 @@ function showOwnSellerProfile() {
   });
   const status = el('span','seller-catalog-status',state.sellerVerified ? 'Verified seller' : 'Unverified seller');
   const actions = el('div','seller-catalog-actions');
-  actions.append(save,button('Manage listings', () => showSellerCatalog(), 'secondary-button'));
+  actions.append(save);
+  if (location.pathname !== '/settings/shop') actions.append(button('Open Shop', () => {
+    closeModal();
+    navigate('/settings/shop');
+  }, 'secondary-button'));
   const nameRule = el('p','seller-catalog-message','Use at least 4 letters in your public display name.');
   nameRule.id = 'sellerDisplayNameRule';
   show('Seller profile',[status,sellerField('Display name',field),nameRule,actions]);
 }
 
 function editSellerListing(item) {
-  if (!state.seller) return;
+  const session = sellerShopSession;
+  if (!session || !state.seller) return;
   const id = item?.id || crypto.randomUUID(), epoch = authEpoch;
   const managed = Boolean(state.capabilities?.sellerListingsV2), alreadyPublished = item && item.published!==false;
   const form = el('form','seller-catalog-form');
@@ -1230,6 +1280,7 @@ function editSellerListing(item) {
   currency.value = item?.currency || 'CHF';
   const fulfillment = el('select','nickname-input');
   fulfillment.name = 'fulfillment';
+  fulfillment.setAttribute('aria-label','How buyers receive it');
   for (const [value,label] of Object.entries({...sellerFulfillmentLabels,unspecified:'Choose a method'})) {
     const option = el('option','',label);
     option.value = value;
@@ -1243,15 +1294,15 @@ function editSellerListing(item) {
   const error = el('p','seller-catalog-error');
   error.setAttribute('role','alert');
   const actions = el('div','seller-catalog-actions');
-  const publish = el('button','primary-button',managed ? (alreadyPublished?'Save changes':'Publish listing') : (item?'Save changes':'Add item'));
+  const publish = el('button','primary-button',managed&&state.capabilities?.shopReview?'Submit for review':managed ? (alreadyPublished?'Save changes':'Publish listing') : (item?'Save changes':'Add item'));
   publish.type = 'submit';
   const saveDraft = el('button','secondary-button','Save draft');
   saveDraft.type = 'submit';
   if (managed && !alreadyPublished) {
     actions.append(saveDraft,publish);
-    note.textContent='Drafts are private. Choose a price and pickup or delivery before publishing.';
+    note.textContent=state.capabilities?.shopReview?'Staff reviews submitted listings before they appear in your shop.':'Drafts are private. Choose a price and pickup or delivery before publishing.';
   } else actions.append(publish);
-  actions.append(button('Cancel',() => showSellerCatalog(),'secondary-button'));
+  actions.append(button('Cancel',closeModal,'secondary-button'));
   if (item) actions.append(button('Remove item',() => confirmRemoveSellerListing(item),'secondary-button danger-button'));
   form.append(sellerField('Item name',title),details,note,error,actions);
   form.addEventListener('submit',async event => {
@@ -1262,8 +1313,9 @@ function editSellerListing(item) {
     try {
       const payload = {id,name:title.value,quantity:quantity.valueAsNumber,price:price.value,currency:currency.value};
       if (managed) Object.assign(payload,{fulfillment:fulfillment.value,published:Boolean(alreadyPublished)||event.submitter===publish});
-      const result = await api('sellers/catalog'+(managed?'/manage':''),payload);
-      if (sellerDialogActive(form,epoch)) showSellerCatalog(null,result.items);
+      const result = await api(sellerShopRoute(),payload);
+      if (sellerDialogActive(form,epoch)) closeModal();
+      if (sellerShopSession === session) showSellerShopListings(result.items);
     } catch (failure) {
       if (!sellerDialogActive(form,epoch)) return;
       error.textContent = errorMessage(failure);
@@ -1275,12 +1327,15 @@ function editSellerListing(item) {
 }
 
 function confirmRemoveSellerListing(item) {
+  const session = sellerShopSession;
+  if (!session || !state.seller) return;
   const epoch = authEpoch, detail = el('p','',item.name + ' will be removed from your seller list.');
   const remove = button('Remove item', async () => {
     remove.disabled = true;
     try {
-      const result = await api('sellers/catalog'+(state.capabilities?.sellerListingsV2?'/manage':'')+'/remove',{id:item.id});
-      if (sellerDialogActive(remove,epoch)) showSellerCatalog(null,result.items);
+      const result = await api(sellerShopRoute()+'/remove',{id:item.id});
+      if (sellerDialogActive(remove,epoch)) closeModal();
+      if (sellerShopSession === session) showSellerShopListings(result.items);
     } catch (error) {
       if (!sellerDialogActive(remove,epoch)) return;
       modalError(error);
@@ -1361,7 +1416,7 @@ function showContactManagement(contact) {
   });
   const confirmRemove=block=>{const request=contact.peerRole==='admin'&&!state.supportAgent;show(block?'Block contact?':request?'Request contact deletion?':'Delete contact?',[el('p','',block?'This removes the contact and prevents new connections.':request?'Ask Support to delete the contact and shared conversation for both sides.':'This deletes the contact and shared conversation for both users.'),button(block?'Block':request?'Request deletion':'Delete contact',async()=>{try{const result=await api('contacts/remove',{id:contact.id,block});closeModal();await refresh();if(result.requested)info('Deletion requested','Support has received your contact deletion request.');}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]);};
   const controls=[el('p','',contact.trusted?'Trusted contact · 30 days inactivity':'Contact · 14 days inactivity'),field,favoriteLabel,mutedLabel,save];
-  if (canViewSellerCatalog(contact)) controls.unshift(button('View seller list',() => showSellerCatalog(contact),'secondary-button'));
+  if (canViewSellerCatalog(contact)) controls.unshift(button('View shop',() => showSellerCatalog(contact),'secondary-button'));
   if(contact.trusted)controls.push(button('Reset trust',()=>show('Reset trust?',[el('p','','Both users must verify a new chat. The regular inactivity limit applies.'),button('Reset trust',async()=>{try{await api('contacts/update',{id:contact.id,resetTrust:true});closeModal();await refresh();}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]),'secondary-button'));
   controls.push(button('Delete Contact',()=>confirmRemove(false),'secondary-button'));if(contact.peerRole!=='admin')controls.push(button('Block contact',()=>confirmRemove(true),'secondary-button'));controls.push(button('Close',closeModal,'secondary-button'));
   show('Manage contact',controls);
@@ -1600,6 +1655,8 @@ function renderChat() {
   $('chatOptions').hidden = !current || readOnly;
   $('profileAvatar').disabled = !current;
   $('profileAvatar').setAttribute('aria-label', canViewSellerCatalog(current?.contact) ? 'Open seller profile' : 'Contact information');
+  $('openSellerShop').hidden = !canViewSellerCatalog(current?.contact);
+  renderShopDot(current?.contact);
   updateNavigation();
   $('presenceLabel').hidden = !current || isAdmin;
   $('presenceLabel').textContent = current?.group ? (current.activeCount || 0) + ' active' : current?.activeCount ? 'Active' : 'Offline';
@@ -1731,10 +1788,11 @@ function updateExpiry(room) {
 $('expiryDetails').addEventListener('click', () => {
   const room = state.rooms.find(item => item.id === selected && item.expires > serverNow());
   if (!room) return;
-  const end = room.persistent ? 'This support conversation stays open until it is deleted.'
+  const end = room.persistent ? 'This conversation stays open until it is deleted.'
     : 'This chat ends on ' + new Date(room.expires).toLocaleString() + '.';
   const content = [el('p','',end), el('p','','When the chat ends, its messages and attachments are removed.')];
-  if (!room.support && !room.readOnly) content.push(el('p','','A server restart also ends this conversation.'));
+  if (!room.group && !room.support && !room.readOnly) content.push(el('p','','A server restart also ends this conversation.'));
+  if(room.group&&room.canInvite&&state.capabilities?.groupTimers)content.push(button('Group deletion timers',()=>editGroupTimers(room),'secondary-button'));
   if (!room.admin && !room.group && !room.support && !room.extended) {
     content.push(button(room.extension?.incoming?'Review extension request':room.extension?'Check extension status':'Request 30 more minutes', () => showExtension(room)));
   }
@@ -1817,6 +1875,11 @@ function beginReply(room,message){
   replyTarget={roomId:room.id,id:target.id,sender:target.sender,text:previewText(target)};renderReply();$('message').focus({preventScroll:true});
 }
 function renderMessage(room, message) {
+  if(message.system){
+    const notice=el('div','group-notice',privacyMode?'Group activity':message.text);
+    notice.id='message-'+message.id;
+    return notice;
+  }
   const row = el('div', 'message-row' + (message.mine ? ' mine' : ''));
   row.id = 'message-' + message.id;
   row.tabIndex = -1;
@@ -2075,6 +2138,9 @@ $('retryInviteQR').addEventListener('click',()=>{
 });
 
 $('sellerProfileSettings').addEventListener('click',showOwnSellerProfile);
+$('sellerShopProfile').addEventListener('click',showOwnSellerProfile);
+$('sellerShopAdd').addEventListener('click',()=>editSellerListing());
+$('sellerShopRefresh').addEventListener('click',()=>{clearSellerShop();renderSellerShop();});
 $('sellerStockAlerts').addEventListener('click',showSellerStockAlerts);
 function openControlCenter(initialTab) {
  if(!unlockToken||!state.supportAgent)return;
@@ -2093,6 +2159,7 @@ function renderSettings() {
   const requested = location.pathname.split('/')[2] || 'main';
   const category = requested === 'motion' ? 'appearance'
     : requested === 'updates' || ['support-requests','admin-feedback'].includes(requested) && !state.supportAgent ? 'main'
+    : requested === 'shop' && !state.seller ? 'main'
     : requested;
   for (const panel of document.querySelectorAll('[data-settings-category]')) {const hidden=panel.dataset.settingsCategory!==category;const entering=panel.hidden&&!hidden;panel.hidden=hidden;if(entering)motion(panel,'motion-settings');}
   $('settingsBack').href = category === 'main' ? '/chat' : '/settings';
@@ -2114,6 +2181,7 @@ function renderSettings() {
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('recoverySettings').hidden=Boolean(state.supportAgent)||!native;
   $('sellerProfileSettings').hidden=!state.seller;$('sellerProfileStatus').textContent=state.sellerVerified?'Verified':'Unverified';
+  $('sellerShopSettings').hidden = !state.seller;
   $('sellerStockAlerts').hidden=Boolean(state.seller||state.supportAgent||!state.capabilities?.sellerListingsV2);
   $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
   $('userInterfaceHeading').hidden=!state.supportAgent;
@@ -2132,6 +2200,7 @@ function render() {
   updateConnection();updateNavigation();renderChat();
   renderConnect();
   renderSettings();
+  renderSellerShop();
   if(page==='tickets'&&!$('userTicketContent').childElementCount)refreshUserTickets();
 }
 
@@ -3040,10 +3109,12 @@ $('privacyMode').addEventListener('change', () => {
 });
 
 $('createGroup').addEventListener('click', () => {
+  const groupName=el('input','nickname-input');
+  groupName.maxLength=40;groupName.placeholder='Group name';groupName.setAttribute('aria-label','Group name');
   const create = button('Create group', async () => {
     create.disabled = true;
     try {
-      const result = await api('group/create', {});
+      const result = await api('group/create', {name:groupName.value.trim()||'Group'});
       closeModal();
       await refresh();
       navigate('/chat');
@@ -3054,8 +3125,29 @@ $('createGroup').addEventListener('click', () => {
       showError(error);
     }
   });
-  show('New group', [el('p', '', 'Up to 12 members. Expires 24 hours after creation.'), create, button('Cancel', closeModal, 'secondary-button')]);
+  show('New group', [groupName,el('p', '', 'Up to 12 members. Group owners approve join requests. qzu. staff may join for moderation, and members see a join notice.'),create,button('Cancel',closeModal,'secondary-button')]);
 });
+
+function editGroupTimers(room){
+  const selectTimer=(label,current)=>{
+    const field=el('select','nickname-input');field.setAttribute('aria-label',label);
+    for(const [value,title] of [['1h','1 hour'],['24h','24 hours'],['7d','7 days'],['30d','30 days'],['never','Never']]){
+      const option=el('option','',title);option.value=value;field.append(option);
+    }
+    field.value=current;
+    const wrap=el('label','seller-catalog-field');wrap.append(el('span','',label),field);
+    return {wrap,field};
+  };
+  const group=selectTimer('Delete group after',room.groupTimer),chat=selectTimer('Delete messages after',room.chatTimer);
+  const save=button('Save timers',async()=>{
+    save.disabled=true;
+    try{
+      await api('group/timers',{id:room.id,groupTimer:group.field.value,chatTimer:chat.field.value});
+      closeModal();await refresh();
+    }catch(error){modalError(error);}finally{save.disabled=false;}
+  });
+  show('Group deletion timers',[el('p','','The message timer also applies to messages already in the group.'),group.wrap,chat.wrap,save,button('Cancel',closeModal,'secondary-button')]);
+}
 
 async function showGroupInvite(id) {
   try {
@@ -3065,7 +3157,7 @@ async function showGroupInvite(id) {
       try { await navigator.clipboard.writeText(invite.code); } catch {}
     });
     const expires = el('p', '', 'Valid for ' + clock(invite.expires - serverNow()) + ' at the time of opening.');
-    show('Group invite', [code, expires, el('p', '', 'Share this code. Members join using Connect.'), copy, button('Close', closeModal, 'secondary-button')]);
+    show('Group invite', [code, expires, el('p', '', 'Share this code. Approve join requests from Connections.'), copy, button('Close', closeModal, 'secondary-button')]);
   } catch (error) {
     showError(error);
   }
@@ -3108,7 +3200,7 @@ $('enterCode').addEventListener('paste',event=>{
 $('enterCode').addEventListener('input', () => {
   $('enterCode').value = $('enterCode').value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 });
-function askNickname(action, submitLabel = 'Continue') {
+function askNickname(action, submitLabel = 'Continue', group = false) {
   const field=el('input','nickname-input');
   field.type='text';
   field.maxLength=40;
@@ -3125,7 +3217,8 @@ function askNickname(action, submitLabel = 'Continue') {
   save.disabled=true;
   field.addEventListener('input',()=>{save.disabled=!field.value.trim();});
   field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!save.disabled){event.preventDefault();save.click();}});
-  show('Give your contact a nickname',[field,el('p','','Only visible to you.'),save,button('Cancel',closeModal,'secondary-button')]);
+  show(group?'Your name in the group':'Give your contact a nickname',
+    [field,el('p','',group?'Group members will see this name after your request is accepted.':'Only visible to you.'),save,button('Cancel',closeModal,'secondary-button')]);
 }
 $('connectForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -3140,7 +3233,7 @@ $('connectForm').addEventListener('submit', async e => {
     if(result.id)selectRoom(result.id);
     else info('Request sent','Awaiting approval.');
   };
-  try{if(state.supportAgent){await connect('Contact');return;}const p=await api('connect/preview',{code});if(p.admin){await connect('qzu-Support');return;}askNickname(connect,'Send request');}catch(e){showError(e);}
+  try{const p=await api('connect/preview',{code});if(p.group){askNickname(connect,'Send request',true);return;}if(state.supportAgent||p.admin){await connect(p.admin?'qzu-Support':'Contact');return;}askNickname(connect,'Send request');}catch(e){showError(e);}
 });
 
 function loadScanner() {
@@ -3454,6 +3547,7 @@ $('connectionRequests').addEventListener('click', () => {
   for (const request of state.requests || []) {
     const item = el('div', 'request-item');
     item.append(el('strong', '', request.incoming ? (request.group ? 'Group join request' : 'Connection request') : 'Awaiting approval'));
+    if(request.group&&request.groupName)item.append(el('p','',request.applicant?request.applicant+' · '+request.groupName:request.groupName));
     if (request.incoming) {
       const actions = el('div', 'request-actions');
       for (const accept of [false, true]) {
@@ -3701,6 +3795,16 @@ $('profileAvatar').addEventListener('click', () => {
     : [el('p', '', room.support ? 'Support conversation' : room.readOnly ? 'Read-only announcements' : 'Temporary conversation')];
   show(title, [...details, button('Close', closeModal, 'secondary-button')]);
 });
+$('openSellerShop').addEventListener('click', () => {
+  const room = state.rooms.find(item => item.id === selected);
+  if (canViewSellerCatalog(room?.contact)) showSellerCatalog(room.contact);
+});
+function renderShopDot(contact){
+ const active=Boolean(contact?.shopUpdate&&contact.shopUpdate>(viewedShopUpdates.get(contact.id)||0));
+ $('openSellerShop').classList.toggle('shop-updated',active);
+ $('openSellerShop').setAttribute('aria-label',active?'Open seller shop. Seller updated their shop.':'Open seller shop');
+ $('openSellerShop').title=active?'Seller updated their shop. New items may be coming soon.':'Open seller shop';
+}
 $('chatOptions').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
   if (!room) return;
@@ -3713,6 +3817,7 @@ $('chatOptions').addEventListener('click', () => {
   }
   if (room.admin&&!room.support) return;
   const controls = [];
+  if(room.group&&room.canInvite&&state.capabilities?.groupTimers)controls.push(button('Group deletion timers',()=>editGroupTimers(room),'secondary-button'));
   controls.push(button(room.mutedUntil>serverNow()?'Notifications muted':'Mute notifications',()=>showRoomMute(room),'secondary-button'));
   if(room.contact)controls.push(button(room.contact.favorite?'Unpin contact':'Pin contact',async()=>{
     try{

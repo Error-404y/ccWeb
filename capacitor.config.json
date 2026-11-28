@@ -2,6 +2,7 @@
   "appId": "cc.qzu.app",
   "appName": "qzu.",
   "webDir": "mobile-dist",
+  "loggingBehavior": "none",
   "server": {
     "androidScheme": "https",
     "iosScheme": "capacitor"

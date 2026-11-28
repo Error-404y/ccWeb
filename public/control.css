@@ -514,6 +514,39 @@
  border-bottom:0;
 }
 
+.cc-device-badges {
+ display:flex;
+ align-items:center;
+ gap:5px;
+ flex-wrap:wrap;
+ min-width:0;
+}
+
+.cc-device-alarm {
+ background:#402127;
+}
+
+.cc-device-change {
+ display:grid;
+ gap:8px;
+ min-width:0;
+ padding:12px;
+ border:1px solid var(--cc-border);
+ border-radius:10px;
+ background:var(--cc-set);
+}
+
+.cc-device-change-heading {
+ flex-wrap:wrap;
+}
+
+@media(max-width:480px) {
+ .cc-work-row>.cc-device-badges {
+  flex-direction:column;
+  align-items:flex-end;
+ }
+}
+
 .cc-report-parties,.cc-total-groups {
  display:grid;
  gap:10px;

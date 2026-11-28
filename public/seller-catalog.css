@@ -21,12 +21,51 @@ dialog:has(.seller-catalog, .seller-catalog-form) {
   background: var(--sub);
 }
 
-.seller-catalog-profile h3 {
+.seller-catalog-profile :is(h2,h3) {
   min-width: 0;
   margin: 0;
   font-size: 17px;
   font-weight: 680;
   overflow-wrap: anywhere;
+}
+
+#settingsPage .shop-panel:not([hidden]) {
+  display: grid;
+  max-width: 620px;
+  gap: 12px;
+}
+
+.shop-panel h1 {
+  margin: 0;
+}
+
+.shop-panel > .primary-button {
+  justify-self: start;
+  width: auto;
+}
+
+.seller-shop-section {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.thread-shop-link:not([hidden]) {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 28px;
+  padding-inline: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--sub);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.thread-shop-link:hover {
+  background: var(--hover);
 }
 
 .seller-catalog-status {
@@ -225,4 +264,14 @@ dialog:has(.seller-catalog, .seller-catalog-form) {
   .seller-catalog-item {
     width: 44%;
   }
+}
+.thread-shop-link.shop-updated::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-inline-start: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+  vertical-align: middle;
 }

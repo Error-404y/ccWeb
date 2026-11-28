@@ -7,6 +7,7 @@ import {createLiveWakeup,versionedState} from '../lib/live.mjs';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Chats} from '../lib/chats.mjs';
 import {privatePush} from '../lib/push.mjs';
+import {initDeviceChanges,recordDeviceChange} from '../lib/device-changes.mjs';
 import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -103,6 +104,9 @@ test('backup excludes support content and push tokens while preserving account a
     db.exec(`CREATE TABLE report_followups (reply_text TEXT); INSERT INTO report_followups VALUES ('sensitive-reporter-reply');
       CREATE TABLE seller_stock_alerts (buyer TEXT); INSERT INTO seller_stock_alerts VALUES ('sensitive-stock-watcher');
       CREATE TABLE seller_catalog_drafts (name TEXT); INSERT INTO seller_catalog_drafts VALUES ('sensitive-listing-draft')`);
+    db.exec('CREATE TABLE device_profiles (account TEXT,fingerprint TEXT,platform TEXT,model TEXT,os_version TEXT,app_version TEXT,last_seen INTEGER)');
+    initDeviceChanges(db);
+    recordDeviceChange(db,'a','sensitive-previous-device','sensitive-current-device',100);
     officialStore(db,()=>100).publish('Official post',true);db.close();
     execFileSync(process.execPath,[fileURLToPath(new URL('../scripts/privacy-backup.mjs',import.meta.url)),output],{env:{...process.env,QZU_DB:input}});
     const copy=new DatabaseSync(output,{readOnly:true});
@@ -115,9 +119,11 @@ test('backup excludes support content and push tokens while preserving account a
     assert.equal(copy.prepare('SELECT count(*) AS n FROM report_followups').get().n,0);
     assert.equal(copy.prepare('SELECT count(*) AS n FROM seller_stock_alerts').get().n,0);
     assert.equal(copy.prepare('SELECT count(*) AS n FROM seller_catalog_drafts').get().n,0);
+    assert.equal(copy.prepare('SELECT count(*) AS n FROM account_device_changes').get().n,0);
     copy.close();
     const bytes=readFileSync(output);
     for(const content of ['sensitive-support-text','sensitive-push-token','sensitive-feedback','sensitive-feedback-note',
-      'sensitive-moderation-note','sensitive-reporter-reply','sensitive-stock-watcher','sensitive-listing-draft'])assert.equal(bytes.includes(content),false);
+      'sensitive-moderation-note','sensitive-reporter-reply','sensitive-stock-watcher','sensitive-listing-draft',
+      'sensitive-previous-device','sensitive-current-device'])assert.equal(bytes.includes(content),false);
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
