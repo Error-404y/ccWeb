@@ -9,7 +9,7 @@ if [[ $# -gt 0 ]]; then
   HOST="$2"
 fi
 mkdir -p "$BIN"
-for command in genKey listKeys findKey resetKey revokeKey genAdminKey findAccount keyStats extendKey; do
+for command in genKey listKeys findKey resetKey revokeKey genAdminKey; do
   target="$BIN/$command"
   if [[ -e "$target" && ! -f "$target" ]] || [[ -L "$target" ]]; then echo "Refusing to overwrite $target" >&2; exit 1; fi
   if [[ -f "$target" ]] && ! grep -qx '# qzu-key-cli managed wrapper' "$target"; then echo "Refusing to overwrite unrelated $target" >&2; exit 1; fi
