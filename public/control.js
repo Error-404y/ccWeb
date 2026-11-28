@@ -7,24 +7,24 @@ const input=(placeholder,type='text')=>{const n=el('input');n.type=type;n.placeh
 const select=(options)=>{const n=el('select');for(const [value,label] of options){const o=el('option',label);o.value=value;n.append(o);}return n;};
 const status=(value)=>el('span',value==='help'?'Need Additional Help':value==='solved'?'Solved':value==='inspection'?'Under Inspection':value,'cc-status '+(value==='help'||value==='revoked'||value==='expired'||value==='rejected'?'red':value==='solved'||value==='active'||value==='confirmed'?'green':'yellow'));
 const plans=[['1W','1 Week'],['1M','1 Month'],['1Y','1 Year'],['LT','Lifetime']];
-function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{},pair=null,media=null}={}){
+function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{},pair=null,media=null,mobileChat=null}={}){
  root.classList.add('cc-root');root.replaceChildren();
  let revision=0,current=location.pathname==='/control/monitoring'?'Monitoring':'Overview',query='',cursor='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false;
  const header=el('header','','cc-header'),identity=el('div','','cc-identity'),brand=el('h1','qzu.'),server=el('p',location.origin,'cc-muted'),connection=el('span','Connecting…','cc-connection');
- brand.append(el('span',' Control','cc-accent'));identity.append(brand,server);header.append(el('span','qzu-Support ✓','cc-admin-profile'));header.append(identity,connection,button('Sign out',async()=>{stop();await api('logout',{}).catch(()=>{});onExit();},'cc-secondary'));
+ brand.append(el('span',' Control','cc-accent'));identity.append(brand,server);header.append(el('span','qzu-Support ✓','cc-admin-profile'));header.append(identity,connection,button(mobile?'Close':'Sign out',async()=>{stop();if(!mobile)await api('logout',{}).catch(()=>{});onExit();},'cc-secondary'));
  const layout=el('div','','cc-layout'),nav=el('nav','','cc-nav'),main=el('section','','cc-content');main.setAttribute('aria-label','Control Center content');layout.append(nav,main);root.append(header,layout);
  const tabs=['Chats','Announcements','Tickets','Sellers','Overview','Accounts','Keys','Payments','Payment tickets','Reports','Feedback','Support','Audit','Archive','Monitoring'];
  for(const tab of tabs){const b=button('',()=>navigate(tab),'cc-tab');b.dataset.tab=tab;b.append(el('span',tab),el('span','','cc-count'));nav.append(b);}
  const alive=token=>!closed&&isActive()&&token===revision;
  function stop(){closed=true;revision++;clearInterval(inboxTimer);if(objectURL)URL.revokeObjectURL(objectURL);root.replaceChildren();}
- function navigate(tab){current=tab;query='';cursor='';if(location.pathname==='/control/monitoring'&&tab!=='Monitoring')history.replaceState(null,'','/control');else if(tab==='Monitoring')history.replaceState(null,'','/control/monitoring');load();}
+ function navigate(tab){if(mobile&&tab==='Chats'&&mobileChat){stop();mobileChat();return;}current=tab;query='';cursor='';if(!mobile&&location.pathname==='/control/monitoring'&&tab!=='Monitoring')history.replaceState(null,'','/control');else if(!mobile&&tab==='Monitoring')history.replaceState(null,'','/control/monitoring');load();}
  function updateCount(tab,count){const n=[...nav.children].find(b=>b.dataset.tab===tab)?.lastElementChild;if(n){n.textContent=count>0?String(count):'';n.hidden=!count;}}
  async function pollInbox(){
   if(closed||!isActive()||document.hidden||pollingInbox)return;
   pollingInbox=true;
   try{
    const info=await api('inbox');if(closed)return;
-   server.textContent=(info.environment==='production'?'Production':'Development')+' · '+location.host+' · v'+info.version+' · Admin '+info.adminId.slice(0,8);
+   server.textContent=(info.environment==='production'?'Production':'Development')+' · '+(mobile?'Mobile':location.host)+' · v'+info.version+' · Admin '+info.adminId.slice(0,8);
    connection.textContent='Connected';connection.dataset.state='online';
    updateCount('Payment tickets',info.paymentTickets);updateCount('Support',info.supportRequests);updateCount('Tickets',info.userTickets);
    if(listView&&['Payment tickets','Support','Tickets','Sellers'].includes(current)){
@@ -137,7 +137,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   try{
    const archived=current==='Archive',view=archived?archiveTab:current;
    const route=view==='Payment tickets'?'payment-tickets':view.toLowerCase();
-   const url=route+(archived?'?archived=1':['Accounts','Keys'].includes(view)?'?q='+encodeURIComponent(query)+(cursor?'&after='+encodeURIComponent(cursor):''):'');
+   const url=route+(archived?'?archived=1':['Accounts','Keys','Audit'].includes(view)?'?q='+encodeURIComponent(query)+(cursor?(view==='Audit'?'&before=':'&after=')+encodeURIComponent(cursor):''):'');
    if(view==='Chats'){main.replaceChildren(el('h2','Chats'));await window.QzuDesktopMessenger(main,api,()=>alive(token),{error,confirm:modalConfirm});return;}
    const data=await (prefetched&&typeof prefetched==='object'&&('items' in prefetched||'requests' in prefetched)?prefetched:api(url));if(!alive(token))return;listSignature=JSON.stringify(data);main.replaceChildren(el('h2',current),button('Refresh',()=>load(),'cc-secondary'));
    if(archived){const sub=el('div','','cc-actions cc-archive-tabs');for(const name of ['Reports','Feedback','Payment tickets','Payments','Support','Tickets'])sub.append(button(name,()=>{archiveTab=name;load();},name===archiveTab?'':'cc-secondary'));main.append(sub,el('p','Finished records only. Restoring returns them to the working list. Existing privacy retention still applies.','cc-muted'));}
@@ -192,7 +192,10 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     for(const r of data.rooms||[]){const n=card('Support '+r.id,[details([['Expires',date(r.expires)],['Deletion requested',r.deletionRequested?'Yes':'No']])]);const snap=el('div','','cc-snapshot');for(const m of r.messages){const bubble=el('div','','cc-bubble '+(m.mine?'mine':'other'));bubble.append(el('small',m.sender+' · '+date(m.at)),el('p',m.text));snap.append(bubble);}const reply=el('textarea');reply.placeholder='Write support reply';reply.maxLength=2000;n.append(snap,reply,action('Send reply',async()=>{if(!reply.value.trim())throw Error('Enter a reply.');await api('support/send',{id:r.id,text:reply.value});await load();}),action('Mark solved',async()=>{await api('support/finish',{id:r.id,action:'solve'});await load();},'cc-secondary'));main.append(n);}
     for(const r of data.finished||[]){const history=el('details');history.append(el('summary','View conversation'));const snap=el('div','','cc-snapshot');for(const m of r.messages||[]){const bubble=el('div','','cc-bubble '+(m.mine?'mine':'other'));bubble.append(el('small',(m.mine?'Support':'Customer')+' · '+date(m.at)),el('p',m.text));snap.append(bubble);}history.append(snap);main.append(card('Support '+r.id,[status(r.status),el('p',date(r.at),'cc-muted'),history,archiveAction('support',r.id,archived)]));}if(!(data.deletions||[]).length&&!(data.requests||[]).length&&!(data.rooms||[]).length&&!(data.finished||[]).length)main.append(el('p','No assigned support cases on this server.','cc-muted'));listView=!archived;
    }else if(view==='Audit'){
-    for(const a of data.items)main.append(card(a.action,[details([['Actor',a.actor],['Account',a.account],['Key',a.key_id],['At',date(a.at)],['Reason',a.reason]])]));
+    main.append(search('Search actor ID, target ID or action'),el('p','Administrative actions only. Private message contents and credentials are not recorded.','cc-muted'));
+    for(const a of data.items)main.append(card(a.action,[status(a.outcome==='success'?'active':'rejected'),details([['Event',a.id],['Actor',a.actor],['Platform',a.source],['Target type',a.target_type],['Target',a.target],['Related account',a.related],['Action detail',a.detail],['At',date(a.at)],['Outcome',a.outcome]])]));
+    if(data.items.length===100)main.append(button('Older events',()=>{cursor=String(data.items.at(-1).id);load();},'cc-secondary'));
+    if(data.legacy?.length){const history=el('details');history.append(el('summary','Existing audit history'));for(const a of data.legacy)history.append(card(a.action,[details([['Actor',a.actor],['Account',a.account],['Key',a.key_id],['At',date(a.at)],['Reason',a.reason]])]));main.append(history);}
    }
    if(Array.isArray(data.items)&&!data.items.length&&!['Accounts','Keys'].includes(current))main.append(el('p','No records yet.','cc-muted'));
   }catch(e){if(alive(token)){main.replaceChildren(el('h2',current),button('Retry',load));error(e);}}
