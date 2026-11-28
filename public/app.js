@@ -1333,6 +1333,7 @@ function renderSettings() {
   $('pushStatus').textContent=pushOptedOut()?'Message notifications are off.':state.push?.registered?'Message notifications are enabled.':native&&window.Capacitor.getPlatform()==='ios'?'In-app alerts enabled. Remote delivery depends on Apple push configuration.':'Allow notifications in your device settings if prompted.';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
+  $('recoverySettings').hidden=Boolean(state.supportAgent)||!native;
   $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
   $('userInterfaceHeading').hidden=!state.supportAgent;
   $('adminInboxCount').textContent=state.supportAgent?String((state.supportRequests||[]).length):'';
@@ -2464,6 +2465,27 @@ async function openModeration(){
   }catch(error){showError(error);}
 }
 $('adminReports').addEventListener('click',openModeration);
+function openControlCenter(){
+ if(!state.supportAgent||!unlockToken||!window.QzuControl)return;
+ const root=el('div','cc-mobile'),epoch=authEpoch;
+ show('Control Center',[root]);
+ const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&!document.hidden&&body.contains(root);
+ async function call(path,data){if(!active())throw Error('Locked.');const value=await api('control/'+path,data);if(!active())throw Error('Locked.');return value;}
+ async function media(id){if(!active())throw Error('Locked.');const response=await transport('/api/control/reports/media/'+encodeURIComponent(id),{headers:{'X-QZU-Unlock':unlockToken},cache:'no-store',credentials:'same-origin'});if(!response.ok||!active())throw Error('Evidence unavailable.');return response.blob();}
+ function pair(){
+  const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Admin PIN';pin.autocomplete='off';
+  const generate=button('Generate one-time pairing code',async()=>{generate.disabled=true;try{const result=await api('control/pair',{pin:pin.value});pin.value='';if(epoch!==authEpoch||!unlockToken||document.hidden||!body.contains(generate))return;const value=el('p','access-address',result.pairingCode);show('Pair desktop',[el('p','','Open '+apiOrigin+'/control in your browser. This code expires in 2 minutes and works only once.'),value,button('Copy code',()=>navigator.clipboard.writeText(result.pairingCode)),button('Back',openControlCenter,'secondary-button')]);}catch(e){dialogError(e);generate.disabled=false;}});
+  show('Pair desktop',[el('p','','Verify your admin PIN to authorize a browser.'),pin,generate,button('Back',openControlCenter,'secondary-button')]);
+ }
+ window.QzuControl.mount(root,call,{mobile:true,isActive:active,onExit:closeModal,pair,media});
+}
+$('adminControl').addEventListener('click',openControlCenter);
+$('recoverySettings').addEventListener('click',()=>{
+ if(!unlockToken||state.supportAgent)return;
+ const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Current login PIN';pin.autocomplete='off';
+ const issue=button('Create recovery code',async()=>{issue.disabled=true;try{const result=await api('account/recovery-code',{pin:pin.value});pin.value='';if(!body.contains(issue)||!unlockToken||document.hidden)return;show('Save your recovery code',[el('p','','Keep this code offline. It requires your existing login PIN. Creating a new code invalidates the old one.'),el('p','access-address',result.recoveryCode),button('Copy recovery code',()=>navigator.clipboard.writeText(result.recoveryCode)),button('Done',closeModal,'secondary-button')]);}catch(e){dialogError(e);issue.disabled=false;}});
+ show('Account recovery',[el('p','','Recover your account and paid access on a new device using your recovery code and current login PIN. Old encrypted conversations cannot be transferred. This replaces any existing recovery code.'),pin,issue,button('Cancel',closeModal,'secondary-button')]);
+});
 function messageActions(room, message) {
   const picker = el('div', 'reaction-picker');
   for (const emoji of reactions) picker.append(button(emoji, () => reactTo(room, message, emoji), 'reaction-choice'));
@@ -3171,6 +3193,14 @@ function forgetInvoice(renewal) {
   try { localStorage.removeItem(renewal ? 'qzu-renewal' : 'qzu-access'); } catch {}
 }
 
+function showAccountRecovery(){
+ if(!native){dialogError(Error('Recover your account in the mobile app.'));return;}
+ const code=el('input','access-key-input');code.placeholder='Recovery code';code.autocomplete='off';code.spellcheck=false;code.maxLength=56;
+ const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Existing login PIN';pin.autocomplete='off';
+ const check=el('input');check.type='checkbox';const label=el('label','feedback-confirm');label.append(check,el('span','','I understand this disconnects the old device and deletes its active conversations. Paid access and account ID are preserved.'));
+ const submit=button('Recover account',async()=>{if(!check.checked)return;submit.disabled=true;try{const result=await api('access/recover',{code:code.value.trim().toUpperCase(),pin:pin.value,confirmed:true});if(!result.ok)throw Error('Recovery unavailable.');code.value='';pin.value='';forgetInvoice(false);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=false;showLogin();}catch(e){dialogError(e);submit.disabled=false;}});
+ showCheckout('Recover account',[el('p','','Enter the recovery code saved on your old device and your existing login PIN.'),code,pin,label,submit,button('Back',showAccess,'secondary-button')]);
+}
 function showAccess(){
  if(playBuild){showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key', () => showKeyEntry(false)),button('Recover account',showAccountRecovery,'secondary-button'),...legalButtons()]);return;}
  showPlanCheckout(false);
