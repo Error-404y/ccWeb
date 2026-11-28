@@ -9,15 +9,15 @@ const status=(value)=>el('span',value==='help'?'Need Additional Help':value==='s
 const plans=[['1W','1 Week'],['1M','1 Month'],['1Y','1 Year'],['LT','Lifetime']];
 function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{},pair=null,media=null}={}){
  root.classList.add('cc-root');root.replaceChildren();
- let revision=0,current='Overview',query='',cursor='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false;
+ let revision=0,current=location.pathname==='/control/monitoring'?'Monitoring':'Overview',query='',cursor='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false;
  const header=el('header','','cc-header'),identity=el('div','','cc-identity'),brand=el('h1','qzu.'),server=el('p',location.origin,'cc-muted'),connection=el('span','Connecting…','cc-connection');
  brand.append(el('span',' Control','cc-accent'));identity.append(brand,server);header.append(identity,connection,button('Sign out',async()=>{stop();await api('logout',{}).catch(()=>{});onExit();},'cc-secondary'));
  const layout=el('div','','cc-layout'),nav=el('nav','','cc-nav'),main=el('section','','cc-content');main.setAttribute('aria-label','Control Center content');layout.append(nav,main);root.append(header,layout);
- const tabs=['Overview','Accounts','Keys','Payments','Payment tickets','Reports','Feedback','Support','Audit','Archive'];
+ const tabs=['Overview','Accounts','Keys','Payments','Payment tickets','Reports','Feedback','Support','Audit','Archive','Monitoring'];
  for(const tab of tabs){const b=button('',()=>navigate(tab),'cc-tab');b.dataset.tab=tab;b.append(el('span',tab),el('span','','cc-count'));nav.append(b);}
  const alive=token=>!closed&&isActive()&&token===revision;
  function stop(){closed=true;revision++;clearInterval(inboxTimer);if(objectURL)URL.revokeObjectURL(objectURL);root.replaceChildren();}
- function navigate(tab){current=tab;query='';cursor='';load();}
+ function navigate(tab){current=tab;query='';cursor='';if(location.pathname==='/control/monitoring'&&tab!=='Monitoring')history.replaceState(null,'','/control');else if(tab==='Monitoring')history.replaceState(null,'','/control/monitoring');load();}
  function updateCount(tab,count){const n=[...nav.children].find(b=>b.dataset.tab===tab)?.lastElementChild;if(n){n.textContent=count>0?String(count):'';n.hidden=!count;}}
  async function pollInbox(){
   if(closed||!isActive()||document.hidden||pollingInbox)return;
@@ -66,6 +66,35 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   async function poll(){if(!alive(token)||polling)return;polling=true;try{if(!busy){const observed=mutation,t=await api('payment-tickets/state',{id});if(alive(token)&&!busy&&observed===mutation)render(t);}}catch(e){if(alive(token)){if(e.message==='Ticket unavailable.'){revision++;main.replaceChildren(el('h2','Ticket unavailable'),button('Back to tickets',load,'cc-secondary'));}else feedback.textContent=e.message;}}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}
   poll();
  }
+ function renderMonitoring(data,token){
+  const metrics=el('div','','cc-metrics cc-monitor-metrics'),feed=el('div','','cc-monitor-feed'),bar=el('div','','cc-actions'),updated=el('p','','cc-muted'),note=el('p','Read-only diagnostics from this server. No message contents, IP addresses, keys, PINs or tokens are collected. Console history is limited to the current server process.','cc-muted');
+  const filter=select([['all','All events'],['AUTH','Authentication'],['PAYMENT','Payments'],['TICKET','Tickets'],['SUPPORT','Support'],['ADMIN','Admin'],['SYSTEM','System'],['error','Errors only']]);
+  let paused=false,pending=false,latest=data;
+  const pause=button('Pause live updates',()=>{paused=!paused;pause.textContent=paused?'Resume live updates':'Pause live updates';if(!paused)refresh();},'cc-secondary');
+  const mb=n=>Math.round(n/1048576)+' MB';
+  const duration=n=>Math.floor(n/86400)+'d '+Math.floor(n%86400/3600)+'h '+Math.floor(n%3600/60)+'m';
+  function draw(){
+   if(!alive(token))return;const d=latest;
+   updated.textContent=(d.environment==='production'?'PRODUCTION':'DEVELOPMENT')+' · '+location.host+' · v'+d.version+' · '+(paused?'Paused':'Last updated '+date(d.at));
+   metrics.replaceChildren();
+   for(const [label,value] of [['Process uptime',duration(d.uptimeSeconds)],['Process CPU',d.cpuPercent==null?'Sampling…':d.cpuPercent.toFixed(1)+'%'],['Process RAM',mb(d.rssBytes)],['JS heap',mb(d.heapUsedBytes)],['Host RAM available',mb(d.hostFreeBytes)+' / '+mb(d.hostMemoryBytes)],['Host load (1 min)',d.load1.toFixed(2)],['API requests · 5 min',d.requests],['Server errors · 5 min',d.errors],['Client errors · 5 min',d.rejected],['Mean API response',d.meanResponseMs==null?'—':d.meanResponseMs+' ms'],['Successful send requests · 5 min',d.messageRequests],['Active desktop sessions',d.activeDesktopSessions],['Live waiting requests',d.liveRequests],['Open payment tickets',d.paymentTickets],['Assigned support requests',d.supportRequests]]){
+    const n=el('div','','cc-metric');n.append(el('strong',String(value)),el('span',label));metrics.append(n);
+   }
+   const top=feed.scrollTop;feed.replaceChildren();
+   const rows=d.events.filter(e=>filter.value==='all'||filter.value===e.category||filter.value==='error'&&e.status==='error');
+   for(const e of rows){const line=el('div','','cc-monitor-line');line.append(el('time',date(e.at)),el('span',e.category,'cc-monitor-category'),el('span',e.label),el('span',e.status,'cc-monitor-outcome '+e.status));feed.append(line);}
+   if(!rows.length)feed.append(el('p','No matching events in this process.','cc-muted'));feed.scrollTop=top;
+  }
+  async function refresh(){
+   if(!alive(token)||pending||paused||document.hidden)return;
+   pending=true;try{latest=await api('monitoring');draw();}catch(e){if(alive(token)){updated.textContent='Disconnected · '+e.message;if(e.status===401){stop();onExit();}}}finally{pending=false;}
+  }
+  filter.addEventListener('change',draw);bar.append(filter,pause,button('Refresh now',refresh,'cc-secondary'));
+  main.append(updated,metrics,el('h3','Live server console'),bar,feed,note,el('p','Counts cover the current and preceding four minute buckets. Response time excludes long-poll waits. Successful send requests are not delivery receipts. CPU may exceed 100% across cores.','cc-muted'));
+  draw();
+  async function tick(){if(!alive(token))return;await refresh();if(alive(token))setTimeout(tick,5000);}
+  setTimeout(tick,5000);
+ }
  async function load(prefetched=null){
   listView=false;const token=++revision;if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
   for(const b of nav.children){b.classList.toggle('selected',b.dataset.tab===current);b.setAttribute('aria-current',b.dataset.tab===current?'page':'false');}
@@ -76,7 +105,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    const url=route+(archived?'?archived=1':['Accounts','Keys'].includes(view)?'?q='+encodeURIComponent(query)+(cursor?'&after='+encodeURIComponent(cursor):''):'');
    const data=await (prefetched&&typeof prefetched==='object'&&('items' in prefetched||'requests' in prefetched)?prefetched:api(url));if(!alive(token))return;listSignature=JSON.stringify(data);main.replaceChildren(el('h2',current),button('Refresh',()=>load(),'cc-secondary'));
    if(archived){const sub=el('div','','cc-actions cc-archive-tabs');for(const name of ['Reports','Feedback','Payment tickets','Payments','Support'])sub.append(button(name,()=>{archiveTab=name;load();},name===archiveTab?'':'cc-secondary'));main.append(sub,el('p','Finished records only. Restoring returns them to the working list. Existing privacy retention still applies.','cc-muted'));}
-   if(view==='Overview'){
+   if(view==='Monitoring'){renderMonitoring(data,token);}else if(view==='Overview'){
     const metrics=el('div','','cc-metrics');for(const [label,val] of [['Accounts',data.accounts],['Active',data.active],['Admin accounts',data.admins],['Unused keys',data.keys],['Open reports',data.reports],['Open feedback',data.feedback],['Pending payments',data.payments],['Open payment tickets',data.paymentTickets],['Assigned support requests',data.supportRequests],['Verified revenue','$'+(data.revenue/100).toFixed(2)]]){const n=el('div','','cc-metric');n.append(el('strong',String(val)),el('span',label));metrics.append(n);}main.append(metrics,card('Inbox shortcuts',[button('Open payment tickets',()=>navigate('Payment tickets')),button('Support requests',()=>navigate('Support'),'cc-secondary')]));
     if(pair)main.append(card('Desktop pairing',[el('p','Link a browser with a one-time code. Your admin PIN is required.'),button('Pair desktop',pair),action('Sign out all linked browsers',async()=>{await api('logout',{});main.prepend(el('p','Desktop sessions revoked.','cc-muted'));},'cc-secondary')]));
     main.append(card('Privacy boundary',[el('p','Only explicitly submitted report snapshots are available. Private encrypted conversations and consumed View Once content cannot be recovered.')]));
@@ -132,7 +161,7 @@ window.QzuControl={mount};
 const desktop=document.getElementById('controlRoot');if(!desktop)return;
 async function api(path,data){
  const response=await fetch('/api/control/'+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-QZU':'1'},body:data===undefined?undefined:JSON.stringify(data),credentials:'same-origin',cache:'no-store'});
- const value=await response.json().catch(()=>({}));if(!response.ok)throw Error(value.error||'Request failed.');return value;
+ const value=await response.json().catch(()=>({}));if(!response.ok)throw Object.assign(Error(value.error||'Request failed.'),{status:response.status});return value;
 }
 async function media(id){const r=await fetch('/api/control/reports/media/'+encodeURIComponent(id),{cache:'no-store',credentials:'same-origin'});if(!r.ok)throw Error('Evidence unavailable.');return r.blob();}
 function login(){
