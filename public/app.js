@@ -1631,7 +1631,7 @@ async function openLegal(path){
 function legalButtons(){return [button('Terms of Service',()=>openLegal('/terms'),'secondary-button'),button('Privacy policy',()=>openLegal('/privacy'),'secondary-button')];}
 function showTermsGate(version){
   const check=el('input');check.type='checkbox';const label=el('label','feedback-confirm');label.append(check,el('span','','I am 18 or older and agree to the Terms of Service.'));
-  const accept=button('Accept and continue',async()=>{accept.disabled=true;try{await api('terms/accept',{version});termsPending=false;modalLocked=false;closeModal();if(accessDue){showRenewal();return;}navigate(location.pathname,false);await refresh();}catch(error){dialogError(error);accept.disabled=!check.checked;}});
+  const accept=button('Accept and continue',async()=>{accept.disabled=true;try{await api('terms/accept',{version});termsPending=false;modalLocked=false;closeModal();if(accessDue||(!playBuild&&savedInvoice(true))){showRenewal();return;}navigate(location.pathname,false);await refresh();}catch(error){dialogError(error);accept.disabled=!check.checked;}});
   accept.disabled=true;check.addEventListener('change',()=>{accept.disabled=!check.checked;});
   show('Terms of Service',[el('p','','Harassment, abuse, exploitation, threats and unlawful content are prohibited. Reports are reviewed and violations may result in suspension.'),...legalButtons(),label,accept,button('Decline and lock',()=>lock(),'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button')],true);
 }
@@ -2306,7 +2306,7 @@ if (page === 'connect' && location.hash) {
   history.replaceState(null, '', location.pathname);
 }
 function backgroundApp(){if(isPublicCheckout())return;if(!native||backgroundPin){if(unlockToken||pinPrompt)lock();return;}if(recordingCleanup||mediaRoom||stream)closeModal();stopCamera();stopTyping();}
-function resumeApp(){if(isPublicCheckout())resumeCheckout?.();else if(!unlockToken)getSession();else if(!document.hidden)refresh().catch(()=>{});}
+function resumeApp(){if(isPublicCheckout()||(unlockToken&&modal.dataset.checkout==='renewal'))resumeCheckout?.();else if(!unlockToken)getSession();else if(!document.hidden)refresh().catch(()=>{});}
 if (native) {
   if(window.Capacitor.getPlatform()==='ios')devicePlugin.addListener('screenCaptured',()=>{if(unlockToken)lock();}).catch(()=>{});
   console.info('[qzu] Mobile startup; device plugin available:', window.Capacitor.isPluginAvailable('QzuDevice'), '; server:', apiOrigin);
@@ -3281,8 +3281,7 @@ function showKeyEntry(renewal) {
       return;
     }
     if (playBuild || !/^QZ[UO]-[A-F0-9]{48}$/.test(value)) return dialogError(new Error('Enter a valid key.'));
-    rememberInvoice(value, renewal);
-    showInvoice(value, null, renewal);
+    try{rememberInvoice(value, renewal);showInvoice(value, null, renewal);}catch(e){dialogError(e);}
   });
   showCheckout('Use Access-Key', [input, submit, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
 }
@@ -3346,7 +3345,7 @@ function showInvoice(secret,initial,renewal){
    input.addEventListener('input',()=>{persist({txDraft:input.value});submit.disabled=busy||!valid();});form.append(input,submit);
    form.addEventListener('submit',async e=>{e.preventDefault();if(busy||submit.disabled||!valid())return;setBusy(true);submit.disabled=true;const txid=input.value.trim();persist({txDraft:txid});try{const result=await api('access/submit',{key:secret,txid});if(active()){errorLine.textContent='';renderInvoice(result);}}catch(e){if(active())errorLine.textContent=errorMessage(e);}finally{setBusy(false);submit.disabled=!valid()||(current?.state==='submitted'&&current?.confirmations>0);}});controls.append(form);
   }else details.append(el('p','pay-note','This order cannot be paid. Keep its reference if you need support.'));
-  showReference();updateTimer();
+  if(!invoice.redeemed)showReference();updateTimer();
  }
  function updateTimer(){if(!current||current.state!=='pending'||!current.coin){timer.textContent='';return;}const remaining=current.expires-(Date.now()+serverOffset);timer.textContent=remaining>0?'Quote valid for '+clock(remaining):'Quote expired · checking status';if(remaining<=0){for(const item of details.querySelectorAll('.pay-qr-frame,.pay-address,.pay-amount'))item.remove();}}
  async function requestInvoice(){
@@ -3359,7 +3358,7 @@ function showInvoice(secret,initial,renewal){
  async function tick(force=false){
   if(!active()||polling||document.hidden)return;clearTimeout(accessTimer);updateTimer();polling=true;
   try{if(!busy&&(force||Date.now()>=nextPoll)){nextPoll=Date.now()+5000;const observed=mutation;const invoice=await requestInvoice();if(active()&&!busy&&observed===mutation){failures=0;errorLine.textContent='';renderInvoice(invoice);}}}
-  catch(e){failures++;nextPoll=Date.now()+Math.min(60000,5000*2**Math.min(failures,4));if(active()){errorLine.textContent=errorMessage(e)+' · Your order is saved. Retry below or reconnect.';if(!current){status.textContent='Waiting for connection';controls.replaceChildren(button('Retry',()=>tick(true),'primary-button pay-primary'));}}}
+  catch(e){failures++;nextPoll=Date.now()+Math.min(60000,5000*2**Math.min(failures,4));if(active()){errorLine.textContent=errorMessage(e)+' · Your order is saved. Retry below or reconnect.';if(!current){status.textContent=e.status===404?'Order not found':'Waiting for connection';controls.replaceChildren(button('Retry',()=>tick(true),'primary-button pay-primary'));}}}
   finally{polling=false;if(active()&&!current?.redeemed)accessTimer=setTimeout(()=>tick(),1000);}
  }
  setHeading(1,record?.stage==='intent'?'Preparing your order':'Restoring your order',record?.usd?checkoutName(record.plan)+' · $'+record.usd+' · '+record.coin:'Retrieving the saved invoice.');status.textContent='Connecting securely…';showReference();resumeCheckout=()=>tick(true);
