@@ -909,7 +909,7 @@ function renderChat() {
       list.append(box);
     }
     for (const r of visibleRooms) {
-      const histories=r.peerAdmin?adminGroups.get(r.peerAdmin)||[r]:[r];
+      const histories=r.peerAdmin?adminGroups.get(r.peerAdmin)||[r]:[r];const alternateContacts=r.peerAdmin?savedContacts.filter(c=>c.peerAdmin===r.peerAdmin&&!rooms.some(x=>x.contact?.id===c.id)):[];
       const last = histories.flatMap(x=>x.messages).sort((a,b)=>b.at-a.at)[0];
       const classes = 'contact' + (r.admin ? ' admin-contact' : '') + (r.id === selected ? ' active' : '');
       const b = el('button', classes);
@@ -932,7 +932,7 @@ function renderChat() {
       b.append(svg(r.peerRole==='admin'||r.support&&!r.supportAgent ? 'supportAvatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       const count=histories.reduce((n,x)=>n+unreadCount(x),0);if(count){const badge=el('span','unread-badge',count>99?'99+':String(count));badge.setAttribute('aria-label',count+' unread messages');b.append(badge);}
       b.addEventListener('click', () => selectRoom(r.id));
-      if(histories.length>1){const history=button('Other conversation history',()=>show('Support conversation history',[...histories.map(x=>button((x.encryption?'Encrypted chat':'Previous support chat')+' · '+fmtTime(x.messages.at(-1)?.at||x.created),()=>{closeModal();selectRoom(x.id);},'secondary-button')),button('Close',closeModal,'secondary-button')]),'support-history-link');history.setAttribute('aria-label','Open separate support conversation history');list.append(b,history);continue;}
+      if(histories.length>1||alternateContacts.length){const history=button('Other conversation history',()=>show('Support conversation history',[...histories.map(x=>button((x.encryption?'Encrypted chat':'Previous support chat')+' · '+fmtTime(x.messages.at(-1)?.at||x.created),()=>{closeModal();selectRoom(x.id);},'secondary-button')),...alternateContacts.map(c=>button('Open saved encrypted contact',async()=>{try{const result=await api('contacts/open',{id:c.id});closeModal();await refresh();selectRoom(result.id);}catch(e){modalError(e);}},'secondary-button')),button('Close',closeModal,'secondary-button')]),'support-history-link');history.setAttribute('aria-label','Open separate support conversation history');list.append(b,history);continue;}
       list.append(b);
     }
     for (const contact of visibleSaved) {
@@ -1830,7 +1830,7 @@ function renderOfficial(open){
     for(const post of postsToShow){
       const article=el('article','official-post');
       const head=el('div','official-post-title');
-      head.append(el('strong','','qzu-Support'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));if(state.supportAgent)head.append(button('⋯',()=>show('Announcement',[button('Delete for everyone',async()=>{try{await api('official/delete',{id:post.id});officialHistory=officialHistory.filter(p=>p.id!==post.id);closeModal();await refresh();}catch(e){showError(e);}},'danger-button primary-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
+      head.append(svg('supportAvatar','ticket-admin-avatar'),el('strong','','qzu-Support'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));if(state.supportAgent)head.append(button('⋯',()=>show('Announcement',[button('Delete for everyone',async()=>{try{await api('official/delete',{id:post.id});officialHistory=officialHistory.filter(p=>p.id!==post.id);closeModal();await refresh();}catch(e){showError(e);}},'danger-button primary-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
       article.append(head,el('p','official-text',post.text));posts.append(article);
     }
   }
@@ -3494,7 +3494,7 @@ function renderUserTicket(t,epoch,auth){
  const composer=el('form','user-ticket-compose');send=el('button','primary-button user-ticket-send','Send');composer.append(field,send);root.append(head,feed,notice,composer);
  composer.onsubmit=async e=>{e.preventDefault();const text=field.value.trim();if(!text||ticketBusy)return;ticketBusy=true;send.disabled=true;if(!ticketPending||ticketPending.text!==text)ticketPending={text,requestId:crypto.randomUUID()};try{const data=await api('tickets/send',{id:t.id,...ticketPending},true);if(ticketAlive(epoch,auth)){if(field.value.trim()===text){field.value='';ticketDraft='';}ticketPending=null;renderUserTicket(data,epoch,auth);feed.scrollTop=feed.scrollHeight;}}catch(e){if(ticketAlive(epoch,auth))notice.textContent=errorMessage(e);}finally{if(ticketAlive(epoch,auth)){ticketBusy=false;send.disabled=field.disabled;}}};
  }
- const key=JSON.stringify(t.messages);if(ticketLast!==key){ticketLast=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','pay-ticket-bubble '+(m.mine?'mine':'other'));if(!m.mine){const name=el('span','user-ticket-name',m.role==='admin'?'qzu-Support':m.role==='seller'||m.role==='verified-seller'?(m.name||'Seller'):m.role==='system'?'Ticket':'Customer');if(m.role==='admin'||m.role==='verified-seller')name.append(svg(m.role==='admin'?'adminBadge':'sellerBadge','admin-badge'));b.append(name);}b.append(el('p','',m.text),el('small','pay-ticket-time',fmtTime(m.at)));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
+ const key=JSON.stringify(t.messages);if(ticketLast!==key){ticketLast=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','pay-ticket-bubble '+(m.mine?'mine':'other'));if(!m.mine){const name=el('span','user-ticket-name',m.role==='admin'?'qzu-Support':m.role==='seller'||m.role==='verified-seller'?(m.name||'Seller'):m.role==='system'?'Ticket':'Customer');if(m.role==='admin')name.prepend(svg('supportAvatar','ticket-admin-avatar'));if(m.role==='admin'||m.role==='verified-seller')name.append(svg(m.role==='admin'?'adminBadge':'sellerBadge','admin-badge'));b.append(name);}b.append(el('p','',m.text),el('small','pay-ticket-time',fmtTime(m.at)));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
  field.disabled=Boolean(t.closed);send.disabled=field.disabled||ticketBusy;notice.textContent=t.closed?'Solved · Ticket closed':t.assigned?'Open':'Waiting for Support';root.querySelector('.user-ticket-compose').hidden=Boolean(t.closed);
 }
 async function refreshUserTickets(){
