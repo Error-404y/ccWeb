@@ -67,6 +67,7 @@ try {
   const origin = 'http://127.0.0.1:' + port;
   browser = await chromium.launch({
     executablePath: process.env.QZU_TEST_CHROME_PATH,
+    channel: process.env.QZU_TEST_CHROME_PATH ? undefined : 'chromium',
     args: ['--use-fake-device-for-media-stream']
   });
 
