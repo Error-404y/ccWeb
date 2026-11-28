@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.13.0';
+const installedVersion = window.QZU_APP_VERSION || '0.14.0';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -104,7 +104,7 @@ const openingOnce = new Set();
 let mediaRoom = null;
 let mediaMessage = null;
 let invisibleSaving = false;
-let mediaUrl = null;
+let mediaUrl = null,controlCleanup=null;
 let recordingCleanup = null;
 const reactions = ['👍', '❤️', '😂', '🔥', '😮', '👎'];
 let privacyMode = false;
@@ -1333,6 +1333,7 @@ function renderSettings() {
   $('pushStatus').textContent=pushOptedOut()?'Message notifications are off.':state.push?.registered?'Message notifications are enabled.':native&&window.Capacitor.getPlatform()==='ios'?'In-app alerts enabled. Remote delivery depends on Apple push configuration.':'Allow notifications in your device settings if prompted.';
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
+  $('recoverySettings').hidden=Boolean(state.supportAgent)||!native;
   $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
   $('userInterfaceHeading').hidden=!state.supportAgent;
   $('adminInboxCount').textContent=state.supportAgent?String((state.supportRequests||[]).length):'';
@@ -2464,6 +2465,27 @@ async function openModeration(){
   }catch(error){showError(error);}
 }
 $('adminReports').addEventListener('click',openModeration);
+function openControlCenter(){
+ if(!state.supportAgent||!unlockToken||!window.QzuControl)return;
+ const root=el('div','cc-mobile'),epoch=authEpoch;
+ show('Control Center',[root]);
+ const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&!document.hidden&&body.contains(root);
+ async function call(path,data){if(!active())throw Error('Locked.');const value=await api('control/'+path,data);if(!active())throw Error('Locked.');return value;}
+ async function media(id){if(!active())throw Error('Locked.');const response=await transport('/api/control/reports/media/'+encodeURIComponent(id),{headers:{'X-QZU-Unlock':unlockToken},cache:'no-store',credentials:'same-origin'});if(!response.ok||!active())throw Error('Evidence unavailable.');return response.blob();}
+ function pair(){
+  const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Admin PIN';pin.autocomplete='off';
+  const generate=button('Generate one-time pairing code',async()=>{generate.disabled=true;try{const result=await api('control/pair',{pin:pin.value});pin.value='';if(epoch!==authEpoch||!unlockToken||document.hidden||!body.contains(generate))return;const value=el('p','access-address',result.pairingCode);show('Pair desktop',[el('p','','Open '+apiOrigin+'/control in your browser. This code expires in 2 minutes and works only once.'),value,button('Copy code',()=>navigator.clipboard.writeText(result.pairingCode)),button('Back',openControlCenter,'secondary-button')]);}catch(e){dialogError(e);generate.disabled=false;}});
+  show('Pair desktop',[el('p','','Verify your admin PIN to authorize a browser.'),pin,generate,button('Back',openControlCenter,'secondary-button')]);
+ }
+ const mounted=window.QzuControl.mount(root,call,{mobile:true,isActive:active,onExit:closeModal,pair,media});controlCleanup=()=>mounted.close();
+}
+$('adminControl').addEventListener('click',openControlCenter);
+$('recoverySettings').addEventListener('click',()=>{
+ if(!unlockToken||state.supportAgent)return;
+ const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Current login PIN';pin.autocomplete='off';
+ const issue=button('Create recovery code',async()=>{issue.disabled=true;try{const result=await api('account/recovery-code',{pin:pin.value});pin.value='';if(!body.contains(issue)||!unlockToken||document.hidden)return;show('Save your recovery code',[el('p','','Keep this code offline. It requires your existing login PIN. Creating a new code invalidates the old one.'),el('p','access-address',result.recoveryCode),button('Copy recovery code',()=>navigator.clipboard.writeText(result.recoveryCode)),button('Done',closeModal,'secondary-button')]);}catch(e){dialogError(e);issue.disabled=false;}});
+ show('Account recovery',[el('p','','Recover your account and paid access on a new device using your recovery code and current login PIN. Old encrypted conversations and saved contacts cannot be transferred. This replaces any existing recovery code.'),pin,issue,button('Cancel',closeModal,'secondary-button')]);
+});
 function messageActions(room, message) {
   const picker = el('div', 'reaction-picker');
   for (const emoji of reactions) picker.append(button(emoji, () => reactTo(room, message, emoji), 'reaction-choice'));
@@ -2602,6 +2624,7 @@ $('accentSettings').addEventListener('click', () => {
 });
 
 function clearMedia() {
+  if(controlCleanup){const cleanup=controlCleanup;controlCleanup=null;cleanup();}
   if (recordingCleanup) {
     const cleanup = recordingCleanup;
     recordingCleanup = null;
@@ -3171,32 +3194,33 @@ function forgetInvoice(renewal) {
   try { localStorage.removeItem(renewal ? 'qzu-renewal' : 'qzu-access'); } catch {}
 }
 
-function showAccess() {
-  if(playBuild){showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key',()=>showKeyEntry(false)),...legalButtons()]);return;}
-  const plan = el('div', 'access-plan');
-  plan.append(el('strong', 'access-price', '€19.99'), el('span', '', 'First 5 months included'), el('span', 'access-mini', 'Then €2.99/month · Incl. 19% tax'), el('span', 'access-mini', '12 months · €40.92 total'));
-  const terms = el('label', 'feedback-confirm');
-  const check = el('input');
-  check.type = 'checkbox';
-  terms.append(check, el('span', '', 'I accept the payment terms.'));
-  const purchase = button('Purchase access', async () => {
-    purchase.disabled = true;
-    try {
-      const invoice = await api('access/invoice', { plan: 'monthly', accepted: true });
-      rememberInvoice(invoice.orderKey, false);
-      showInvoice(invoice.orderKey, invoice, false);
-    } catch (error) {
-      dialogError(error);
-      purchase.disabled = !check.checked;
-    }
-  });
-  purchase.disabled = true;
-  check.addEventListener('change', () => { purchase.disabled = !check.checked; });
-  const controls = [plan, terms, purchase];
-  const saved = savedInvoice(false);
-  if (saved) controls.push(button('Resume purchase', () => showInvoice(saved, null, false), 'secondary-button'));
-  controls.push(button('Redeem Key', () => showKeyEntry(false), 'secondary-button'));
-  showCheckout('qzu-Access', controls);
+function showAccountRecovery(){
+ if(!native){dialogError(Error('Recover your account in the mobile app.'));return;}
+ const code=el('input','access-key-input');code.placeholder='Recovery code';code.autocomplete='off';code.spellcheck=false;code.maxLength=56;
+ const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Existing login PIN';pin.autocomplete='off';
+ const check=el('input');check.type='checkbox';const label=el('label','feedback-confirm');label.append(check,el('span','','I understand this disconnects the old device and deletes its active conversations and saved contacts. Paid access and account ID are preserved.'));
+ const submit=button('Recover account',async()=>{if(!check.checked)return;submit.disabled=true;try{const result=await api('access/recover',{code:code.value.trim().toUpperCase(),pin:pin.value,confirmed:true});if(!result.ok)throw Error('Recovery unavailable.');code.value='';pin.value='';forgetInvoice(false);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=false;showLogin();}catch(e){dialogError(e);submit.disabled=false;}});
+ showCheckout('Recover account',[el('p','','Enter the recovery code saved on your old device and your existing login PIN.'),code,pin,label,submit,button('Back',showAccess,'secondary-button')]);
+}
+function showAccess(){
+ if(playBuild){showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key', () => showKeyEntry(false)),button('Recover account',showAccountRecovery,'secondary-button'),...legalButtons()]);return;}
+ showPlanCheckout(false);
+}
+function showPlanCheckout(renewal){
+ const plans=[['week','1 Week','1.99'],['month','1 Month','5.99'],['year','1 Year','69.99'],['lifetime','Lifetime','79.99']];
+ let plan='month',coin='LTC',available=new Set(),busy=false;
+ const cards=el('div','checkout-plans'),coins=el('div','checkout-coins'),notice=el('p','access-mini','Checking payment networks…');
+ const check=el('input');check.type='checkbox';const terms=el('label','feedback-confirm');terms.append(check,el('span','','I accept the payment terms and will send the exact amount on the selected network.'));
+ const purchase=button('Continue',async()=>{if(busy||!check.checked||!available.has(coin))return;busy=true;renderChoice();try{const invoice=await api('access/invoice',{plan,coin,renewal,accepted:true});rememberInvoice(invoice.orderKey,renewal);showInvoice(invoice.orderKey,invoice,renewal);}catch(e){dialogError(e);busy=false;renderChoice();}});
+ function renderChoice(){cards.replaceChildren();for(const [id,label,price] of plans){const b=button('',()=>{if(!busy){plan=id;renderChoice();}},'checkout-plan'+(plan===id?' selected':''));b.append(el('strong','',label),el('span','',' $'+price));b.setAttribute('aria-pressed',String(plan===id));cards.append(b);}coins.replaceChildren();for(const [id,label] of [['LTC','Litecoin'],['BTC','Bitcoin'],['SOL','Solana']]){const b=button(label,()=>{coin=id;renderChoice();},'checkout-coin'+(coin===id?' selected':''));b.disabled=busy||!available.has(id);b.setAttribute('aria-pressed',String(coin===id));coins.append(b);}purchase.disabled=busy||!check.checked||!available.has(coin);purchase.textContent=busy?'Creating invoice…':'Continue · $'+plans.find(p=>p[0]===plan)[2];}
+ check.addEventListener('change',renderChoice);renderChoice();
+ const controls=[el('p','access-mini','Choose your access. Validity begins at activation.'),cards,el('h3','','Payment network'),coins,notice,terms,purchase];
+ const saved=savedInvoice(renewal);if(saved)controls.push(button('Resume purchase',()=>showInvoice(saved,null,renewal),'secondary-button'));
+ controls.push(button(renewal?'Enter renewal key':'Redeem Key',()=>showKeyEntry(renewal),'secondary-button'));
+ if(!renewal)controls.push(button('Recover account',showAccountRecovery,'secondary-button'));
+ else controls.push(button(accessDue?'Lock':'Close',()=>{modalLocked=false;if(accessDue){delete modal.dataset.checkout;checkoutReturn=null;lock();}else closeModal();},'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button'));
+ showCheckout(renewal?'Renew access':'Choose your access',controls,renewal);
+ api('access/methods',undefined,true).then(data=>{if(!body.contains(coins))return;available=new Set(data.coins.filter(c=>c.available).map(c=>c.coin));if(!available.has(coin))coin=[...available][0]||'LTC';notice.textContent=available.size?'Network fees are not included.':'Payment networks are temporarily unavailable. You can still redeem an existing key.';renderChoice();}).catch(()=>{notice.textContent='Payment networks are unavailable. You can still redeem an existing key.';});
 }
 
 function showKeyEntry(renewal) {
@@ -3208,6 +3232,7 @@ function showKeyEntry(renewal) {
   input.maxLength = renewal ? 52 : 58;
   const submit = button('Continue', async () => {
     const value = input.value.trim().toUpperCase();
+    if(renewal&&/^QZU-[A-F0-9]{48}$/.test(value)){submit.disabled=true;try{await api('access/renew',{key:value});forgetInvoice(true);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}catch(e){dialogError(e);submit.disabled=false;}return;}
     if(!renewal&&(/^QZU-ADMIN-[A-F0-9]{48}$/.test(value)||/^QZU-REVIEW-[A-F0-9]{40}$/.test(value)||(playBuild&&/^QZU-[A-F0-9]{48}$/.test(value)))){
       submit.disabled=true;
       try{
@@ -3224,29 +3249,9 @@ function showKeyEntry(renewal) {
   showCheckout('Use Access-Key', [input, submit, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
 }
 
-function showRenewal() {
-  if(playBuild){showRestrictedAccount('Access unavailable','Your current access is no longer active.');return;}
-  if(state.access?.plan!=='monthly'){
-    const input=el('input','access-key-input');input.placeholder='Enter renewal access key';input.autocomplete='off';input.spellcheck=false;input.maxLength=52;
-    const apply=button('Apply renewal',async()=>{apply.disabled=true;try{await api('access/renew',{key:input.value.trim().toUpperCase()});accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}catch(error){dialogError(error);apply.disabled=false;}});
-    showCheckout('Renew access',[el('p','','Enter a new access key to extend your existing account.'),input,apply,button(accessDue?'Lock':'Close',accessDue?()=>{delete modal.dataset.checkout;checkoutReturn=null;lock();}:()=>{modalLocked=false;closeModal();},'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button')],true);
-    return;
-  }
-  const plan = el('div', 'access-plan');
-  plan.append(el('strong', 'access-price', '€2.99'), el('span', '', 'One month · Incl. 19% tax'));
-  const controls = [plan, button('Renew access', async () => {
-    try {
-      const invoice = await api('access/invoice', { plan: 'renewal', accepted: true });
-      rememberInvoice(invoice.orderKey, true);
-      showInvoice(invoice.orderKey, invoice, true);
-    } catch (error) { dialogError(error); }
-  })];
-  const saved = savedInvoice(true);
-  if (saved) controls.push(button('Resume renewal', () => showInvoice(saved, null, true), 'secondary-button'));
-  controls.push(button('Enter renewal key or reference', () => showKeyEntry(true), 'secondary-button'));
-  controls.push(button(accessDue ? 'Lock' : 'Close', accessDue ? () => { delete modal.dataset.checkout; checkoutReturn = null; lock(); } : () => { modalLocked = false; closeModal(); }, 'secondary-button'));
-  controls.push(button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button'));
-  showCheckout('Renew access', controls, true);
+function showRenewal(){
+ if(playBuild){showRestrictedAccount('Access unavailable','Your current access is no longer active.');return;}
+ showPlanCheckout(true);
 }
 
 function showInvoice(secret, initial, renewal) {
@@ -3257,7 +3262,7 @@ function showInvoice(secret, initial, renewal) {
   const timer = el('span', 'access-timer');
   const controls = el('div', 'access-controls');
   content.append(status, details, timer, controls);
-  showCheckout('Litecoin checkout', [content, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
+  showCheckout('Secure checkout', [content, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
   const ticket = checkoutEpoch;
   let current = null;
   let busy = false;
@@ -3275,57 +3280,25 @@ function showInvoice(secret, initial, renewal) {
   function renderInvoice(invoice) {
     current = invoice;
     serverOffset = invoice.now - Date.now();
-    const fingerprint = JSON.stringify([invoice.state, invoice.redeemed, invoice.activationKey, invoice.reviewUntil]);
+    const fingerprint = JSON.stringify([invoice.state, invoice.redeemed, invoice.activationKey, invoice.reviewUntil,invoice.confirmations]);
     if (lastKey === fingerprint) return;
     lastKey = fingerprint;
     const approved = invoice.state === 'confirmed' && !invoice.redeemed && invoice.activationKey;
-    status.textContent = invoice.redeemed ? 'Key redeemed' : approved ? 'Payment confirmed' : invoice.state === 'submitted' ? 'Please wait until the Payment has been confirmed' : invoice.state === 'rejected' ? 'Payment not approved' : invoice.state === 'pending' ? 'Pay with Litecoin' : 'Contact the developer';
+    status.textContent = invoice.redeemed ? 'Key redeemed' : approved ? 'Payment confirmed' : invoice.state === 'submitted' ? 'Waiting for blockchain confirmation' : invoice.state === 'expired' ? 'Quote expired' : invoice.state === 'rejected' ? 'Payment not approved' : invoice.state === 'pending' ? 'Pay with '+(invoice.coin||'Litecoin') : 'Contact the developer';
     details.replaceChildren();
     controls.replaceChildren();
 
-    if (invoice.state === 'pending' && secret.startsWith('QZO-')) {
-      details.append(el('strong', 'access-price', '€' + invoice.euro), el('span', '', 'Including 19% tax'));
-      if (invoice.qr || initial?.qr) {
-        const image = el('img', 'payment-qr');
-        image.src = invoice.qr || initial.qr;
-        image.alt = 'Litecoin receiving address QR code';
-        const qr = el('div', 'payment-qr-wrap');
-        qr.setAttribute('aria-label', 'Payment QR not available');
-        image.alt = '';
-        image.setAttribute('aria-hidden', 'true');
-        const overlay = el('span', 'payment-qr-lock');
-        overlay.append(svg('lock'), el('span', '', 'Not Available'));
-        qr.append(image, overlay);
-        details.append(qr);
-      }
-      details.append(el('p', 'access-address', invoice.address), el('p', 'access-mini', 'Pay the EUR equivalent in LTC. Network fees extra.'));
-      controls.append(copy('Copy address', invoice.address));
-      const form = el('form', 'access-details');
-      const input = el('input', 'access-key-input');
-      input.placeholder = 'Transaction ID (TXID)';
-      input.autocomplete = 'off';
-      input.spellcheck = false;
-      input.maxLength = 64;
-      input.required = true;
-      const submit = el('button', 'primary-button', 'I have paid');
-      submit.type = 'submit';
-      submit.disabled = true;
-      input.addEventListener('input', () => { submit.disabled = !/^[a-f0-9]{64}$/i.test(input.value.trim()); });
-      form.append(input, submit);
-      form.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (busy || submit.disabled) return;
-        busy = true;
-        submit.disabled = true;
-        try {
-          const result = await api('access/submit', { key: secret, txid: input.value.trim() });
-          if (ticket === checkoutEpoch) renderInvoice(result);
-        } catch (error) {
-          if (ticket === checkoutEpoch) dialogError(error);
-          submit.disabled = false;
-        } finally { busy = false; }
-      });
-      controls.append(form);
+    if (['pending','submitted','expired'].includes(invoice.state) && secret.startsWith('QZO-')) {
+      details.append(el('strong','access-price',invoice.usd?'$'+invoice.usd:'€'+invoice.euro));
+      if(invoice.amount){details.append(el('strong','checkout-amount',invoice.amount+' '+invoice.coin));}
+      if(invoice.state==='pending'&&(invoice.qr||initial?.qr)){const image=el('img','payment-qr');image.src=invoice.qr||initial.qr;image.alt='Payment QR code';details.append(image);}
+      details.append(el('p','access-address',invoice.address),el('p','access-mini',invoice.state==='expired'?'Do not send a new payment. If you already paid before expiry, submit the transaction ID.':invoice.amount?'Send the exact quoted amount using the selected network.':'Legacy Litecoin order; manual review required.'));
+      controls.append(copy('Copy address',invoice.address));if(invoice.amount)controls.append(copy('Copy amount',invoice.amount));
+      if(invoice.state==='submitted')details.append(el('p','access-mini','Confirmations: '+(invoice.confirmations||0)+' · Do not pay twice.'));
+      const form=el('form','access-details'),input=el('input','access-key-input');input.placeholder=invoice.coin==='SOL'?'Transaction signature':'Transaction ID (TXID)';input.autocomplete='off';input.spellcheck=false;input.maxLength=88;input.required=true;
+      const valid=()=>invoice.coin==='SOL'?/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(input.value.trim()):/^[a-f0-9]{64}$/i.test(input.value.trim());
+      const submit=el('button','primary-button',invoice.state==='submitted'?'Update transaction ID':'I have paid');submit.type='submit';submit.disabled=true;input.addEventListener('input',()=>submit.disabled=!valid());form.append(input,submit);
+      form.addEventListener('submit',async e=>{e.preventDefault();if(busy||!valid())return;busy=true;submit.disabled=true;try{const result=await api('access/submit',{key:secret,txid:input.value.trim()});if(ticket===checkoutEpoch)renderInvoice(result);}catch(error){if(ticket===checkoutEpoch)dialogError(error);submit.disabled=false;}finally{busy=false;}});controls.append(form);
     }
 
     if (secret.startsWith('QZO-') && !invoice.redeemed) {
@@ -3373,6 +3346,7 @@ function showInvoice(secret, initial, renewal) {
   }
 
   function updateTimer() {
+    if(current?.state==='pending'&&current.expires){timer.textContent='Quote expires in '+clock(Math.max(0,current.expires-(Date.now()+serverOffset)));return;}
     if (!current || current.state !== 'submitted') {
       timer.textContent = '';
       return;
