@@ -93,3 +93,34 @@ test('multiple sellers, transfer, immediate removal and permanent archive',()=>{
  now+=365*86400000;t.sweep();assert.equal(t.list('b',true,true).length,1);assert.throws(()=>t.adminAction(id,'s2','delete'));t.adminAction(id,'b','delete');assert.equal(t.list('b',true,true).length,0);
  }finally{db.close();}
 });
+
+test('seller directory reveals only public profile fields; rotating codes invalidates prior code',()=>{
+ const db=setup();try{
+ const s=sellerStore(db),chats=new Chats();chats.sellerInvites=s;
+ const a=redeemAccess(db,s.generateKey('admin').key,start,'seller-one').id,b=redeemAccess(db,s.generateKey('admin').key,start,'seller-two').id;
+ s.rename(b,'Example seller');s.verify(b,true,'admin');assert.throws(()=>s.rename(b,'qzu-Support'));assert.throws(()=>s.directory('stranger'));
+ assert.deepEqual(s.directory(a),[{id:b,name:'Example seller',verified:true}]);
+ const old=s.ensureCode(b,chats);const next=s.rotate(b,chats,'admin');assert.notEqual(next.code,old.code);assert.ok(!chats.codes.has(old.code));assert.ok(s.reserved(old.code));assert.throws(()=>chats.requestConnection(a,old.code));
+ db.prepare('UPDATE accounts SET access_revoked=1 WHERE id=?').run(b);s.sync(chats);assert.deepEqual(s.directory(a),[]);assert.throws(()=>s.rename(b,'No'));assert.throws(()=>s.rotate(b,chats,'admin'));
+ }finally{db.close();}
+});
+test('admin starts encrypted direct chat without request, user starts pending request, fixed name and no block',()=>{
+ const db=setup();try{
+ const c=new Chats();c.contacts=contactStore(db);c.profileRole=id=>id==='admin'?'admin':null;
+ const code=c.ensureInvite('user').code;const first=c.requestConnection('admin',code);assert.ok(first.id);assert.equal(c.connectionRequests('user').length,0);assert.ok(c.rooms.get(first.id).encryption);assert.equal(c.requestConnection('admin',code).id,first.id);
+ const contact=c.contacts.between('user','admin');assert.equal(contact.nickname,'qzu-Support');
+ c.updateContact('user',contact.id,{nickname:'changed'});assert.equal(c.contacts.between('user','admin').nickname,'qzu-Support');
+ assert.throws(()=>c.blockContact('user',first.id));assert.throws(()=>c.removeContact('user',contact.id,true));
+ const adminCode=c.ensureInvite('admin').code;assert.deepEqual(c.requestConnection('other',adminCode),{pending:true});const req=c.connectionRequests('admin').find(x=>x.incoming);assert.ok(req);
+ const accepted=c.respondConnection('admin',req.id,true);assert.ok(c.rooms.get(accepted.id).encryption);assert.equal(c.contacts.between('other','admin').nickname,'qzu-Support');
+ }finally{db.close();}
+});
+test('legacy ticket seller migration preserves membership and never resurrects removed sellers',()=>{
+ const db=setup();try{
+ const options={isAdmin:id=>id==='admin',isSeller:id=>id==='seller'};
+ const t=userTickets(db,options);const {id}=t.open('owner','Other','hello',randomUUID());t.adminAction(id,'admin','accept');
+ db.prepare('UPDATE user_tickets SET seller=? WHERE id=?').run('seller',id);
+ const migrated=userTickets(db,options);assert.equal(migrated.view(id,'seller').mine,'seller');migrated.adminAction(id,'admin','remove','seller');
+ const restarted=userTickets(db,options);assert.throws(()=>restarted.view(id,'seller'));assert.deepEqual(restarted.view(id,'admin',true).sellers,[]);
+ }finally{db.close();}
+});
