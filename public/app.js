@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.14.0';
+const installedVersion = window.QZU_APP_VERSION || '0.14.1';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -1643,7 +1643,7 @@ $('adminLogout').addEventListener('click',()=>{
     try{
       await api('admin/logout',{confirmed:true});
       if(native)await clearPrivateKeys().catch(()=>{});
-      sessionReady=false;needsSetup=false;forgetInvoice(false);forgetInvoice(true);checkoutReturn=null;
+      sessionReady=false;needsSetup=false;clearCheckoutHistory();checkoutReturn=null;
       lock(false);history.replaceState(null,'','/chat');navigate('/chat',false);await getSession();
     }catch(error){dialogError(error);confirm.disabled=false;}
   });
@@ -1654,7 +1654,7 @@ function showDeleteAccount(){
     confirm.disabled=true;
     try{
       await api('account/delete',{confirmed:true});
-      roomKeys.clear();roomKeyJobs.clear();if(native)await clearPrivateKeys();sessionReady=false;needsSetup=false;forgetInvoice(false);forgetInvoice(true);
+      roomKeys.clear();roomKeyJobs.clear();if(native)await clearPrivateKeys();sessionReady=false;needsSetup=false;clearCheckoutHistory();
       checkoutReturn=null;lock(false);history.replaceState(null,'','/chat');navigate('/chat',false);await getSession();
     }catch(error){dialogError(error);confirm.disabled=false;}
   },'primary-button danger-button');
@@ -3207,11 +3207,12 @@ function updateCheckoutOrder(renewal,key,patch={},activate=false){
  saveCheckout(renewal,state);return next;
 }
 function saveCheckoutDraft(renewal,plan,coin){try{const state=readCheckout(renewal);state.draft={plan,coin};saveCheckout(renewal,state);}catch{}}
-function rememberInvoice(key,renewal){updateCheckoutOrder(renewal,key,{stage:'order'},true);}
+function rememberInvoice(key,renewal){const existing=checkoutOrder(renewal,key);updateCheckoutOrder(renewal,key,existing?{}:{stage:'order'},true);}
 function savedInvoice(renewal){const state=readCheckout(renewal);return state.orders.some(x=>x.key===state.active&&!['redeemed','archived'].includes(x.stage))?state.active:'';}
 function leaveInvoice(renewal,key){const state=readCheckout(renewal);if(state.active===key)state.active=null;saveCheckout(renewal,state);}
 function completeInvoice(renewal,key){try{updateCheckoutOrder(renewal,key,{stage:'redeemed',txDraft:''});leaveInvoice(renewal,key);}catch{}}
 function forgetInvoice(renewal){try{const state=readCheckout(renewal);state.active=null;saveCheckout(renewal,state);}catch{}}
+function clearCheckoutHistory(){try{for(const key of ['qzu-access','qzu-renewal',checkoutStorage(false),checkoutStorage(true)])localStorage.removeItem(key);}catch{}}
 function checkoutSecret(){return 'QZO-'+Array.from(crypto.getRandomValues(new Uint8Array(24)),v=>v.toString(16).padStart(2,'0')).join('').toUpperCase();}
 const checkoutPlans=[['week','1 Week','1.99','7 days of private messaging'],['month','1 Month','5.99','A full month of access'],['year','1 Year','69.99','12 months of access'],['lifetime','Lifetime','79.99','Pay once, no renewal']];
 function checkoutName(plan){return checkoutPlans.find(p=>p[0]===plan)?.[1]|| (plan==='monthly'?'Legacy · 5 months':plan==='renewal'?'Legacy renewal':'Access order');}
@@ -3251,7 +3252,7 @@ function showPlanCheckout(renewal){
  }
  const total=el('strong','pay-total'),summary=el('div','pay-summary');summary.append(el('span','','Order total · USD'),total);
  const orders=saved.orders.filter(o=>o.stage!=='redeemed'&&o.stage!=='archived').sort((a,b)=>b.created-a.created);
- if(orders.length){history.append(el('h3','','Saved orders'),el('p','pay-note','Previous orders are separate. Opening one never changes the price of a new purchase.'));for(const o of orders){const label=o.stage==='legacy'?'Previous order · check details':checkoutName(o.plan)+' · '+(o.usd?'$'+o.usd:'Saved quote')+' · '+(o.coin||'LTC');const row=button(label+'  →',()=>{try{updateCheckoutOrder(renewal,o.key,{},true);showInvoice(o.key,null,renewal);}catch(e){dialogError(e);}},'pay-history-row');history.append(row);}}
+ if(orders.length){history.append(el('h3','','Saved orders'),el('p','pay-note','Previous orders are separate. Opening one never changes the price of a new purchase.'));for(const o of orders){const label=o.stage==='legacy'?'Previous order · check details':checkoutName(o.plan)+' · '+(o.priceLabel||(o.usd?'$'+o.usd:'Saved quote'))+' · '+(o.coin||'Legacy');const row=button(label+'  →',()=>{try{updateCheckoutOrder(renewal,o.key,{},true);showInvoice(o.key,null,renewal);}catch(e){dialogError(e);}},'pay-history-row');history.append(row);}}
  shell.append(checkoutHeading(0,renewal?'Extend your access':'Your privacy. Your access.','Choose a plan. No automatic subscription charges.'),cards,el('h3','','Pay with crypto'),coins,notice,summary,terms,purchase,history);
  shell.append(button(renewal?'Enter renewal key':'Redeem Key',()=>showKeyEntry(renewal),'secondary-button'));
  if(!renewal)shell.append(button('Recover account',showAccountRecovery,'secondary-button'),...legalButtons());
@@ -3293,7 +3294,7 @@ function showRenewal(){
 
 function showInvoice(secret,initial,renewal){
  if(playBuild){if(renewal)showRenewal();else showAccess();return;}
- let record=checkoutOrder(renewal,secret),current=null,busy=false,polling=false,serverOffset=0,lastFingerprint='',nextPoll=0;
+ let record=checkoutOrder(renewal,secret),current=null,busy=false,polling=false,serverOffset=0,lastFingerprint='',nextPoll=0,mutation=0,failures=0;
  const shell=el('div','pay-shell pay-invoice'),heading=el('div'),status=el('div','pay-status'),details=el('div','pay-details'),timer=el('p','pay-timer'),errorLine=el('p','pay-note pay-error'),controls=el('div','pay-controls');
  const back=button('All plans & saved orders',()=>{if(busy)return;try{leaveInvoice(renewal,secret);showPlanCheckout(renewal);}catch(e){dialogError(e);}},'secondary-button');
  shell.append(heading,status,details,timer,errorLine,controls,back);
@@ -3303,11 +3304,11 @@ function showInvoice(secret,initial,renewal){
  function persist(patch){try{record=updateCheckoutOrder(renewal,secret,patch);}catch{errorLine.textContent='Unable to save locally. Copy your private order reference before leaving.';}}
  function setHeading(step,title,description){heading.replaceChildren(checkoutHeading(step,title,description));}
  function showReference(){if(!secret.startsWith('QZO-'))return;const ref=el('details','pay-reference');ref.append(el('summary','','Private order reference'),el('p','access-address',secret),el('p','pay-note','Save this reference securely. It is needed to recover this order.'),copy('Copy reference',secret));details.append(ref);}
- function setBusy(value){busy=value;back.disabled=value;}
+ function setBusy(value){if(value)mutation++;busy=value;back.disabled=value;}
  function matching(invoice){return !record?.plan||(invoice.plan===record.plan&&invoice.coin===record.coin&&invoice.usd===record.usd);}
  function renderInvoice(invoice){
   if(!active())return;
-  if(!matching(invoice)){setHeading(1,'Order mismatch','This reference does not match your selected plan.');status.textContent='Payment blocked';details.replaceChildren();controls.replaceChildren();errorLine.textContent='Return to saved orders. Do not pay this invoice.';return;}
+  if(!matching(invoice)){current=null;lastFingerprint='';setHeading(1,'Order mismatch','This reference does not match your selected plan.');status.textContent='Payment blocked';details.replaceChildren();controls.replaceChildren();errorLine.textContent='Return to saved orders. Do not pay this invoice.';return;}
   current=invoice;serverOffset=invoice.now-Date.now();
   const approved=invoice.state==='confirmed'&&!invoice.redeemed&&invoice.activationKey;
   persist({stage:invoice.redeemed?'redeemed':'order',plan:invoice.plan,coin:invoice.coin,usd:invoice.usd,legacy:!invoice.coin,serverState:invoice.state,priceLabel:invoice.usd?'$'+invoice.usd:'€'+invoice.euro});
@@ -3316,7 +3317,7 @@ function showInvoice(secret,initial,renewal){
   const legacy=!invoice.coin&&secret.startsWith('QZO-'),expired=invoice.state==='expired';
   setHeading(approved||invoice.redeemed?2:1,approved?'Payment verified':invoice.redeemed?'Access activated':legacy?'Previous legacy order':invoice.state==='submitted'?'Verifying payment':expired?'Payment window ended':'Complete your payment',approved?'Your access is ready to activate.':legacy?'This is an older, separate EUR order. It is not a new USD purchase.':'Your plan and invoice amount are fixed.');
   status.className='pay-status '+(approved||invoice.redeemed?'success':invoice.state==='submitted'?'waiting':expired||legacy?'warning':'');
-  status.replaceChildren(el('span','pay-status-dot'),el('strong','',invoice.redeemed?'Activated':approved?'Confirmed on blockchain':invoice.state==='submitted'?'Waiting for confirmations':expired?'Quote expired':invoice.state==='rejected'?'Payment rejected':invoice.state==='pending'?'Awaiting payment':invoice.state));
+  status.replaceChildren(el('span','pay-status-dot'),el('strong','',invoice.redeemed?'Activated':approved?(invoice.coin?'Confirmed on blockchain':secret.startsWith('QZO-')?'Payment approved':'Access key verified'):invoice.state==='submitted'?'Waiting for confirmations':expired?'Quote expired':invoice.state==='rejected'?'Payment rejected':invoice.state==='pending'?'Awaiting payment':invoice.state));
   const order=el('div','pay-order-summary');order.append(el('div','',checkoutName(invoice.plan)),el('strong','',invoice.usd?'$'+invoice.usd:legacy?'€'+invoice.euro:'Access key'));details.append(order);
   if(approved){
    const keyBox=el('div','pay-success-box');keyBox.append(el('div','pay-success-mark','✓'),el('h3','','Your activation key'),el('p','access-address',invoice.activationKey),copy('Copy key',invoice.activationKey));details.append(keyBox);
@@ -3342,7 +3343,7 @@ function showInvoice(secret,initial,renewal){
    const valid=()=>invoice.coin==='SOL'?/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(input.value.trim()):/^[a-f0-9]{64}$/i.test(input.value.trim());
    const submit=el('button','primary-button pay-primary',invoice.state==='submitted'?'Update transaction ID':'Verify payment');submit.type='submit';submit.disabled=!valid()||(invoice.state==='submitted'&&(legacy||invoice.confirmations>0));
    input.disabled=invoice.state==='submitted'&&(legacy||invoice.confirmations>0);
-   input.addEventListener('input',()=>{persist({txDraft:input.value});submit.disabled=!valid();});form.append(input,submit);
+   input.addEventListener('input',()=>{persist({txDraft:input.value});submit.disabled=busy||!valid();});form.append(input,submit);
    form.addEventListener('submit',async e=>{e.preventDefault();if(busy||submit.disabled||!valid())return;setBusy(true);submit.disabled=true;const txid=input.value.trim();persist({txDraft:txid});try{const result=await api('access/submit',{key:secret,txid});if(active()){errorLine.textContent='';renderInvoice(result);}}catch(e){if(active())errorLine.textContent=errorMessage(e);}finally{setBusy(false);submit.disabled=!valid()||(current?.state==='submitted'&&current?.confirmations>0);}});controls.append(form);
   }else details.append(el('p','pay-note','This order cannot be paid. Keep its reference if you need support.'));
   showReference();updateTimer();
@@ -3357,8 +3358,8 @@ function showInvoice(secret,initial,renewal){
  }
  async function tick(force=false){
   if(!active()||polling||document.hidden)return;clearTimeout(accessTimer);updateTimer();polling=true;
-  try{if(!busy&&(force||Date.now()>=nextPoll)){nextPoll=Date.now()+5000;const invoice=await requestInvoice();if(active()){errorLine.textContent='';renderInvoice(invoice);}}}
-  catch(e){if(active()){errorLine.textContent=errorMessage(e)+' · Your order is saved. Retry below or reconnect.';if(!current){status.textContent='Waiting for connection';controls.replaceChildren(button('Retry',()=>tick(true),'primary-button pay-primary'));}}}
+  try{if(!busy&&(force||Date.now()>=nextPoll)){nextPoll=Date.now()+5000;const observed=mutation;const invoice=await requestInvoice();if(active()&&!busy&&observed===mutation){failures=0;errorLine.textContent='';renderInvoice(invoice);}}}
+  catch(e){failures++;nextPoll=Date.now()+Math.min(60000,5000*2**Math.min(failures,4));if(active()){errorLine.textContent=errorMessage(e)+' · Your order is saved. Retry below or reconnect.';if(!current){status.textContent='Waiting for connection';controls.replaceChildren(button('Retry',()=>tick(true),'primary-button pay-primary'));}}}
   finally{polling=false;if(active()&&!current?.redeemed)accessTimer=setTimeout(()=>tick(),1000);}
  }
  setHeading(1,record?.stage==='intent'?'Preparing your order':'Restoring your order',record?.usd?checkoutName(record.plan)+' · $'+record.usd+' · '+record.coin:'Retrieving the saved invoice.');status.textContent='Connecting securely…';showReference();resumeCheckout=()=>tick(true);
