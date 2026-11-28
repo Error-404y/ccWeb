@@ -7,7 +7,7 @@ if(!process.argv[2])throw Error('Usage: npm run backup:private -- /private/path/
 const target=resolve(process.argv[2]);
 if(!existsSync(source)||source===target)throw Error('Invalid backup source or destination.');
 const fd=openSync(target,'wx',0o600);closeSync(fd);
-const excluded=new Set(['mobile_support_rooms','push_devices','feedback_inbox','abuse_reports','report_media','moderation_actions','encryption_prekeys','payment_cases','payment_case_messages','payment_tickets','payment_ticket_messages','user_tickets','user_ticket_messages','user_ticket_sellers']);
+const excluded=new Set(['mobile_support_rooms','push_devices','feedback_inbox','abuse_reports','report_media','moderation_actions','encryption_prekeys','payment_cases','payment_case_messages','payment_tickets','payment_ticket_messages','user_tickets','user_ticket_messages','user_ticket_sellers','contact_deletions']);
 const quote=name=>'"'+name.replaceAll('"','""')+'"';
 let input,output;
 try{
