@@ -1562,7 +1562,8 @@ async function showEncryption(room) {
     return;
   }
   const local = roomKeys.get(room.id);
-  if(!local?.context||!room.encryption.peer){info('Connecting securely','No code comparison is needed. A contact who has not registered encryption keys must unlock the updated app before the first encrypted message can be sent.');return;}
+  if(!local?.context||!room.encryption.peer){info('Connecting securely',room.peerRole==='admin'||state.supportAgent?'qzu. is establishing an encrypted connection. No safety code is needed. If this takes longer, keep the app open while Support connects.':'Waiting for your contact’s encryption keys. They may need to unlock qzu. once. Messages stay protected and will not be sent unencrypted.');return;}
+  if(room.peerRole==='admin'||state.supportAgent){info(encryptionReady(room)?'End-to-end encrypted':'Connecting securely',encryptionReady(room)?'This conversation is encrypted using registered device keys. No manual code comparison is required.':'Your encryption keys are ready. Waiting for the other device to finish connecting.');return;}
   const code = local.context.code;
   const content = [
     el('p', '', 'Compare the entire safety code in person or through a separate trusted channel. Do not confirm unless every character matches.'),
