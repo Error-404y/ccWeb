@@ -145,7 +145,7 @@
         <header class="page-header"><a href="/chat" class="icon-button" aria-label="Back to chats"><svg><use href="#back"/></svg></a><a class="brand" href="/chat" aria-label="qzu."><svg class="wordmark"><use href="#logo"/></svg></a><span class="header-spacer"></span></header>
         <div class="page-content">
           <div class="panel connect-panel">
-            <h1>Connect</h1>
+            <h1>Connect</h1><p class="connect-subtitle">Scan or share your private code</p>
             <div class="qr-stage"><div class="qr-orbit" aria-hidden="true"></div><div id="qrBox" class="qr-box"><img id="qrImage" alt="Your invite QR code" hidden><svg id="qrPlaceholder"><use href="#qr"/></svg></div><div class="qr-corners" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
             <div class="code-line"><span id="inviteCode">– – – – – –</span><button id="copyCode" class="icon-button" aria-label="Copy code" disabled><svg><use href="#copy"/></svg></button></div>
             <progress id="inviteProgress" class="invite-progress" max="1" value="0" aria-label="Remaining connection code lifetime"></progress><div id="inviteTimer" class="invite-timer">No active code</div>
@@ -155,8 +155,8 @@
               <input id="enterCode" aria-label="Enter code" placeholder="Enter code" maxlength="6" autocapitalize="characters" autocomplete="off" spellcheck="false">
               <button class="primary-button" type="submit">Add</button>
             </form>
-            <button id="scanCode" class="secondary-button"><svg><use href="#qr"/></svg>Scan QR</button>
-            <button id="createGroup" class="secondary-button"><svg><use href="#plus"/></svg>Create group</button>
+            <div class="connect-secondary"><button id="scanCode" class="secondary-button"><svg><use href="#qr"/></svg>Scan QR</button>
+            <button id="createGroup" class="secondary-button"><svg><use href="#plus"/></svg>Create group</button></div>
           </div>
         </div>
       </section>
@@ -205,8 +205,8 @@
             <button class="settings-row emergency-row" id="emergency"><svg><use href="#terminal"/></svg><span>emg.exe</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <div class="settings-row"><svg><use href="#clock"/></svg><span>Chat lifetime</span><strong>24 hours</strong></div>
           </div>
-          <div class="panel settings-panel" data-settings-category="notifications" hidden><h1>Notifications</h1>            <button class="settings-row" id="privateNotifications" type="button"><svg><use href="#lock"/></svg><span>Private notifications</span><strong id="pushStatus">Off</strong><svg class="chevron"><use href="#chevron"/></svg></button>
-<p class="background-pin-note">Notification delivery also depends on your device permissions.</p></div>
+          <div class="panel settings-panel" data-settings-category="notifications" hidden><h1>Notifications</h1>            <div class="settings-row"><svg><use href="#lock"/></svg><span>Message notifications</span><label class="privacy-switch"><input id="privateNotifications" type="checkbox" aria-label="Message notifications" checked><span></span></label></div>
+<p id="pushStatus" class="background-pin-note" role="status">Notification delivery also depends on your device permissions.</p></div>
           <div class="panel settings-panel" data-settings-category="motion" hidden><h1>Motion &amp; Experience</h1><div class="settings-row"><svg><use href="#terminal"/></svg><span>Motion style</span><strong>Balanced</strong></div><p class="background-pin-note">Animations respect your device’s reduced-motion preference.</p></div>
           <div class="panel settings-panel" data-settings-category="connections" hidden><h1>Connections</h1>            <button class="settings-row" id="manageContacts"><svg><use href="#avatar"/></svg><span>Manage contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="blockedContacts"><svg><use href="#lock"/></svg><span>Blocked contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
