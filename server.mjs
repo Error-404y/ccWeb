@@ -277,6 +277,7 @@ app.get('/api/control/support',(req,res)=>{
  res.json({requests:archived?[]:chats.supportRequests(id,true),deletions:archived?[]:deletionInbox(id),rooms:archived?[]:chats.snapshot(id).filter(r=>r.support&&r.supportAgent&&r.supportStatus==='accepted').map(r=>({id:r.id,expires:r.expires,deletionRequested:r.deletionRequested,messages:r.messages.slice(-50).map(m=>({mine:m.mine,at:m.at,text:m.deleted?'Deleted message':m.once||m.burnSeconds?'Temporary message':m.kind==='text'?m.text:'Attachment',sender:m.sender}))})),finished:chats.finishedSupport(id,archived)});
 });
 app.post('/api/control/support/delete',(req,res)=>{const id=req.body?.id;if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});res.json(approveDeletion(req.account.id,id));});
+app.post('/api/control/support/delete-direct',(req,res)=>{const id=req.body?.id,room=chats.rooms.get(id);if(req.body?.confirmed!==true||!room||room.supportAgent!==req.account.id)return res.status(403).json({error:'Assigned support conversation and confirmation required.'});const recipients=room.users.filter(x=>x!==req.account.id);chats.remove(req.account.id,id,true);push.notify(recipients);res.json({ok:true});});
 app.post('/api/control/support/finish',(req,res)=>res.json(chats.finishSupport(req.account.id,req.body?.id,req.body?.action)));
 app.post('/api/control/archive',(req,res)=>{const b=req.body||{};if(b.category==='support')return res.json(chats.finishSupport(req.account.id,b.id,b.restore===true?'restore':'archive'));res.json(archiveControlRecord(db,b.category,b.id,req.account.id,b.restore===true));});
 app.post('/api/control/support/respond',(req,res)=>res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true)));
@@ -505,7 +506,7 @@ app.post('/api/support/respond', guard('support-respond', 40, 60000), (req,res) 
 });
 app.post('/api/contacts/open', guard('contacts-open', 30, 60000), (req,res) => res.json({id:chats.openContact(req.account.id,req.body?.id)}));
 app.post('/api/contacts/update', guard('contacts-update', 30, 60000), (req,res) => res.json(chats.updateContact(req.account.id,req.body?.id,req.body||{})));
-app.post('/api/contacts/remove', guard('contacts-remove', 20, 60000), (req,res) => {const peer=contacts.peer(req.account.id,req.body?.id),result=chats.removeContact(req.account.id,req.body.id,req.body.block===true);if(!result.duplicate)notifyDeletionAdmin(peer);res.json(result);});
+app.post('/api/contacts/remove', guard('contacts-remove', 20, 60000), (req,res) => {const peer=contacts.peer(req.account.id,req.body?.id),result=chats.removeContact(req.account.id,req.body.id,req.body.block===true);if(!result.duplicate)notifyDeletionAdmin(peer);if(req.account.access_plan==='admin'&&!result.requested)auditLedger.record(req.account.id,'mobile','contacts/remove','contact',req.body.id,peer);res.json(result);});
 app.post('/api/login/change', guard('login-change', 10, 60_000), (req, res) => {
   const result = changeLogin(db, req.account.id, req.body?.current, req.body?.next);
   if (result !== 'ok') return loginError(res, result);
@@ -757,7 +758,7 @@ app.post('/api/receipts', guard('receipts', 100, 60_000), (req, res) => {
 app.post('/api/chat/delete', (req, res) => {
   const room=chats.rooms.get(req.body?.id),alreadyRequested=room?.deletionRequested;
   const result=chats.remove(req.account.id, req.body?.id, req.account.access_plan==='admin');
-  if(result?.requested&&!result.duplicate&&!alreadyRequested&&room)notifyDeletionAdmin(room.users.find(x=>x!==req.account.id));else if(!result?.requested&&room)push.notify(room.users.filter(x=>x!==req.account.id));
+  if(result?.requested&&!result.duplicate&&!alreadyRequested&&room)notifyDeletionAdmin(room.users.find(x=>x!==req.account.id));else if(!result?.requested&&room){push.notify(room.users.filter(x=>x!==req.account.id));if(req.account.access_plan==='admin')auditLedger.record(req.account.id,'mobile','chat/delete','chat',req.body.id);}
   res.json({ok:true,...result});
 });
 app.post('/api/pin/issue', guard('pin-issue', 5, 60_000), (req, res) => {
