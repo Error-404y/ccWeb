@@ -2488,7 +2488,8 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .connect-secondary{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .connect-secondary button{min-width:0;padding-inline:6px}
 @container (min-height:540px){#connectPage .connect-panel{gap:10px}}
-@media(min-height:730px){#connectPage .page-content:not(:focus-within){overflow:hidden}}
+#connectPage .page-content.connect-fits{overflow:hidden}
+#connectPage .page-content:not(.connect-fits){align-items:safe center;overflow:auto}
 @media(max-height:729px){#connectPage .page-content{align-items:flex-start}}
 @media(max-height:600px){#connectPage .connect-panel{padding:4px 10px;gap:5px}#connectPage .qr-box{width:112px;height:112px}}
 
