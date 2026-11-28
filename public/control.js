@@ -95,7 +95,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
      main.append(n);
     }
    }else if(view==='Payments'){
-    for(const p of data.items){const n=card(p.id,[status(p.state),details([['Plan',p.plan],['Network',p.coin||'LTC (legacy)'],['Price',p.usd_cents==null?'€'+(p.eur_cents/100).toFixed(2):'$'+(p.usd_cents/100).toFixed(2)],['Transaction',p.txid],['Confirmations',p.confirmations],['Verified',date(p.verified_at)],['Account',p.redeemed_account]])]);if(archived||p.state==='rejected'||(p.state==='confirmed'&&p.redeemed))n.append(archiveAction('payments',p.id,archived));main.append(n);}
+    for(const p of data.items){const n=card(p.id,[status(p.state==='pending'&&p.expires<=Date.now()?'expired':p.state),details([['Plan',p.plan],['Network',p.coin||'LTC (legacy)'],['Price',p.usd_cents==null?'€'+(p.eur_cents/100).toFixed(2):'$'+(p.usd_cents/100).toFixed(2)],['Expires',date(p.expires)],['Transaction',p.txid],['Confirmations',p.confirmations],['Verified',date(p.verified_at)],['Account',p.redeemed_account]])]);if(archived||p.state==='rejected'||(p.state==='pending'&&p.expires<=Date.now())||(p.state==='confirmed'&&p.redeemed))n.append(archiveAction('payments',p.id,archived));main.append(n);}
    }else if(view==='Payment tickets'){
     const open=data.items.filter(t=>!['completed','rejected'].includes(t.status)),done=data.items.filter(t=>['completed','rejected'].includes(t.status));
     for(const [title,items] of [['Open Tickets',open],['Completed Tickets',done]]){
