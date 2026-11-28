@@ -1673,13 +1673,20 @@ function renderAdminFeedback(){
   if(!feedbackItems.length)list.append(el('p','support-help-notes','No feedback yet.'));
   for(const entry of feedbackItems){
     const item=el('div','request-item');
-    item.append(el('strong','','Feedback #'+entry.id+(entry.reviewed?' · Reviewed':' · New')),el('span','',new Date(entry.at).toLocaleString()),el('p','support-request-preview',privacyMode?'Feedback hidden':entry.text));
+    item.append(el('strong','','Feedback #'+entry.id),el('span','',new Date(entry.at).toLocaleString()),el('p','support-request-preview',privacyMode?'Feedback hidden':entry.text));
+    const workflow=entry.workflow|| (entry.reviewed?'solved':'inspection');item.append(el('p','case-status '+workflow,workflow==='solved'?'Solved':workflow==='help'?'Need Additional Help':'Under Inspection'));
     const actions=el('div','request-actions');
     const act=async action=>{
       try{await api('admin/feedback/'+action,{id:entry.id});closeModal();await refresh();if(state.supportAgent&&location.pathname==='/settings/admin-feedback')await loadAdminFeedback();}
       catch(error){showError(error);}
     };
-    if(!entry.reviewed)actions.append(button('Mark reviewed',()=>act('review'),'secondary-button'));
+    actions.append(button('Review case',()=>{
+      const note=el('textarea','edit-input');note.maxLength=1000;note.placeholder='Internal support note';
+      const controls=[el('p','',privacyMode?'Feedback hidden':entry.text),note];
+      for(const event of entry.events||[])controls.push(el('p','','Admin '+(event.actor||'Deleted')+' · '+event.status+' · '+new Date(event.at).toLocaleString()+' · '+event.note));
+      for(const [label,status] of [['Under Inspection','inspection'],['Need Additional Help','help'],['Solved','solved']])controls.push(button(label,async()=>{try{await api('admin/feedback/status',{id:entry.id,status,note:note.value});closeModal();await refresh();await loadAdminFeedback();}catch(e){modalError(e);}},'secondary-button'));
+      controls.push(button('Close',closeModal,'secondary-button'));show('Feedback #'+entry.id,controls);
+    },'secondary-button'));
     actions.append(button('Delete',()=>show('Delete feedback?',[el('p','','Remove this feedback permanently?'),button('Delete',()=>act('delete'),'primary-button danger-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
     item.append(actions);list.append(item);
   }
