@@ -866,7 +866,7 @@ function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m
 function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+(state.official?.unread?1:0);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
-  $('supportOpen').hidden=!state.supportAvailable || state.rooms.some(room=>room.mobileSupport&&!room.supportAgent&&room.expires>serverNow());
+  $('supportOpen').hidden=!state.supportAvailable || state.rooms.some(room=>(room.peerRole==='admin'||room.mobileSupport&&!room.supportAgent)&&room.expires>serverNow())||(state.contacts||[]).some(c=>c.peerRole==='admin'&&c.deleteAt>serverNow());
   const now = serverNow(), rooms = state.rooms.filter(r => r.expires > now);
   if (selected !== officialChannel && !rooms.some(r => r.id === selected)) {
     if (selected !== null) {
@@ -925,7 +925,7 @@ function renderChat() {
       const preview = r.deletionRequested ? 'Deletion requested' : identityChanged(r) ? 'Contact identity changed' : r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode || r.contact?.muted ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
       content.append(name, el('span', 'contact-preview' + (r.contact?.warning || identityChanged(r) ? ' contact-warning' : ''), preview));
-      b.append(svg(r.support && !r.supportAgent ? 'avatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
+      b.append(svg(r.peerRole==='admin'||r.support&&!r.supportAgent ? 'supportAvatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
       const count=unreadCount(r);if(count){const badge=el('span','unread-badge',count>99?'99+':String(count));badge.setAttribute('aria-label',count+' unread messages');b.append(badge);}
       b.addEventListener('click', () => selectRoom(r.id));
       list.append(b);
@@ -938,7 +938,7 @@ function renderChat() {
       addContactMarks(name,contact);if(contact.peerRole==='admin'||contact.peerRole==='verified-seller'){const badge=svg(contact.peerRole==='admin'?'adminBadge':'sellerBadge','admin-badge');badge.setAttribute('aria-label',contact.peerRole==='admin'?'Verified Admin':'Verified Seller');badge.removeAttribute('aria-hidden');name.append(badge);}
       row.dataset.contactPriority=String(contact.favorite?1:0);
       content.append(name,el('span','contact-preview'+(contact.warning?' contact-warning':''),contact.warning?'Contact deletion incoming':'Start a new chat'));
-      row.append(svg('avatar','avatar'),content,svg('chevron','official-chevron'));
+      row.append(svg(contact.peerRole==='admin'?'supportAvatar':'avatar','avatar'),content,svg('chevron','official-chevron'));
       row.addEventListener('click',async()=>{
         row.disabled=true;
         try {
@@ -971,7 +971,7 @@ function renderChat() {
   encryptionStatus.hidden = !showDirectSecurity;
   encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? '🔒 Encrypted' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : 'Connecting securely';
   $('threadBadge').toggleAttribute('hidden',!(current?.peerRole==='admin'||current?.peerRole==='verified-seller'||(isAdmin&&!current?.supportAgent)));$('threadBadge').querySelector('use').setAttribute('href',current?.peerRole==='verified-seller'?'#sellerBadge':'#adminBadge');$('threadBadge').setAttribute('aria-label',current?.peerRole==='verified-seller'?'Verified Seller':'Verified Admin');
-  $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#avatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
+  $('threadAvatar').setAttribute('href', current?.peerRole==='admin'||current?.support&&!current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
   $('chatOptions').hidden = true;
   $('profileAvatar').disabled=!current||readOnly;$('profileName').disabled=!current||readOnly;updateNavigation();
@@ -1792,7 +1792,9 @@ async function confirmSupport() {
     show('Support inbox', controls);
     return;
   }
-  if (!state.supportAvailable) return info('Support','Support is currently unavailable. Please try again later.');
+  const existing=state.rooms.find(r=>r.peerRole==='admin'&&r.expires>serverNow());if(existing){closeModal();navigate('/chat');selectRoom(existing.id);return;}
+  const saved=(state.contacts||[]).find(c=>c.peerRole==='admin'&&c.deleteAt>serverNow());
+  if (!state.supportAvailable&&!saved) return info('Support','Support is currently unavailable. Please try again later.');
   const epoch=authEpoch;
   $('writeSupport').disabled=true;
   $('supportOpen').disabled=true;
@@ -2569,7 +2571,7 @@ $('chatOptions').addEventListener('click', () => {
     return;
   }
   if (room.admin&&!room.support) return;
-  const profileMark=svg(room.group?'groupAvatar':'avatar','profile-transition-mark');
+  const profileMark=svg(room.peerRole==='admin'?'supportAvatar':room.group?'groupAvatar':'avatar','profile-transition-mark');
   const controls = [profileMark,el('h3','profile-heading',nameFor(room))];
   if(room.support){show('Chat options',[button('Report support conversation',()=>showReport(room),'secondary-button'),button('Close',closeModal,'secondary-button')]);return;}
   if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
