@@ -48,7 +48,7 @@ test('tickets are one per customer, admin first, seller restricted to assigned t
  t.adminAction(a.id,'admin','share',seller,'ABC234');assert.equal(t.view(a.id,'customer').messages.at(-1).text,'Seller connection code: ABC234');
  t.adminAction(a.id,'admin','close');assert.equal(t.count(),0);assert.equal(t.list('admin',true,true)[0].id,a.id);assert.throws(()=>t.send(a.id,'customer',false,'closed',randomUUID()));
  assert.notEqual(t.open('customer','Other','Another request',randomUUID()).id,a.id);
- now+=7*86400000;t.sweep();assert.throws(()=>t.view(a.id,'customer'));assert.equal(t.count(),1);
+ now+=7*86400000;t.sweep();assert.equal(t.view(a.id,'customer').messages.length,0);assert.ok(!t.list('customer').some(x=>x.id===a.id));assert.equal(t.list('admin',true,true)[0].id,a.id);assert.equal(t.count(),1);
  }finally{db.close();}
 });
 test('announcement deletion removes record for every reader without placeholder, and requires admin',()=>{
@@ -79,4 +79,17 @@ test('new desktop routes sit behind admin auth; mobile ticket UI is integrated',
  const gate=server.indexOf("app.use('/api/control',(req,res,next)=>");
  for(const path of ['/api/control/sellers','/api/control/chats','/api/control/tickets','/api/control/announcements'])assert.ok(server.indexOf("app.get('"+path+"'")>gate);
  assert.ok(html.includes('data-tab="tickets"'));assert.ok(app.includes('QZU-SELLER-'));assert.ok(app.includes('deletedRevision'));
+});
+
+test('multiple sellers, transfer, immediate removal and permanent archive',()=>{
+ const db=setup();try{
+ const admins=new Set(['a','b']), sellers=new Set(['s1','s2']);let now=start;
+ const t=userTickets(db,{now:()=>now,isAdmin:id=>admins.has(id),isSeller:id=>sellers.has(id)});
+ const {id}=t.open('owner','Other','Hello',randomUUID());t.adminAction(id,'a','accept');
+ t.adminAction(id,'a','assign','s1');t.adminAction(id,'a','assign','s2');assert.deepEqual(t.view(id,'a',true).sellers,['s1','s2']);
+ assert.ok(t.list('s2').some(x=>x.id===id));t.adminAction(id,'a','remove','s1');assert.throws(()=>t.view(id,'s1'));assert.equal(t.list('s1').length,0);assert.throws(()=>t.send(id,'s1',false,'bad',randomUUID()));
+ t.adminAction(id,'a','transfer','b');assert.throws(()=>t.send(id,'a',true,'bad',randomUUID()));t.send(id,'b',true,'ok',randomUUID());
+ assert.throws(()=>t.adminAction(id,'b','delete'));t.adminAction(id,'b','close');assert.equal(t.list('owner').length,0);assert.equal(t.list('s2').length,0);assert.deepEqual(t.view(id,'s2').messages,[]);
+ now+=365*86400000;t.sweep();assert.equal(t.list('b',true,true).length,1);assert.throws(()=>t.adminAction(id,'s2','delete'));t.adminAction(id,'b','delete');assert.equal(t.list('b',true,true).length,0);
+ }finally{db.close();}
 });
