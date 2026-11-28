@@ -1,4 +1,5 @@
 import express from 'express';
+import {createMonitoring} from './lib/monitoring.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { initActivity, recordActivity, listActivity, pruneActivity } from './lib/activity.mjs';
@@ -59,6 +60,8 @@ const desktopRequest=req=>!req.get('x-qzu-device')&&!nativeOrigins.has(req.get('
 if (production && !publicOrigin.startsWith('https://')) throw new Error('HTTPS required.');
 if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 app.disable('x-powered-by');
+const monitoring=createMonitoring({write:line=>console.log(line)});
+app.use(monitoring.middleware);
 app.use((req, res, next) => {
   res.set({
     'Cache-Control': 'no-store',
@@ -232,6 +235,7 @@ app.use('/api/control',(req,res,next)=>{
 });
 app.post('/api/control/logout',(req,res)=>{controlSessions.revoke(readControl(req));res.clearCookie(controlCookie,controlCookieOptions);res.json({ok:true});});
 app.get('/api/control/overview',(req,res)=>res.json({...controlOverview(db),paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length}));
+app.get('/api/control/monitoring',(req,res)=>res.json({...monitoring.snapshot(),version,environment:production?'production':'development',activeDesktopSessions:controlSessions.activeDesktopIds().length,liveRequests:liveTotal,paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length}));
 app.get('/api/control/inbox',(req,res)=>res.json({version,environment:production?'production':'development',paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length,adminId:req.account.id}));
 app.get('/api/control/accounts',(req,res)=>res.json({items:controlAccounts(db,req.query.q||'',req.query.after||'')}));
 app.get('/api/control/keys',(req,res)=>res.json({items:listAccessKeys(db,req.query.q||'')}));
@@ -763,7 +767,7 @@ app.get('/downloads/' + apkName, (req, res) => {
   if (!existsSync(apkPath)) return res.sendStatus(404);
   res.download(apkPath, apkName);
 });
-app.get(['/control','/control.html'],(req,res)=>desktopRequest(req)?res.sendFile(resolve(root,'public/control.html')):res.status(403).type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu. Control</title><h1>Desktop only</h1><p>Open qzu. Control on a Windows or Mac computer.</p></html>'));
+app.get(['/control','/control.html','/control/monitoring'],(req,res)=>desktopRequest(req)?res.sendFile(resolve(root,'public/control.html')):res.status(403).type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu. Control</title><h1>Desktop only</h1><p>Open qzu. Control on a Windows or Mac computer.</p></html>'));
 app.get(['/control.js','/control.css'],(req,res)=>res.sendFile(resolve(root,'public',req.path.slice(1))));
 app.use((req, res, next) => {
   if (!mobileOnly) return next();
