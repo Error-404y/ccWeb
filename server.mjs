@@ -201,11 +201,11 @@ function ticketOrder(req){
  return row;
 }
 function notifyPaymentAdmins(){push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND device_id IS NOT NULL").all().map(a=>a.id));}
-app.post('/api/access/ticket/open',paymentRate('ticket-open',10),(req,res)=>{const r=ticketOrder(req);const existing=db.prepare('SELECT invoice FROM payment_tickets WHERE invoice=?').get(r.id);tickets.open(r.id);if(!existing)notifyPaymentAdmins();res.json(tickets.view(r.id,req.body.key));});
-app.post('/api/access/ticket/state',paymentRate('ticket-state',60),(req,res)=>{const r=ticketOrder(req);res.json(tickets.view(r.id,req.body.key));});
-app.post('/api/access/ticket/send',paymentRate('ticket-send',20),(req,res)=>{const r=ticketOrder(req);tickets.send(r.id,'customer',req.body);notifyPaymentAdmins();res.json(tickets.view(r.id,req.body.key));});
-app.post('/api/access/ticket/proof',paymentRate('ticket-proof',20),(req,res)=>{const r=ticketOrder(req),proof=tickets.proof(r.id,req.body?.message);if(!proof)return res.sendStatus(404);res.json({data:Buffer.from(proof).toString('base64')});});
-app.post('/api/access/ticket/transaction',paymentRate('ticket-transaction',8),(req,res)=>{const r=ticketOrder(req);tickets.view(r.id);submitPayment(db,req.body.key,req.body.txid);res.json(tickets.view(r.id,req.body.key));});
+app.post('/api/access/ticket/open',paymentRate('ticket-open',10),(req,res)=>{const r=ticketOrder(req),t=tickets.open(r.id,{fresh:req.body?.fresh===true});if(t.created===t.updated&&!t.closed)notifyPaymentAdmins();res.json(tickets.view(t.id,r.id,req.body.key));});
+app.post('/api/access/ticket/state',paymentRate('ticket-state',60),(req,res)=>{const r=ticketOrder(req);res.json(tickets.view(req.body?.ticketId,r.id,req.body.key));});
+app.post('/api/access/ticket/send',paymentRate('ticket-send',20),(req,res)=>{const r=ticketOrder(req);tickets.send(req.body?.ticketId,'customer',req.body,r.id);notifyPaymentAdmins();res.json(tickets.view(req.body.ticketId,r.id,req.body.key));});
+app.post('/api/access/ticket/proof',paymentRate('ticket-proof',20),(req,res)=>{const r=ticketOrder(req),proof=tickets.proof(req.body?.ticketId,req.body?.message,r.id);if(!proof)return res.sendStatus(404);res.json({data:Buffer.from(proof).toString('base64')});});
+app.post('/api/access/ticket/transaction',paymentRate('ticket-transaction',8),(req,res)=>{const r=ticketOrder(req),t=tickets.view(req.body?.ticketId,r.id);if(t.closed)return res.status(409).json({error:'Ticket closed.'});submitPayment(db,req.body.key,req.body.txid);res.json(tickets.view(t.id,r.id,req.body.key));});
 app.post('/api/access/renew', paymentRate('renewal', 10), (req, res) => {
   if (!req.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock'))) return res.status(403).json({ error: 'Unlock your account.' });
   res.json(applyRenewal(db, req.body?.key, req.account.id));
@@ -241,8 +241,10 @@ app.get('/api/control/payment-tickets',(req,res)=>res.json({items:tickets.list()
 app.post('/api/control/payment-tickets/state',(req,res)=>res.json(tickets.view(req.body?.id)));
 app.post('/api/control/payment-tickets/send',(req,res)=>{tickets.send(req.body?.id,req.account.id,{text:req.body?.text,requestId:req.body?.requestId});res.json(tickets.view(req.body?.id));});
 app.post('/api/control/payment-tickets/proof',(req,res)=>{const proof=tickets.proof(req.body?.id,req.body?.message);if(!proof)return res.sendStatus(404);res.json({data:Buffer.from(proof).toString('base64')});});
-app.post('/api/control/payment-tickets/verify',async(req,res)=>{const id=req.body?.id,t=tickets.view(id);if(t.state==='submitted')await verifyCryptoInvoice(db,id);res.json(tickets.view(id));});
+app.post('/api/control/payment-tickets/verify',async(req,res)=>{const id=req.body?.id,t=tickets.view(id);if(t.state==='submitted')await verifyCryptoInvoice(db,t.invoiceId);res.json(tickets.view(id));});
 app.post('/api/control/payment-tickets/release',(req,res)=>{tickets.release(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/review',(req,res)=>{tickets.review(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/reject',(req,res)=>{tickets.reject(req.body?.id,req.account.id,req.body?.reason);res.json(tickets.view(req.body?.id));});
 app.post('/api/control/payment-tickets/close',(req,res)=>{tickets.close(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
 app.get('/api/control/support',(req,res)=>res.json({requests:chats.supportRequests(req.account.id,true),rooms:chats.snapshot(req.account.id).filter(r=>r.support&&r.supportAgent&&r.supportStatus==='accepted').map(r=>({id:r.id,expires:r.expires,deletionRequested:r.deletionRequested,messages:r.messages.slice(-50).map(m=>({mine:m.mine,at:m.at,text:m.deleted?'Deleted message':m.once||m.burnSeconds?'Temporary message':m.kind==='text'?m.text:'Attachment',sender:m.sender}))}))}));
 app.post('/api/control/support/respond',(req,res)=>res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true)));
