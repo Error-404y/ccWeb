@@ -18,7 +18,7 @@ import { openAccounts, createAccount, findAccount, issuePin, usePin, requestRese
 import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey } from './lib/access.mjs';
 import {initControl,createControlSessions,issueRecovery,recoverAccount,controlOverview,controlAccounts,accountAction,controlPayments,controlAudit} from './lib/control.mjs';
 import {listAccessKeys,generatePlanKeys,replaceUnusedKey,revokeAccessKey} from './lib/access.mjs';
-import {initPayments,COINS,createCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice} from './lib/crypto-payments.mjs';
+import {initPayments,COINS,createCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice,verifyNetwork} from './lib/crypto-payments.mjs';
 import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
@@ -137,7 +137,7 @@ async function paymentLoop() {
   if (paymentBusy) return;
   paymentBusy = true;
   try {
-    const pending=db.prepare("SELECT id,coin FROM access_invoices WHERE coin IS NOT NULL AND state='submitted' AND submitted>? ORDER BY COALESCE(verified_at,0),submitted LIMIT 20").all(Date.now()-7*86400000);
+    const pending=db.prepare("SELECT id,coin FROM access_invoices WHERE coin IS NOT NULL AND state='submitted' AND submitted>? ORDER BY COALESCE(last_checked,0),submitted LIMIT 20").all(Date.now()-7*86400000);
     for(const row of pending)if(rpcConfigured(row.coin))await verifyCryptoInvoice(db,row.id).catch(()=>{});
     if (process.env.QZU_PAYMENT_WEBHOOK) {
       const rows = db.prepare("SELECT id,plan,sats,eur_cents,usd_cents,coin,verified_at FROM access_invoices WHERE state='confirmed' AND notified=0 LIMIT 20").all();
@@ -167,7 +167,7 @@ app.post('/api/access/invoice',paymentRate('invoice',5),async(req,res)=>{
  let invoice;
  if(coin){
   if(!Object.hasOwn(COINS,coin)||!rpcConfigured(coin))return res.status(503).json({error:'Payment network not configured. No payment has been requested.'});
-  invoice=createCryptoInvoice(db,plan,coin,await quotePrice(coin),account);
+  const [,price]=await Promise.all([verifyNetwork(coin),quotePrice(coin)]);invoice=createCryptoInvoice(db,plan,coin,price,account);
  }else{
   if(plan!=='monthly'&&plan!=='renewal')return res.status(400).json({error:'Choose a payment network.'});
   if(plan==='renewal'&&req.account?.access_plan!=='monthly')return res.status(403).json({error:'Legacy monthly renewal only.'});
