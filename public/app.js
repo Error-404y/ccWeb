@@ -842,10 +842,10 @@ function showContactManagement(contact) {
     try{await api('contacts/update',{id:contact.id,nickname:field.value.trim(),favorite:favorite.checked,muted:muted.checked});closeModal();await refresh();}
     catch(error){modalError(error);save.disabled=false;}
   });
-  const confirmRemove=block=>show(block?'Block contact?':'Remove contact?',[el('p','',block?'This removes the contact and prevents new connections.':'This removes the contact and shared chat for both users.'),button(block?'Block':'Remove',async()=>{try{await api('contacts/remove',{id:contact.id,block});closeModal();await refresh();}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]);
+  const confirmRemove=block=>{const request=contact.peerRole==='admin'&&!state.supportAgent;show(block?'Block contact?':request?'Request contact deletion?':'Delete contact?',[el('p','',block?'This removes the contact and prevents new connections.':request?'Ask Support to delete the contact and shared conversation for both sides.':'This deletes the contact and shared conversation for both users.'),button(block?'Block':request?'Request deletion':'Delete contact',async()=>{try{const result=await api('contacts/remove',{id:contact.id,block});closeModal();await refresh();if(result.requested)info('Deletion requested','Support has received your contact deletion request.');}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]);};
   const controls=[el('p','',contact.trusted?'Trusted contact · 30 days inactivity':'Contact · 14 days inactivity'),field,favoriteLabel,mutedLabel,save];
   if(contact.trusted)controls.push(button('Reset trust',()=>show('Reset trust?',[el('p','','Both users must verify a new chat. The regular inactivity limit applies.'),button('Reset trust',async()=>{try{await api('contacts/update',{id:contact.id,resetTrust:true});closeModal();await refresh();}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]),'secondary-button'));
-  controls.push(button('Remove contact',()=>confirmRemove(false),'secondary-button'));if(contact.peerRole!=='admin')controls.push(button('Block contact',()=>confirmRemove(true),'secondary-button'));controls.push(button('Close',closeModal,'secondary-button'));
+  controls.push(button('Delete Contact',()=>confirmRemove(false),'secondary-button'));if(contact.peerRole!=='admin')controls.push(button('Block contact',()=>confirmRemove(true),'secondary-button'));controls.push(button('Close',closeModal,'secondary-button'));
   show('Manage contact',controls);
 }
 $('manageContacts').addEventListener('click',()=>{
@@ -1756,7 +1756,7 @@ function renderSupportRequests() {
   list.dataset.key=key;
   list.replaceChildren();
   if(!requests.length&&!deletions.length){list.append(el('p','support-help-notes','No pending requests.'));return;}
-  for(const request of deletions){const item=el('div','request-item');item.append(el('strong','','Deletion requested · '+request.id.slice(0,4).toUpperCase()),el('span','',fmtTime(request.at)),button('Approve deletion',()=>show('Delete conversation?',[el('p','','Permanently delete this conversation for both participants.'),button('Delete for both',async()=>{try{await api('support/delete',{id:request.id,confirmed:true});closeModal();await refresh();}catch(e){modalError(e);}},'primary-button danger-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));list.append(item);}
+  for(const request of deletions){const item=el('div','request-item');item.append(el('strong','',(request.kind==='contact'?'Contact deletion requested':'Chat deletion requested')+' · '+request.id.slice(0,4).toUpperCase()),el('span','',fmtTime(request.at)),button('Approve deletion',()=>show(request.kind==='contact'?'Delete contact?':'Delete conversation?',[el('p','',request.kind==='contact'?'Permanently delete the contact and conversation for both participants.':'Permanently delete this conversation for both participants.'),button('Delete for both',async()=>{try{await api('support/delete',{id:request.id,confirmed:true});closeModal();await refresh();}catch(e){modalError(e);}},'primary-button danger-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));list.append(item);}
   for(const request of requests){
     const item=el('div','request-item');
     const label='Contact '+request.id.slice(0,4).toUpperCase();
@@ -2001,7 +2001,7 @@ $('deleteChat').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === id);
   if (!room || room.readOnly) return;
   const leave = room.group && !room.canInvite;
-  const requestDeletion = room.mobileSupport && !room.supportAgent;
+  const requestDeletion = (room.mobileSupport && !room.supportAgent)||(room.peerRole==='admin'&&!state.supportAgent);
   if (requestDeletion && room.deletionRequested) return info('Deletion requested','Support has received your request.');
   const confirm = button(requestDeletion ? 'Request deletion' : leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
     confirm.disabled = true;
@@ -2016,7 +2016,7 @@ $('deleteChat').addEventListener('click', () => {
       modalError(e);
     }
   }, 'primary-button danger-button');
-  show(requestDeletion ? 'Request deletion?' : leave ? 'Leave group?' : 'Delete chat?', [el('p', '', requestDeletion ? 'Ask support to delete this conversation for both participants.' : leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, button('Cancel', closeModal, 'secondary-button')]);
+  show(requestDeletion ? 'Request deletion?' : leave ? 'Leave group?' : 'Delete chat?', [el('p', '', requestDeletion ? 'Ask support to delete this conversation for both participants.' : leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, ...(room.contact?[button('Delete Contact',()=>showContactManagement(room.contact),'secondary-button')]:[]), button('Cancel', closeModal, 'secondary-button')]);
 });
 try {
   privacyMode = localStorage.getItem('qzu-privacy') === '1';
@@ -3468,16 +3468,16 @@ function ticketNavigate(mode,id=null){ticketEpoch++;ticketMode=mode;ticketSelect
 function renderTicketList(items,completed=[]){
  if(ticketLast){try{const old=JSON.parse(ticketLast);if(Array.isArray(old)&&old.some(t=>completed.includes(t.id)&&!t.closed))showActivityBanner('Ticket completed');}catch{}}
  items=items.filter(t=>!t.closed);
- const root=$('userTicketContent');const key=JSON.stringify(items);if(ticketLast===key)return;ticketLast=key;root.replaceChildren();
+ const root=$('userTicketContent');if(!state.supportAgent&&!items.length){renderNewUserTicket(true);return;}const key=JSON.stringify(items);if(ticketLast===key)return;ticketLast=key;root.replaceChildren();
  if(state.supportAgent){root.append(el('p','pay-note','Manage tickets in qzu. Control.'));return;}
  const list=el('div','user-ticket-list');for(const t of items){const row=button('',()=>ticketNavigate('chat',t.id),'user-ticket-row');row.append(svg('ticketIcon','user-ticket-icon'),el('span','user-ticket-title',t.topic+' · #'+t.id.slice(0,6)),el('small',t.closed?'ticket-solved':'ticket-open',t.closed?'Solved':t.assigned?'Open':'Pending'));list.append(row);}
  root.append(list);
  if(!items.some(t=>t.mine==='customer'&&!t.closed))root.append(button('New Ticket',()=>ticketNavigate('new'),'primary-button user-ticket-new'));
  if(!items.length)list.append(el('p','pay-note','Contact support or request a seller.'));
 }
-function renderNewUserTicket(){
- const root=$('userTicketContent');if(root.querySelector('form'))return;root.replaceChildren();const form=el('form','user-ticket-form'),topic=el('select','access-key-input'),field=el('textarea','edit-input');for(const name of ['General question','Request a Seller','Account issue','Other']){const o=el('option','',name);o.value=name;topic.append(o);}field.placeholder='What do you need?';field.maxLength=2000;field.value=ticketDraft;field.oninput=()=>ticketDraft=field.value;
- const submit=el('button','primary-button','Create Ticket'),err=el('p','pay-note');submit.type='submit';form.append(svg('ticketIcon','user-ticket-hero'),el('h2','','Create a Ticket'),topic,field,err,submit,button('Back',()=>ticketNavigate('list'),'secondary-button'));root.append(form);
+function renderNewUserTicket(isDefault=false){
+ const root=$('userTicketContent');if(root.querySelector('.user-ticket-form'))return;root.replaceChildren();const form=el('form','user-ticket-form'),topic=el('select','access-key-input'),field=el('textarea','edit-input');for(const name of ['General question','Request a Seller','Account issue','Other']){const o=el('option','',name);o.value=name;topic.append(o);}field.placeholder='What do you need?';field.maxLength=2000;field.value=ticketDraft;field.oninput=()=>ticketDraft=field.value;
+ const submit=el('button','primary-button','Create Ticket'),err=el('p','pay-note');submit.type='submit';form.append(svg('ticketIcon','user-ticket-hero'),el('h2','','Create a Ticket'),topic,field,err,submit);if(!isDefault)form.append(button('Back',()=>ticketNavigate('list'),'secondary-button'));root.append(form);
  form.onsubmit=async e=>{e.preventDefault();if(ticketBusy||!field.value.trim())return;const epoch=ticketEpoch,auth=authEpoch;ticketBusy=true;submit.disabled=true;try{const t=await api('tickets/open',{topic:topic.value,text:field.value.trim(),requestId:crypto.randomUUID()},true);if(ticketAlive(epoch,auth))ticketNavigate('chat',t.id);}catch(e){if(ticketAlive(epoch,auth))err.textContent=errorMessage(e);}finally{if(ticketAlive(epoch,auth)){ticketBusy=false;submit.disabled=false;}}};
 }
 function renderUserTicket(t,epoch,auth){
