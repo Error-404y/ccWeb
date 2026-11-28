@@ -1689,7 +1689,7 @@ function showDeleteAccount(){
       checkoutReturn=null;lock(false);history.replaceState(null,'','/chat');navigate('/chat',false);await getSession();
     }catch(error){dialogError(error);confirm.disabled=false;}
   },'primary-button danger-button');
-  show('Delete account?',[el('p','','Your account, active chats, contacts and access will be permanently removed. Limited legal or safety records may remain. This cannot be undone.'),confirm,button('Cancel',()=>{if(suspendedAccount)showRestrictedAccount('Account suspended','Your account access has been restricted.');else if(termsPending)showTermsGate(1);else if(accessDue)showRenewal();else closeModal();},'secondary-button')]);
+  show('Delete account?',[el('p','','Your account, active chats, contacts and access will be permanently removed. Limited legal or safety records may remain. This cannot be undone.'),confirm,button('Save a deletion code',showDeletionCode,'secondary-button'),button('Cancel',()=>{if(suspendedAccount)showRestrictedAccount('Account suspended','Your account access has been restricted.');else if(termsPending)showTermsGate(1);else if(accessDue)showRenewal();else closeModal();},'secondary-button')]);
 }
 function showDeletionCode(){
   show('External deletion code',[el('p','','Generate a private code to delete your account later from the public website. A new code invalidates any previous code.'),button('Generate code',async()=>{try{const result=await api('account/deletion-code',{});const code=el('p','fingerprint-code',result.code);show('Save your deletion code',[el('p','','Anyone with this code can permanently delete your account. Keep it private.'),code,button('Copy code',async()=>{try{await navigator.clipboard.writeText(result.code);}catch{dialogError(Error('Select and copy the code manually.'));}},'secondary-button'),button('Deletion website',()=>openLegal('/delete-account'),'secondary-button'),button('Done',()=>{if(suspendedAccount)showRestrictedAccount('Account suspended','Your account access has been restricted.');else if(termsPending)showTermsGate(1);else if(accessDue)showRenewal();else closeModal();},'secondary-button')]);}catch(error){dialogError(error);}}),button('Cancel',()=>{if(suspendedAccount)showRestrictedAccount('Account suspended','Your account access has been restricted.');else if(accessDue)showRenewal();else closeModal();},'secondary-button')]);
@@ -1833,7 +1833,7 @@ function renderOfficial(open){
       article.append(head,el('p','official-text',post.text));posts.append(article);
     }
   }
-  if(QzuSimplicity.unreadCount(feed)&&canReadCurrent()&&!officialReadJob){
+  if(QzuSimplicity.unreadCount(feed)&&canReadCurrent()&&!modal.open&&!officialReadJob){
     const epoch=authEpoch,latest=feed.latest;
     officialReadJob=api('official/read',{id:latest},true).then(()=>{
       if(epoch!==authEpoch||!state.official)return;
