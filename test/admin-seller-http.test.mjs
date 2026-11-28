@@ -30,7 +30,14 @@ test('live HTTP server: desktop authorization, seller activation, announcements 
  try{
   for(let i=0;i<100;i++){try{if((await fetch(origin+'/healthz')).ok)break;}catch{}if(child.exitCode!==null||i===99)throw Error('Server failed to start: '+output);await new Promise(r=>setTimeout(r,50));}
   assert.equal((await fetch(origin+'/control',{headers:{'User-Agent':mobileUA}})).status,403);
-  assert.equal((await fetch(origin+'/control',{headers:{'User-Agent':desktopUA}})).status,200);
+  const controlPage=await fetch(origin+'/control',{headers:{'User-Agent':desktopUA}});
+  assert.equal(controlPage.status,200);
+  const controlMarkup=await controlPage.text();
+  for(const [,src] of controlMarkup.matchAll(/<script src="([^"]+)"/g)){
+   const asset=await fetch(new URL(src,origin));
+   assert.equal(asset.status,200,src+' must load with mobile-only mode enabled');
+   assert.match(asset.headers.get('content-type')||'',/javascript/,src);
+  }
   assert.equal((await admin('/api/control/sellers',undefined,desktopUA,false)).status,401);
   assert.equal((await admin('/api/control/login',{key:normalKey,pin:''})).status,403);
   assert.equal((await admin('/api/control/login',{key:adminKey,pin:''})).status,200);
