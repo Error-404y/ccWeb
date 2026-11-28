@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="/control.css">
     <script src="/e2ee.js" defer></script>
     <script src="/metadata.js" defer></script>
-    <script src="/control.js" defer></script><script src="/app.js" defer></script>
+    <script src="/control.js" defer></script><script src="/ui-simplicity.js" defer></script><script src="/app.js" defer></script>
   </head>
   <body>
     <svg class="sprite" xmlns="http://www.w3.org/2000/svg">
@@ -108,12 +108,12 @@
             <header class="thread-header official-channel-header">
               <button id="qzuInfoBack" type="button" class="icon-button mobile-back" aria-label="Back to chats"><svg><use href="#back"/></svg></button>
               <svg class="avatar" aria-hidden="true"><use href="#adminAvatar"/></svg>
-              <div class="thread-title"><div class="thread-name-wrap"><h2>qzu.</h2><span class="presence-label">Official information</span></div><svg class="admin-badge" role="img" aria-label="Verified qzu"><use href="#adminBadge"/></svg></div>
+              <div class="thread-title"><div class="thread-name-wrap"><div class="thread-name-line"><h2>qzu.</h2><svg class="admin-badge" role="img" aria-label="Verified qzu"><use href="#adminBadge"/></svg></div><span class="presence-label">Official information</span></div></div>
             </header>
             <div class="official-channel-content">
               <div class="official-channel-intro"><svg class="wordmark" aria-hidden="true"><use href="#logo"/></svg><h1>Official information</h1><p>Important notices from qzu.</p></div>
               <article class="official-post"><div class="official-post-title"><strong>qzu.</strong><svg class="admin-badge" role="img" aria-label="Verified qzu"><use href="#adminBadge"/></svg></div><h2>Stay safe</h2><p>We never ask for your PIN, activation key or personal information in chats.</p><p>Keep your credentials private.</p></article>
-              <button id="officialOlder" type="button" class="secondary-button" hidden>Load earlier announcements</button><div id="officialPosts"></div>
+              <div id="officialPosts"></div>
             </div>
             <form id="officialComposer" class="official-composer" hidden><label for="officialMessage">Publish to everyone</label><div><textarea id="officialMessage" maxlength="2000" rows="2" placeholder="Write an announcement…" aria-label="Announcement"></textarea><button id="officialSend" class="primary-button" type="submit" disabled>Publish</button></div></form>
             <footer id="officialReadOnly" class="admin-composer"><div class="read-only-bar"><svg aria-hidden="true"><use href="#lock"/></svg><span>Read-only channel</span></div></footer>
@@ -190,11 +190,9 @@
           <div class="panel settings-panel" data-settings-category="account" hidden>
             <h1>Account</h1>
             <button class="settings-row" id="deleteAccount" type="button"><svg><use href="#key"/></svg><span>Delete account</span><svg class="chevron"><use href="#chevron"/></svg></button>
-            <button class="settings-row" id="externalDeletion" type="button"><svg><use href="#key"/></svg><span>External deletion code</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="sellerProfileSettings" type="button" hidden><svg><use href="#avatar"/></svg><span>Seller profile</span><strong id="sellerProfileStatus"></strong><svg class="chevron"><use href="#chevron"/></svg></button>
-            <button class="settings-row" id="sellerDirectorySettings" type="button" hidden><svg><use href="#chat"/></svg><span>Seller directory</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="recoverySettings" type="button"><svg><use href="#key"/></svg><span>Account recovery</span><svg class="chevron"><use href="#chevron"/></svg></button>
-            <button class="settings-row" id="accessSettings"><svg><use href="#key"/></svg><span>qzu-Access</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row" id="accessSettings"><svg><use href="#key"/></svg><span>qzu-Access</span><small id="accessSettingsSummary" class="access-settings-summary"></small><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="changeLogin"><svg><use href="#key"/></svg><span>Change login PIN</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="resetPin"><svg><use href="#key"/></svg><span id="resetLabel">Request Reset</span><svg class="chevron"><use href="#chevron"/></svg></button>
 
