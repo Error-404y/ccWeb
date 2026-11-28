@@ -99,3 +99,13 @@ test('solved and rejected support cases archive only for assigned admin and reop
  chats.send('customer',id,'More help');assert.equal(chats.finishedSupport('agent',true).length,0);assert.equal(chats.supportRequests('agent',true)[0].id,id);
  }finally{db.close();}
 });
+
+test('expired pending invoices can be archived and a late valid submission returns to the working list',()=>{
+ const db=setup();try{
+ const o=createCryptoInvoice(db,'week','BTC',100000,null,now,null,true),later=now+3600000;
+ assert.throws(()=>archiveControlRecord(db,'payments',o.id,'admin',false,now));
+ archiveControlRecord(db,'payments',o.id,'admin',false,later);
+ assert.equal(controlPayments(db,true)[0].id,o.id);assert.equal(invoiceStatus(db,o.orderKey,later).state,'pending');
+ submitPayment(db,o.orderKey,'b'.repeat(64),later);assert.equal(controlPayments(db)[0].id,o.id);assert.equal(controlPayments(db,true).length,0);
+ }finally{db.close();}
+});
