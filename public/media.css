@@ -21,3 +21,73 @@
 .qzu-once-preview>p:last-child{margin:0;color:var(--muted);line-height:1.35}
 .qzu-once-caption{display:grid;line-height:1.15;gap:3px}
 .qzu-once-caption small{font-size:11px;color:var(--muted);font-style:normal}
+
+.voice-preview {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: var(--surface);
+}
+.voice-preview h2 { margin: 0; font-size: 14px; font-weight: 680; }
+.voice-preview h2:focus { outline: none; }
+.voice-preview .qzu-voice-player { gap: 2px; padding: 4px 8px; background: var(--sub); }
+.voice-preview .qzu-media-actions > button { min-height: 42px; }
+.voice-preview > .qzu-media-alert:empty { display: none; }
+.voice-preview .qzu-voice-track { color: var(--accent); }
+
+dialog.photo-sheet[open]:not(.pin-screen) {
+  width: min(100%, 500px);
+  max-width: 100%;
+  max-height: min(92dvh, var(--app-height, 92dvh));
+  margin: auto auto 0;
+  padding: 14px 16px max(16px, env(safe-area-inset-bottom));
+  border-bottom: 0;
+  border-radius: 23px 23px 0 0;
+  animation: sheetEnter .24s var(--motion-ease) both;
+}
+.photo-sheet::backdrop { background: #0009; }
+.photo-sheet .photo-preview-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  background: var(--sub);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.photo-sheet .photo-preview-stage:has(.photo-preview[hidden]):has(.media-status:empty) { display: none; }
+.photo-sheet .photo-preview { height: min(38dvh, 350px); max-height: unset; border-radius: 0; }
+.photo-sheet .media-status { margin: 8px; }
+.photo-sheet .media-status:empty { display: none; }
+.photo-sheet .photo-preview:not([hidden]) + .media-status { position: absolute; inset: auto auto 0; padding: 4px 8px; border-radius: 8px; background: var(--sub); }
+.photo-sheet .photo-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.photo-sheet .photo-picker {
+  justify-self: start;
+  align-self: flex-start;
+  display: grid;
+  place-items: center;
+  min-height: 38px;
+  padding-inline: 10px;
+  border-radius: 10px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.photo-sheet .photo-picker:hover { background: var(--hover); }
+.photo-sheet .photo-file:focus-visible + .photo-picker { outline: 2px solid var(--accent); }
+.photo-sheet .photo-file:disabled + .photo-picker { cursor: default; opacity: .6; }
+.photo-sheet .primary-button { width: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  dialog.photo-sheet[open]:not(.pin-screen) { animation: none; }
+}

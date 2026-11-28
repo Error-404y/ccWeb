@@ -7,8 +7,9 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { chromium } from 'playwright-core';
 import { createAccount, openAccounts } from '../lib/accounts.mjs';
-import { createSupportKey, initAccess } from '../lib/access.mjs';
+import { createSupportKey, generatePlanKeys, initAccess } from '../lib/access.mjs';
 import { complianceStore } from '../lib/compliance.mjs';
+import { deviceProfiles, initDevices } from '../lib/devices.mjs';
 import { officialStore } from '../lib/official.mjs';
 import { playAssets } from './play-assets.mjs';
 
@@ -20,9 +21,22 @@ let browser;
 try {
   const db = openAccounts(database);
   initAccess(db);
+  initDevices(db);
   const adminKey = createSupportKey(db);
   const reports = complianceStore(db);
-  reports.report(createAccount(db).id, createAccount(db).id, 'fixture-room', 'Other', 'Browser report evidence');
+  const deviceFingerprint='a'.repeat(64), reported=createAccount(db,deviceFingerprint), reporter=createAccount(db);
+  deviceProfiles(db).update({id:reported.id,device_id:deviceFingerprint},deviceFingerprint,'ios',{model:'iPhone15,4',osVersion:'26.1',appVersion:'0.17.9'});
+  const messageId='15090c60-1d0f-45c8-b945-9d98b7ed231d';
+  const now=Date.now();
+  const evidenceImage=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aI2kAAAAASUVORK5CYII=','base64');
+  reports.report(reporter.id,reported.id,'fixture-room','Other','Browser report evidence',messageId,[
+   {id:messageId,sender:'Reported account',at:now,reported:true,text:'Submitted snapshot message',source:'reporter-submitted'},
+   {id:'075418d4-7597-4da6-a482-94d50dced9d1',sender:'Reporter',at:now-1000,reported:false,text:'Earlier context',source:'reporter-submitted'}
+  ],'encrypted direct',{messageId,kind:'image',mime:'image/png',body:evidenceImage,source:'reporter-submitted',at:now});
+  generatePlanKeys(db,'1M',100,'browser-fixture',now-1000);
+  const used=generatePlanKeys(db,'LT',1,'browser-fixture',now).keys[0];
+  const keyAccount=createAccount(db);
+  db.prepare('UPDATE access_invoices SET redeemed=?,redeemed_account=? WHERE id=?').run(now,keyAccount.id,used.id);
   const announcements = officialStore(db);
   for (let i = 1; i <= 90; i++) {
     announcements.publish('Announcement ' + i + ' ' + 'Browser test fixture. '.repeat(25), true);
@@ -51,7 +65,10 @@ try {
     });
   });
   const origin = 'http://127.0.0.1:' + port;
-  browser = await chromium.launch({ executablePath: process.env.QZU_TEST_CHROME_PATH });
+  browser = await chromium.launch({
+    executablePath: process.env.QZU_TEST_CHROME_PATH,
+    args: ['--use-fake-device-for-media-stream']
+  });
 
   let ticketCustomer;
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
@@ -130,9 +147,11 @@ try {
     await call(peer, 'message', { id: roomId, text: 'History ' + i + ' ' + 'Sample message content. '.repeat(8) }, peerToken);
   }
   await chatPage.locator('#messages').getByText(/^History 16 /).waitFor();
+  assert.equal(await chatPage.locator('#messages .date-divider').first().textContent(), 'Today');
   await chatPage.locator('#messages').evaluate(node => { node.scrollTop = 0; });
   await call(peer, 'message', { id: roomId, text: 'New message at the bottom' }, peerToken);
   await chatPage.getByRole('button', { name: /new message/ }).waitFor();
+  assert.equal(await chatPage.locator('#messages .unread-divider').count(), 1);
   assert.equal(await chatPage.locator('#messages').evaluate(node => node.scrollTop), 0);
   await chatPage.getByRole('button', { name: /new message/ }).click();
   await chatPage.waitForFunction(() => document.getElementById('messages').scrollTop > 0);
@@ -146,6 +165,37 @@ try {
   await chatPage.locator('#chatOptions').click();
   await chatPage.getByRole('button', { name: 'Pin contact' }).click();
   await chatPage.locator('#threadName [aria-label="Pinned contact"]').waitFor();
+  await chatPage.locator('#messages').getByText('New message at the bottom', {exact:true}).click({button:'right'});
+  await chatPage.getByRole('button', {name:'Reply', exact:true}).click();
+  assert.match(await chatPage.locator('#replyComposer').innerText(), /Replying to Chat Peer\s+New message at the bottom/);
+  await chatPage.locator('#cancelReply').click();
+  await chatPage.locator('#attachmentMenu').click();
+  const photoChooser = chatPage.waitForEvent('filechooser');
+  await chatPage.getByRole('button', {name:'Gallery', exact:true}).click();
+  await (await photoChooser).setFiles(join(process.cwd(),'public/wallpapers/mist-paper.webp'));
+  await chatPage.getByRole('heading', {name:'Photo preview', exact:true}).waitFor();
+  await chatPage.getByRole('img', {name:'Photo preview'}).waitFor();
+  await chatPage.getByRole('combobox', {name:'Crop'}).selectOption({label:'Square'});
+  await chatPage.getByRole('button', {name:'Rotate right', exact:true}).click();
+  await chatPage.getByRole('button', {name:'Enable view once', exact:true}).last().click();
+  await chatPage.getByRole('button', {name:'Send once', exact:true}).click();
+  await chatPage.getByRole('button', {name:'Photo, unopened', exact:true}).waitFor();
+  await viewer.grantPermissions(['microphone'], {origin});
+  const voicePreview = chatPage.locator('#voicePreview');
+  async function recordVoicePreview() {
+    await chatPage.locator('#attachmentMenu').click();
+    await chatPage.getByRole('button', {name:'Voice message', exact:true}).click();
+    await chatPage.locator('.voice-gesture-status').filter({hasText:/Recording · 0:(?!00)\d{2}/}).waitFor();
+    await chatPage.getByRole('button', {name:'Preview', exact:true}).click();
+    await voicePreview.getByRole('heading', {name:'Voice message preview'}).waitFor();
+  }
+  await recordVoicePreview();
+  assert.equal(await voicePreview.getByRole('combobox', {name:'Playback speed'}).inputValue(), '1');
+  await voicePreview.getByRole('button', {name:'Discard', exact:true}).click();
+  assert.equal(await voicePreview.isVisible(), false);
+  await recordVoicePreview();
+  await voicePreview.getByRole('button', {name:'Send recording', exact:true}).click();
+  await chatPage.getByRole('button', {name:'Play voice message', exact:true}).waitFor();
   await chatPage.locator('#message').fill('Local draft');
   await chatPage.locator('#backToChats').click();
   await contact.getByText('Draft', { exact: true }).waitFor();
@@ -162,9 +212,22 @@ try {
   await chatPage.locator('#appearancePresets').click();
   await chatPage.getByRole('button', { name: /Graphite/ }).click();
   assert.equal(await chatPage.locator('html').getAttribute('data-chat-background'),'grid');
+  await chatPage.locator('#modalClose').click();
+  await chatPage.locator('#chatBackground').click();
+  for (const [name,choice] of [['Obsidian Contours','obsidian'],['Ember Folds','ember'],['Mist Paper','mist']]) {
+    const background = chatPage.getByRole('button', {name, exact:true});
+    await background.click();
+    assert.equal(await background.getAttribute('aria-pressed'), 'true');
+    assert.deepEqual(await chatPage.evaluate(() => [
+      document.documentElement.dataset.chatBackground,
+      localStorage.getItem('qzu-chat-background')
+    ]), [choice,choice]);
+  }
+  await chatPage.getByRole('button', {name:'Done', exact:true}).click();
+  assert.equal(await chatPage.locator('#chatBackgroundLabel').textContent(), 'Mist Paper');
   await viewer.close();
   await peer.close();
-  console.log('Chat scroll anchoring, search, drafts, expiry, mutes, pins and appearance passed.');
+  console.log('Chat scroll anchoring, reply, media previews, drafts and appearance passed.');
 
   const play = await browser.newPage({
     viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, reducedMotion: 'reduce'
@@ -216,6 +279,8 @@ try {
   await control.getByLabel('Admin key', { exact: true }).fill(adminKey);
   await control.getByRole('button', { name: 'Sign in securely' }).click();
   await control.getByRole('heading', { name: 'Overview', exact: true }).first().waitFor();
+  await control.getByRole('heading', { name: 'Account and payment totals' }).waitFor();
+  await control.getByText('Verified USD revenue', { exact: true }).waitFor();
   await control.getByRole('button', { name: /^Unassigned tickets/ }).click();
   await control.getByRole('heading', { name: /^General question/ }).waitFor();
   await control.getByRole('button', { name: 'Open ticket', exact: true }).click();
@@ -248,6 +313,22 @@ try {
   await control.getByRole('navigation').getByRole('button', { name: /^Reports/ }).click();
   await control.getByRole('button', { name: 'Review report', exact: true }).click();
   await control.getByText('Browser report evidence', { exact: true }).waitFor();
+  assert.equal(await control.getByText('Submitted snapshot message', { exact: true }).count(), 0);
+  await control.getByRole('button', { name: 'Open reported account', exact: true }).click();
+  await control.getByRole('heading', { name: 'Registered device' }).waitFor();
+  await control.getByText('iPhone15,4', { exact: true }).waitFor();
+  await control.getByText(deviceFingerprint, { exact: true }).waitFor();
+  await control.getByRole('button', { name: 'Back', exact: true }).click();
+  await control.getByRole('button', { name: 'View reported chat', exact: true }).click();
+  const snapshotMessages = control.locator('.cc-report-message');
+  await snapshotMessages.nth(1).getByText('Submitted snapshot message', { exact: true }).waitFor();
+  await snapshotMessages.first().getByText('Earlier context', { exact: true }).waitFor();
+  await snapshotMessages.nth(1).getByText('Reported message', { exact: true }).waitFor();
+  await control.getByRole('button', { name: 'View submitted attachment', exact: true }).click();
+  await control.getByRole('img', { name: 'Submitted report evidence' }).waitFor();
+  await control.getByRole('button', { name: 'Back to report', exact: true }).click();
+  await control.getByText('Viewed reported chat', { exact: true }).waitFor();
+  await control.getByText('Viewed report attachment', { exact: true }).waitFor();
   await control.getByRole('button', { name: 'Claim case', exact: true }).click();
   await control.getByRole('button', { name: 'Release assignment', exact: true }).waitFor();
   await control.getByRole('textbox', { name: 'Moderation note', exact: true }).fill('Browser review completed.');
@@ -255,6 +336,34 @@ try {
   await control.getByRole('button', { name: 'Resolve report', exact: true }).click();
   await control.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click();
   await control.getByText('Browser review completed.', { exact: true }).waitFor();
+  await control.getByRole('navigation').getByRole('button', { name: 'Keys', exact: true }).click();
+  await control.getByRole('table', { name: 'Access key results' }).waitFor();
+  await control.getByRole('button', { name: 'Next page', exact: true }).click();
+  await control.getByText('Page 2', { exact: true }).waitFor();
+  await control.getByRole('button', { name: 'Filter redeemed', exact: true }).click();
+  await control.getByRole('button', { name: 'View key '+used.id, exact: true }).click();
+  await control.getByText(used.id, { exact: true }).waitFor();
+  await control.getByText(keyAccount.id, { exact: true }).waitFor();
+  await control.getByRole('button', { name: 'Back to keys', exact: true }).click();
+  await control.setViewportSize({width:390,height:844});
+  await control.getByRole('table', { name: 'Access key results' }).waitFor();
+  assert.equal(await control.evaluate(() => document.documentElement.scrollWidth), 390);
+  await control.setViewportSize({width:1440,height:900});
+  await control.getByText('Key maintenance', { exact: true }).click();
+  await control.getByRole('button', { name: 'Remove all used keys', exact: true }).click();
+  const purge=control.getByRole('dialog', {name:'Remove used keys and linked accounts'});
+  const confirmPurge=purge.getByRole('button', {name:'Remove used keys and accounts',exact:true});
+  const confirmation=purge.getByRole('textbox', {name:'Confirmation phrase'});
+  await confirmation.fill('REMOVE');
+  assert.equal(await confirmPurge.isEnabled(), false);
+  await confirmation.fill('REMOVE USED KEYS AND ACCOUNTS');
+  await confirmPurge.click();
+  await control.getByText('No matching keys.', {exact:true}).waitFor();
+  await control.getByRole('button', {name:'Generate keys',exact:true}).click();
+  const newKeys=control.getByRole('dialog', {name:'New access keys'});
+  await newKeys.getByRole('button', {name:'Copy key',exact:true}).waitFor();
+  assert.match(await newKeys.locator('.cc-secret').textContent(), /^QZU-/);
+  await newKeys.getByRole('button', {name:'Done',exact:true}).click();
   await control.getByRole('navigation').getByRole('button', { name: /^Announcements/ }).click();
   await control.getByRole('heading', { name: 'Announcements', exact: true }).first().waitFor();
   await control.getByText(/^Announcement 90 /).waitFor();
@@ -264,7 +373,7 @@ try {
   await desktopChats;
   await control.getByRole('button', { name: 'Add contact' }).click();
   await control.getByRole('button', { name: 'Copy my code' }).waitFor();
-  console.log('Control Center cases, account reference search, audit, announcements and private chat startup passed.');
+  console.log('Control Center cases, audited snapshots, device details, key inventory and removal, totals, announcements and private chat startup passed.');
 } finally {
   await browser?.close();
   if (child?.pid && child.exitCode === null && child.signalCode === null) {

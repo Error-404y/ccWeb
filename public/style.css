@@ -1663,14 +1663,28 @@ dialog {
 .security-list { display: grid; gap: 0; max-height: 52dvh; overflow-y: auto; }
 .security-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 .security-item strong { text-align: right; font-size: 12px; }
-.background-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.background-choice { display: grid; gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; font-size: 12px; }
-.background-choice[aria-pressed=true] { border-color: var(--accent); }
-.background-preview { aspect-ratio: 1; background-color: var(--sub); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.background-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.background-choice { display: grid; grid-template-rows: auto 1fr; gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; font-weight: 600; }
+.background-choice > span { display: grid; place-items: center; min-height: 30px; line-height: 1.15; }
+.background-choice:hover { background: var(--hover); }
+.background-choice[aria-pressed=true] { border-color: var(--accent); background: var(--active); }
+.background-preview { aspect-ratio: 1.4; background-color: var(--sub); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; justify-content: center; }
 :root[data-chat-background=grid] .messages, .pattern-grid { background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 20px 20px; }
 :root[data-chat-background=dots] .messages, .pattern-dots { background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 13px 13px; }
+:root[data-chat-background=obsidian] .messages, .pattern-obsidian { --wallpaper: url('/wallpapers/obsidian-contours.webp'); }
+:root[data-chat-background=ember] .messages, .pattern-ember { --wallpaper: url('/wallpapers/ember-folds.webp'); }
+:root[data-chat-background=mist] .messages, .pattern-mist { --wallpaper: url('/wallpapers/mist-paper.webp'); }
+:root:is([data-chat-background=obsidian], [data-chat-background=ember], [data-chat-background=mist]) .messages,
+.background-preview:is(.pattern-obsidian, .pattern-ember, .pattern-mist) {
+  background-image: var(--wallpaper);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+}
 .preview-bubble { display: block; height: 14px; width: 72%; border-radius: 4px; background: var(--received); }
 .preview-bubble.mine { align-self: flex-end; background: var(--sent); }
+.background-preview:is(.pattern-obsidian, .pattern-ember, .pattern-mist) .preview-bubble { border: 1px solid var(--line); }
+#chatBackgroundLabel { color: var(--muted); text-align: end; max-width: 42%; }
 .feedback-input { min-height: 120px; width: 100%; }
 .feedback-confirm { display: flex; gap: 8px; align-items: center; font-size: 12px; }
 .feedback-confirm input { accent-color: var(--accent); flex-shrink: 0; }
@@ -2436,11 +2450,11 @@ dialog.attachment-sheet{margin:auto auto 0;width:min(100%,480px);max-width:100%;
 @media(prefers-reduced-motion:reduce){.attachment-tile,dialog.attachment-sheet,.pin-error-motion{animation:none!important}#attachmentMenu{transition:none}}
 
 .attachment-handle{touch-action:none;min-height:8px;cursor:grab}
-#thread>.voice-gesture-panel{padding:12px 16px;border-top:1px solid var(--line);background:var(--surface);animation:tileEnter .2s var(--motion-ease) both}
+.composer-dock>.voice-gesture-panel{padding:8px 10px;border:1px solid var(--line);border-radius:14px;background:var(--surface);animation:tileEnter .2s var(--motion-ease) both}
 .composer.voice-recording textarea,.composer.voice-recording #attachmentMenu,.composer.voice-recording #cameraShortcut,.composer.voice-recording #send{pointer-events:none;opacity:.35}
 .composer.voice-recording #voiceShortcut{color:var(--accent);transform:scale(1.12)}
 .motion-theme{animation:themeFade .18s ease-out both}@keyframes themeFade{from{opacity:.85}to{opacity:1}}
-@media(prefers-reduced-motion:reduce){#thread>.voice-gesture-panel,.motion-theme{animation:none!important}}
+@media(prefers-reduced-motion:reduce){.composer-dock>.voice-gesture-panel,.motion-theme{animation:none!important}}
 
 .motion-settings{animation:qzuSettings .22s var(--motion-ease) both}@keyframes qzuSettings{from{opacity:.6;transform:translateX(14px)}to{opacity:1;transform:none}}
 .profile-transition-mark{display:block;align-self:center;width:64px;height:64px;flex:none}
@@ -2590,6 +2604,24 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .contact-expiry { color: var(--muted); font-size: 11px; }
 .message-feed { position: relative; display: flex; min-height: 0; flex: 1; }
 .message-feed .messages { width: 100%; scroll-padding-top: 12px; }
+.message-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  margin: 5px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.message-divider::before, .message-divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.message-divider span { padding: 4px 9px; border-radius: 999px; background: var(--sub); }
+.unread-divider { color: var(--accent); }
+.unread-divider span { background: var(--active); }
+.unread-divider::before, .unread-divider::after { background: currentColor; opacity: .7; }
+.message-row.message-continuation { margin-top: -5px; }
+.message-row.message-continuation:not(.mine) .bubble { border-top-left-radius: 8px; }
+.message-row.message-continuation.mine .bubble { border-top-right-radius: 8px; }
 .message-feed .new-messages {
   position: absolute;
   z-index: 1;
@@ -2601,7 +2633,8 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
   width: auto;
   padding: 6px 10px 6px 12px;
   border-radius: 999px;
-  background: var(--surface);
+  border-color: var(--accent);
+  background: var(--sub);
   color: var(--accent);
   font-size: 12px;
   box-shadow: 0 3px 12px #0002;
@@ -2617,9 +2650,52 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
   font-weight: 650;
 }
 .pending-retry:hover { background: var(--hover); }
-.composer-actions { display: flex; align-items: center; justify-content: flex-end; flex: none; }
-.composer-actions.has-media { min-width: 68px; }
-.view-once-hint { margin: 0; padding: 5px 14px; background: var(--sub); color: var(--muted); font-size: 12px; }
+.composer-dock {
+  display: grid;
+  gap: 5px;
+  flex: none;
+  margin: 4px clamp(8px, 2vw, 24px) max(8px, env(safe-area-inset-bottom));
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--sub);
+}
+.composer-dock:focus-within { border-color: color-mix(in srgb, var(--accent) 36%, var(--line)); }
+.composer-dock .composer { min-width: 0; gap: 4px; padding: 0; border: 0; background: transparent; }
+.composer-dock .composer > button:first-child {
+  width: 44px;
+  height: 44px;
+  border-radius: 15px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.composer-dock .composer > button:first-child:hover { background: var(--hover); }
+.composer-dock .composer textarea {
+  field-sizing: content;
+  min-height: 44px;
+  max-height: min(112px, 22dvh);
+  padding: 10px 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 16px;
+}
+.composer-dock .composer textarea:focus { outline: none; }
+.composer-dock .composer-actions { display: flex; align-items: center; justify-content: flex-end; flex: none; }
+.composer-dock .composer-actions.has-media { min-width: 72px; }
+.composer-dock .composer-actions .media-shortcut { height: 44px; width: 36px; }
+.composer-dock .composer-actions .send-button { width: 44px; height: 44px; border-radius: 15px; }
+.composer-dock .reply-composer {
+  min-width: 0;
+  padding: 3px 3px 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  border-radius: 15px;
+  background: var(--active);
+}
+.composer-dock .reply-composer .icon-button { width: 42px; height: 42px; }
+.composer-dock .encryption-notice { margin: 2px; }
+.composer-dock .inline-attachments { margin: 0; border-radius: 16px; }
+.view-once-hint { margin: 0; padding: 5px 10px; background: var(--sub); color: var(--muted); font-size: 12px; }
 .reply-composer:not([hidden]), .composer-actions button:not([hidden]), .new-messages:not([hidden]) {
   animation: chat-control-in .16s ease-out both;
 }

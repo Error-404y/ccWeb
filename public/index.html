@@ -9,6 +9,7 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/style.css">
     <link rel="stylesheet" href="/media.css">
+    <link rel="stylesheet" href="/seller-catalog.css">
     <link rel="stylesheet" href="/control.css">
     <script src="/e2ee.js" defer></script>
     <script src="/metadata.js" defer></script>
@@ -133,26 +134,29 @@
             <button id="newMessages" class="new-messages secondary-button" type="button" hidden><span id="newMessagesLabel"></span><svg aria-hidden="true"><use href="#chevron"/></svg></button>
           </div>
           <div id="typingIndicator" class="typing-indicator" hidden><span class="typing-dots"><i></i><i></i><i></i></span><span id="typingLabel"></span></div>
-          <div id="replyComposer" class="reply-composer" hidden>
-            <div class="reply-content"><strong id="replyName"></strong><span id="replyText"></span></div>
-            <button id="cancelReply" type="button" class="icon-button" aria-label="Cancel reply"><svg><use href="#close"/></svg></button>
-          </div>
-          <button id="encryptionNotice" class="encryption-notice" type="button" hidden><svg aria-hidden="true"><use href="#lock"/></svg><span id="encryptionNoticeText"></span><svg aria-hidden="true"><use href="#chevron"/></svg></button>
-          <div id="viewOnceHint" class="view-once-hint" hidden>
-            <span>View Once · Opens once for the recipient</span>
-            <button id="previewOnceText" type="button">Preview</button>
-          </div>
-          <form id="composer" class="composer" hidden>
-            <button id="attachmentMenu" class="icon-button" type="button" aria-label="Message options" title="Message options"><svg><use href="#plus"/></svg></button>
-            <textarea id="message" aria-label="Message" placeholder="Message" rows="1" maxlength="2000" autocomplete="off"></textarea>
-            <button id="onceShortcut" class="icon-button once-toggle" type="button" aria-label="Enable view once" aria-pressed="false" title="View once" hidden><svg aria-hidden="true"><use href="#viewOnceIcon"/></svg></button>
-            <div class="composer-actions" id="composerActions">
-              <button id="cameraShortcut" class="icon-button media-shortcut" type="button" aria-label="Camera"><svg><use href="#camera"/></svg></button>
-              <button id="voiceShortcut" class="icon-button media-shortcut" type="button" aria-label="Hold to record a voice message. Release to preview, swipe left to cancel, or swipe up to lock"><svg><use href="#mic"/></svg></button>
-              <button id="send" class="send-button" type="button" aria-label="Send" disabled><svg><use href="#sendIcon"/></svg></button>
+          <div id="composerDock" class="composer-dock" hidden>
+            <section id="voicePreview" class="voice-preview" aria-label="Voice message preview" hidden></section>
+            <div id="replyComposer" class="reply-composer" hidden>
+              <div class="reply-content"><strong id="replyName"></strong><span id="replyText"></span></div>
+              <button id="cancelReply" type="button" class="icon-button" aria-label="Cancel reply"><svg><use href="#close"/></svg></button>
             </div>
-          </form>
-          <section id="inlineAttachments" class="inline-attachments" aria-label="Message attachments" hidden></section>
+            <button id="encryptionNotice" class="encryption-notice" type="button" hidden><svg aria-hidden="true"><use href="#lock"/></svg><span id="encryptionNoticeText"></span><svg aria-hidden="true"><use href="#chevron"/></svg></button>
+            <div id="viewOnceHint" class="view-once-hint" hidden>
+              <span>View Once · Opens once for the recipient</span>
+              <button id="previewOnceText" type="button">Preview</button>
+            </div>
+            <form id="composer" class="composer" hidden>
+              <button id="attachmentMenu" class="icon-button" type="button" aria-label="Message options" title="Message options" aria-controls="inlineAttachments" aria-expanded="false"><svg><use href="#plus"/></svg></button>
+              <textarea id="message" aria-label="Message" placeholder="Message" rows="1" maxlength="2000" autocomplete="off"></textarea>
+              <button id="onceShortcut" class="icon-button once-toggle" type="button" aria-label="Enable view once" aria-pressed="false" title="View once" hidden><svg aria-hidden="true"><use href="#viewOnceIcon"/></svg></button>
+              <div class="composer-actions" id="composerActions">
+                <button id="cameraShortcut" class="icon-button media-shortcut" type="button" aria-label="Camera"><svg><use href="#camera"/></svg></button>
+                <button id="voiceShortcut" class="icon-button media-shortcut" type="button" aria-label="Hold to record a voice message. Release to preview, swipe left to cancel, or swipe up to lock"><svg><use href="#mic"/></svg></button>
+                <button id="send" class="send-button" type="button" aria-label="Send" disabled><svg><use href="#sendIcon"/></svg></button>
+              </div>
+            </form>
+            <section id="inlineAttachments" class="inline-attachments" aria-label="Message attachments" hidden></section>
+          </div>
           <div id="adminComposer" class="admin-composer" hidden>
             <div class="read-only-bar">
               <svg aria-hidden="true"><use href="#lock"/></svg>
@@ -249,7 +253,7 @@
             <div class="settings-row"><svg><use href="#moon"/></svg><span>Appearance</span><select id="theme" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
             <button class="settings-row" id="appearancePresets" type="button"><svg><use href="#moon"/></svg><span>Theme presets</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="chatTextSize" type="button"><svg><use href="#chat"/></svg><span>Message text size</span><strong id="chatTextSizeLabel"></strong></button>
-            <button class="settings-row" id="chatBackground"><svg><use href="#chat"/></svg><span>Chat background</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row" id="chatBackground"><svg><use href="#chat"/></svg><span>Chat background</span><small id="chatBackgroundLabel"></small><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="accentSettings"><svg><use href="#moon"/></svg><span>Accent color</span><span id="accentSample" class="accent-sample"></span></button>
 
           </div>

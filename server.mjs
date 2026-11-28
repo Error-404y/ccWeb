@@ -3,6 +3,7 @@ import {caseWorkspace} from './lib/case-workspace.mjs';
 import express from 'express';
 import {desktopMessenger} from './lib/desktop-messenger.mjs';
 import {sellerStore} from './lib/sellers.mjs';
+import {sellerCatalog} from './lib/seller-catalog.mjs';
 import {userTickets} from './lib/user-tickets.mjs';
 import {createMonitoring} from './lib/monitoring.mjs';
 import { createHash } from 'node:crypto';
@@ -23,15 +24,15 @@ import { openAccounts, createAccount, findAccount, issuePin, usePin, requestRese
 
 import { initAccess, accessStatus, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey, PAYMENT_SUBMISSION_GRACE } from './lib/access.mjs';
 import {initControl,createControlSessions,desktopControlAllowed,issueRecovery,recoverAccount,controlOverview,controlWorkload,controlAccounts,accountAction,controlPayments,controlAudit,archiveControlRecord} from './lib/control.mjs';
-import {listAccessKeys,generatePlanKeys,replaceUnusedKey,revokeAccessKey} from './lib/access.mjs';
+import {accessKeyInventory,generatePlanKeys,replaceUnusedKey,revokeAccessKey,usedKeyCleanup} from './lib/access.mjs';
 import {initPayments,COINS,createCryptoInvoice,existingCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice,verifyNetwork} from './lib/crypto-payments.mjs';
 import {initPaymentTickets,paymentTickets} from './lib/payment-tickets.mjs';
-import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
+import { initDevices, findDeviceAccount, deviceVerifier, deviceProfiles } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
 import { handleAdminCommand } from './lib/admin.mjs';
 import { startAdminSocket } from './lib/admin-socket.mjs';
-import {complianceStore,TERMS_VERSION} from './lib/compliance.mjs';
+import {complianceStore,controlReportSummary,TERMS_VERSION} from './lib/compliance.mjs';
 
 process.umask(0o077);
 const root = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,7 @@ pruneActivity(db);
 setInterval(() => pruneActivity(db), 3600000).unref();
 const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).version;
 const devices = deviceVerifier();
+const registeredDevices = deviceProfiles(db);
 const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
@@ -57,6 +59,8 @@ chats.contacts = contacts;
 const unlocks = new Unlocks(), sendingResets = new Map();
 const controlSessions=createControlSessions(db),auditLedger=adminAudit(db);
 const sellers=sellerStore(db);chats.sellerInvites=sellers;chats.profileRole=id=>sellers.role(id);sellers.sync(chats);
+const catalog=sellerCatalog(db,{isSeller:id=>sellers.isActive(id)});
+const keyCleanup=usedKeyCleanup(db,deleteAccount);
 const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN support_keys k ON k.account=a.id WHERE a.id=? AND a.access_plan='admin' AND a.access_revoked=0 AND (a.suspended=0 OR a.suspended_until<=?) AND k.expires>?").get(id,Date.now(),Date.now()));
 const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.adminAccount=id=>desktopChats.role(id)==='admin'?desktopChats.principal(id).admin:chats.profileRole(id)==='admin'?id:null;chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
 const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id),name:id=>sellers.name(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
@@ -81,7 +85,8 @@ function supportForAccount(admin,account) {
   }
   return cases;
 }
-const workspace=caseWorkspace(db,{audit:auditLedger,reports:compliance,isAdmin:isTicketAdmin,support:supportRecord,supportForAccount});
+const workspace=caseWorkspace(db,{audit:auditLedger,reports:compliance,isAdmin:isTicketAdmin,support:supportRecord,supportForAccount,
+  deviceInfo:registeredDevices.get,accountName:chats.profileName});
 workspace.sweep();
 setInterval(()=>workspace.sweep(),600000).unref();
 const controlSource=req=>req.deviceId?'mobile':'desktop';
@@ -91,6 +96,7 @@ const publicOrigin = process.env.PUBLIC_ORIGIN;
 const mobileOnly = process.env.QZU_MOBILE_ONLY === 'true' || (production && process.env.QZU_MOBILE_ONLY !== 'false');
 chats.requireEncryptedDirect = mobileOnly;
 const nativeOrigins = new Set(['capacitor://localhost', 'https://localhost']);
+const nativePlatform=req=>req.get('origin')==='capacitor://localhost'?'ios':req.get('origin')==='https://localhost'?'android':null;
 const desktopRequest=req=>!req.get('x-qzu-device')&&!nativeOrigins.has(req.get('origin'))&&desktopControlAllowed(req.get('user-agent')||'',req.get('sec-ch-ua-mobile')||'',req.get('sec-ch-ua-platform')||'');
 if (production && !publicOrigin.startsWith('https://')) throw new Error('HTTPS required.');
 if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
@@ -315,7 +321,9 @@ app.get('/api/control/accounts',(req,res)=>{
 app.get('/api/control/accounts/:id',(req,res)=>res.json(workspace.account(req.account.id,controlSource(req),req.params.id)));
 app.get('/api/control/cases/:type/:id',(req,res)=>res.json(workspace.view(req.account.id,req.params.type,req.params.id)));
 app.post('/api/control/cases/:type/:id',(req,res)=>res.json(workspace.act(req.account.id,controlSource(req),req.params.type,req.params.id,req.body||{})));
-app.get('/api/control/keys',(req,res)=>res.json({items:listAccessKeys(db,req.query.q||'')}));
+app.get('/api/control/keys',(req,res)=>res.json(accessKeyInventory(db,req.query.q??'',{scope:req.query.scope,after:req.query.after})));
+app.post('/api/control/keys/purge-used/preview',(req,res)=>res.json(keyCleanup.preview()));
+app.post('/api/control/keys/purge-used',(req,res)=>res.json(keyCleanup.purge(req.body?.confirmation,req.body?.previewToken)));
 app.post('/api/control/keys/generate',(req,res)=>res.json(generatePlanKeys(db,req.body?.plan,req.body?.count,req.account.id)));
 app.post('/api/control/keys/replace',(req,res)=>res.json(replaceUnusedKey(db,req.body?.id,req.account.id)));
 app.post('/api/control/keys/revoke',(req,res)=>res.json(revokeAccessKey(db,req.body?.id,req.account.id,req.body?.reason)));
@@ -351,8 +359,21 @@ app.post('/api/control/support/respond',(req,res)=>{
 });
 app.post('/api/control/support/send',(req,res)=>{const room=chats.requireRoom(req.account.id,req.body?.id);if(room.supportAgent!==req.account.id||room.supportStatus!=='accepted'||typeof req.body?.text!=='string')return res.status(403).json({error:'Assigned support conversation required.'});chats.send(req.account.id,room.id,req.body.text);notifyRoom(req.account.id,room.id);res.json({ok:true});});
 app.get('/api/control/audit',(req,res)=>res.json({items:auditLedger.list({q:req.query.q??'',type:req.query.type??'',outcome:req.query.outcome??'',before:req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before)}),legacy:controlAudit(db)}));
-app.get('/api/control/reports',(req,res)=>res.json({items:compliance.list(true,req.query.archived==='1')}));
-app.get('/api/control/reports/media/:id',(req,res)=>{const m=compliance.media(req.params.id);if(!m)return res.sendStatus(404);res.set('Cache-Control','no-store').type(m.mime).send(Buffer.from(m.body));});
+app.get('/api/control/reports',(req,res)=>res.json({items:compliance.list(true,req.query.archived==='1').map(controlReportSummary)}));
+app.get('/api/control/reports/:id/evidence',(req,res)=>{
+  const report=compliance.get(req.params.id);
+  if(!report)return res.status(404).json({error:'Report unavailable.'});
+  const {id,context,attachment,message_id,chat_type,evidence,created,reporter,target}=report;
+  auditLedger.record(req.account.id,controlSource(req),'reports/evidence-view','report',id,target);
+  res.json({id,context,attachment,messageId:message_id,chatType:chat_type,evidence,created,reporter,target});
+});
+function reportAttachment(req,res){
+  const media=compliance.media(req.params.id);
+  if(!media)return res.sendStatus(404);
+  auditLedger.record(req.account.id,controlSource(req),'reports/evidence-attachment','report',req.params.id,media.target);
+  res.type(media.mime).send(Buffer.from(media.body));
+}
+app.get('/api/control/reports/media/:id',reportAttachment);
 app.post('/api/control/reports/collaborate',(req,res)=>{const b=req.body||{},result=compliance.collaborate(b.id,req.account.id,b.status,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
 app.post('/api/control/reports/resolve',(req,res)=>{const b=req.body||{};workspace.requireAssignedOrUnclaimed(req.account.id,'report',b.id);const result=compliance.resolve(b.id,b.action,req.account.id,b.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
 app.get('/api/control/feedback',(req,res)=>res.json({items:feedback.list(true,req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before),req.query.archived==='1')}));
@@ -390,6 +411,7 @@ app.use('/api/control',(req,res)=>res.status(404).json({error:'Unknown control e
 app.post('/api/access/recover',paymentRate('recover',5),(req,res)=>{
  if(!req.deviceId||req.account||req.body?.confirmed!==true)return res.status(403).json({error:'Unregistered mobile device and confirmation required.'});
  const result=recoverAccount(db,req.body?.code,req.body?.pin,req.deviceId);
+ registeredDevices.erase(result.id);
  unlocks.revokeAll(result.id);push.remove(result.id);prekeys.remove(result.id);chats.erase(result.id);chats.hidePresence(result.id);
  res.json({ok:true,needsSetup:false});
 });
@@ -436,6 +458,7 @@ app.post('/api/login/setup', guard('login-setup', 5, 60_000), (req, res) => {
     error: 'Choose a different PIN or unlock.'
   });
   recordActivity(db, req.account.id, 'PIN created');
+  registeredDevices.update(req.account,req.deviceId,nativePlatform(req));
   if (!chats.inviteFor(req.account.id)) chats.newCode(req.account.id);
   res.json({
     token: unlocks.issue(req.account.id,Boolean(req.deviceId&&req.body?.keepUnlocked===true)),
@@ -446,6 +469,7 @@ app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
   const result = verifyLogin(db, req.account.id, req.body?.pin);
   recordActivity(db, req.account.id, result === 'ok' ? 'Unlock successful' : result === 'locked' ? 'Unlock temporarily blocked' : 'Unlock rejected');
   if (result !== 'ok') return loginError(res, result);
+  registeredDevices.update(req.account,req.deviceId,nativePlatform(req));
   res.json({
     token: unlocks.issue(req.account.id,Boolean(req.deviceId&&req.body?.keepUnlocked===true)),
     access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))
@@ -478,7 +502,7 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
 });
 
 function deleteAccount(id){controlSessions.revokeAccount(id);workspace.eraseAccount(id);helpTickets.erase(id);sellers.erase(id,chats);desktopChats.erase(id);
-  chats.erase(id);prekeys.remove(id);compliance.purge(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
+  chats.erase(id);prekeys.remove(id);compliance.purge(id);registeredDevices.erase(id);catalog.erase(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
 }
 app.use('/api',(req,res,next)=>{
   if(!unlocks.check(req.account.id,req.get('x-qzu-unlock')))return res.status(423).json({error:'Locked.'});
@@ -494,10 +518,16 @@ app.post('/api/admin/logout',guard('admin-logout',5,60000),(req,res)=>{
   db.prepare('DELETE FROM blocks WHERE owner=? OR target=?').run(a.id,a.id);
   db.prepare('DELETE FROM security_activity WHERE owner=?').run(a.id);
   db.prepare('UPDATE accounts SET deletion_hash=NULL,terms_version=0 WHERE id=?').run(a.id);
+  registeredDevices.erase(a.id);
   controlSessions.revokeAccount(a.id);res.json(releaseSupportKey(db,a.id));
 });
 app.post('/api/account/recovery-code',guard('recovery-code',5,60000),(req,res)=>res.json(issueRecovery(db,req.account.id,req.body?.pin)));
 app.get('/api/account/support-reference',guard('support-reference',20,60000),(req,res)=>res.json({reference:req.account.id}));
+app.post('/api/account/device',guard('account-device',10,60000),(req,res)=>{
+  const platform=nativePlatform(req);
+  if(!platform||!registeredDevices.update(req.account,req.deviceId,platform,req.body||{}))return res.status(403).json({error:'Registered mobile device required.'});
+  res.json({ok:true});
+});
 app.post('/api/account/deletion-code',guard('deletion-code',5,60000),(req,res)=>res.json({code:compliance.deletionCode(req.account.id)}));
 app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(req,res)=>{
   if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});
@@ -514,6 +544,15 @@ app.use('/api',(req,res,next)=>{
   next();
 });
 app.get('/api/sellers/directory',guard('seller-directory',30,60000),(req,res)=>res.json({items:sellers.directory(req.account.id)}));
+app.get('/api/sellers/catalog',guard('seller-catalog',40,60000),(req,res)=>res.json(catalog.list(req.account.id)));
+app.post('/api/sellers/catalog',guard('seller-catalog-write',40,60000),(req,res)=>res.json(catalog.save(req.account.id,req.body)));
+app.post('/api/sellers/catalog/remove',guard('seller-catalog-write',40,60000),(req,res)=>res.json(catalog.remove(req.account.id,req.body?.id)));
+app.get('/api/sellers/catalog/contact/:id',guard('seller-catalog-contact',40,60000),(req,res)=>{
+  if(['admin','seller'].includes(req.account.access_plan))return res.status(403).json({error:'Customer contact required.'});
+  const peer=contacts.peer(req.account.id,req.params.id);
+  if(!sellers.isActive(peer)||chats.isBlocked(req.account.id,peer))return res.status(404).json({error:'Seller list unavailable.'});
+  res.json({...catalog.list(peer),name:sellers.name(peer),verified:sellers.role(peer)==='verified-seller'});
+});
 app.post('/api/sellers/profile',guard('seller-profile',10,60000),(req,res)=>res.json(sellers.rename(req.account.id,req.body?.name)));
 app.post('/api/sellers/connect',guard('seller-connect',10,60000),(req,res)=>{if(!sellers.isActive(req.account.id)||!sellers.isActive(req.body?.id))return res.status(403).json({error:'Seller unavailable.'});if(req.account.restricted_until>Date.now())return res.status(403).json({error:'Messaging is temporarily restricted.'});const invite=sellers.ensureCode(req.body.id,chats);res.json(chats.requestConnection(req.account.id,invite.code,sellers.name(req.body.id)));});
 app.get('/api/tickets',guard('user-tickets',60,60000),(req,res)=>res.json({items:helpTickets.list(req.account.id),completed:helpTickets.completions(req.account.id),receipts:helpTickets.receipts(req.account.id)}));
@@ -546,7 +585,10 @@ app.post('/api/report',guard('report',5,60000),(req,res)=>{
   const admin=db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired'").all().map(a=>a.id);push.notify(admin);res.json(result);
 });
 app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json({items:compliance.list(true)});});
-app.get('/api/admin/reports/media/:id',guard('report-media',40,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const media=compliance.media(req.params.id);if(!media)return res.sendStatus(404);res.set('Cache-Control','no-store').type(media.mime).send(Buffer.from(media.body));});
+app.get('/api/admin/reports/media/:id',guard('report-media',40,60000),(req,res)=>{
+  if(!isTicketAdmin(req.account.id))return res.sendStatus(403);
+  reportAttachment(req,res);
+});
 app.post('/api/admin/reports/collaborate',guard('report-collaborate',30,60000),(req,res)=>{
   if(req.account.access_plan!=='admin')return res.sendStatus(403);
   const {id,status,note=''}=req.body||{};
@@ -630,7 +672,7 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Find chats faster, preview media before sending, and follow support and payment progress.',
+  notes: 'Write and share with an updated chat composer, explore fresh wallpapers, and view listings from your seller contacts.',
   changes: ['Chat search, pinned contacts and unread navigation','Voice previews and photo editing','Ticket receipts and payment progress','Control Center case management and audit history'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
@@ -679,6 +721,12 @@ app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 600
   res.json(chats.getEncryptedMedia(req.account.id, req.params.room, req.params.message));
 });
 function stateData(a, paged) {
+  const savedContacts=contacts.list(a.id).map(contact=>{
+    const peer=contacts.peer(a.id,contact.id);
+    return {...contact,peerRole:chats.profileRole(peer),peerAdmin:chats.adminAccount(peer),peerName:chats.profileName(peer),
+      peerSeller:sellers.isActive(peer)&&!chats.isBlocked(a.id,peer)};
+  });
+  const contactsById=new Map(savedContacts.map(contact=>[contact.id,contact]));
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
@@ -694,8 +742,11 @@ function stateData(a, paged) {
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
     supportDeletions:a.access_plan==='admin'?deletionInbox(a.id):[],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
-    rooms: chats.snapshot(a.id),
-    contacts: contacts.list(a.id).map(c=>({...c,peerRole:chats.profileRole(contacts.peer(a.id,c.id)),peerAdmin:chats.adminAccount(contacts.peer(a.id,c.id)),peerName:chats.profileName(contacts.peer(a.id,c.id))})),
+    rooms: chats.snapshot(a.id).map(room=>{
+      const contact=contactsById.get(room.contact?.id);
+      return contact?{...room,contact}:room;
+    }),
+    contacts: savedContacts,
     requests: chats.connectionRequests(a.id),
     invite: chats.ensureInvite(a.id),
     pinState: a.pin_state,

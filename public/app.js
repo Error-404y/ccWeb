@@ -74,7 +74,7 @@ let burnSeconds = 0;
 let mobileOpen = false;
 let sequence = 0;
 let renderedRoom = null;
-let renderedMessages = [];
+let renderedMessages = new Map();
 let contactKey = '';
 let qrKey = '';
 let pinPrompt = false;
@@ -255,7 +255,13 @@ const clock = ms => {
   const minutes=String(Math.floor(s/60)%60).padStart(2,'0'),seconds=String(s%60).padStart(2,'0');return s>=3600?String(Math.floor(s/3600)).padStart(2,'0')+':'+minutes+':'+seconds:minutes+':'+seconds;
 };
 const serverNow = () => Date.now() + offset;
-const supportClock = (room,now) => room.persistent ? 'No expiry' : room.mobileSupport && room.expires-now >= 3600000 ? Math.ceil((room.expires-now)/60000/60)+'h' : clock(room.expires-now);
+function threadClock(room, now) {
+  if (room.persistent) return 'No expiry';
+  const remaining = room.expires - now;
+  if (remaining >= 3600000) return Math.ceil(remaining / 3600000) + ' hr left';
+  if (remaining >= 60000) return Math.ceil(remaining / 60000) + ' min left';
+  return Math.max(0, Math.ceil(remaining / 1000)) + ' sec left';
+}
 const nameFor = room => room.peerRole==='admin'?'qzu-Support':room.support ? (room.supportAgent ? 'Contact ' + room.id.slice(0,4).toUpperCase() : 'qzu-Support') : room.admin ? 'Announcements' : room.peerName || room.contact?.nickname || (room.group ? 'Group ' : 'Chat ') + room.id.slice(0, 4).toUpperCase();
 
 function stopCamera() {
@@ -287,14 +293,14 @@ modal.addEventListener('close', () => {
     stopCamera();
     body.replaceChildren();
     modalLocked = false;
-    modal.classList.remove('update-sheet','attachment-sheet');$('attachmentMenu').classList.remove('sheet-open');
+    modal.classList.remove('update-sheet','attachment-sheet','photo-sheet');$('attachmentMenu').classList.remove('sheet-open');
   }
 });
 
 function show(title, content, locked = false) {
   stopCheckout();
   delete modal.dataset.checkout;
-  modal.classList.remove('update-sheet','attachment-sheet');$('attachmentMenu').classList.remove('sheet-open');
+  modal.classList.remove('update-sheet','attachment-sheet','photo-sheet');$('attachmentMenu').classList.remove('sheet-open');
   clearMedia();
   stopCamera();
   modalLocked = locked;
@@ -557,6 +563,14 @@ function pinDialog(title, fields, submitLabel, onSubmit, {
   show(fullScreen && autoUnlock ? 'Enter your PIN' : title, auth && !fullScreen ? [brand, form] : [form], locked);
 }
 
+async function reportDeviceMetadata(epoch) {
+  if (!native) return;
+  try {
+    const {model, osVersion} = await devicePlugin.deviceInfo();
+    if (epoch === authEpoch && unlockToken) await api('account/device', {model, osVersion, appVersion: installedVersion}, true);
+  } catch {}
+}
+
 function showLogin() {
   if (bootPending || document.hidden || unlockToken || !sessionReady) return;
   const setup = needsSetup;
@@ -566,6 +580,7 @@ function showLogin() {
       pin: values[0],keepUnlocked:native&&!backgroundPin
     });
     unlockToken = result.token;
+    void reportDeviceMetadata(authEpoch);
     accessDue = result.access?.active === false;
     termsPending=result.termsAccepted!==true;suspendedAccount=result.suspended===true;
     needsSetup = false;
@@ -768,7 +783,8 @@ function lock(reopen = true) {
   mobileOpen = false;
   contactKey = '';
   renderedRoom = null;
-  renderedMessages = [];
+  renderedMessages.clear();
+  unreadBoundary = null;
   $('chatSearch').value = '';
   unreadOnly = false;
   $('unreadFilter').setAttribute('aria-pressed', 'false');
@@ -880,6 +896,215 @@ function addContactMarks(node,contact,room=null) {
   else if(contact?.trusted){const mark=svg('lock','contact-trusted');mark.setAttribute('aria-label','Trusted contact');mark.setAttribute('role','img');mark.removeAttribute('aria-hidden');node.append(mark);}
   if(contact?.muted || room?.mutedUntil > serverNow())node.append(el('span','contact-muted','Muted'));
 }
+function canViewSellerCatalog(contact) {
+  return Boolean(contact?.id && !state.seller && !state.supportAgent
+    && (contact.peerSeller || state.contacts?.some(item => item.id === contact.id && item.peerSeller)));
+}
+
+const sellerCurrencyLabels = {CHF: 'Swiss franc', EUR: 'Euro', GBP: 'British pound', USD: 'US dollar'};
+const sellerPriceFormatters = new Map();
+
+function formatListingPrice({priceMinor, currency}) {
+  if (!sellerPriceFormatters.has(currency)) {
+    sellerPriceFormatters.set(currency, new Intl.NumberFormat(undefined, {style:'currency', currency, currencyDisplay:'code'}));
+  }
+  return sellerPriceFormatters.get(currency).format(priceMinor / 100);
+}
+
+function sellerListingTable(items, editable) {
+  const table = el('table','seller-catalog-table');
+  table.setAttribute('aria-label','Items for sale');
+  const header = table.createTHead().insertRow();
+  for (const label of ['Name', 'Quantity', 'Price']) {
+    const column = el('th','',label);
+    column.scope = 'col';
+    header.append(column);
+  }
+  const rows = table.createTBody();
+  for (const item of items) {
+    const row = rows.insertRow(), title = el('th','seller-catalog-item');
+    title.scope = 'row';
+    title.append(el('span','',item.name));
+    if (editable) {
+      const edit = button('Edit', () => editSellerListing(item), 'seller-catalog-edit');
+      edit.setAttribute('aria-label','Edit ' + item.name);
+      title.append(edit);
+    }
+    const quantity = el('td','seller-catalog-quantity',item.quantity.toLocaleString());
+    if (item.quantity === 0) quantity.dataset.empty = 'true';
+    row.append(title, quantity, el('td','seller-catalog-price',formatListingPrice(item)));
+  }
+  return table;
+}
+
+function sellerDialogActive(root, epoch) {
+  return epoch === authEpoch && !document.hidden && Boolean(unlockToken) && modal.open && root.isConnected;
+}
+
+function showSellerCatalog(contact = null, savedItems) {
+  const owner = !contact;
+  if (owner ? !state.seller : !canViewSellerCatalog(contact)) return;
+  const epoch = authEpoch, root = el('section','seller-catalog');
+  const profile = el('header','seller-catalog-profile');
+  const name = el('h3','',owner ? state.sellerName || 'Seller' : contact.nickname);
+  const status = el('span','seller-catalog-status',owner && state.sellerVerified ? 'Verified seller' : 'Seller');
+  profile.append(name, status);
+  const content = el('div','seller-catalog-content');
+  const actions = el('div','seller-catalog-actions');
+  const add = button('Add item', () => editSellerListing());
+  if (owner) {
+    add.disabled = true;
+    actions.append(add, button('Back to profile', showOwnSellerProfile, 'secondary-button'));
+  } else {
+    actions.append(button('Manage contact', () => showContactManagement(contact), 'secondary-button'));
+  }
+  root.append(profile, content, actions);
+  show(owner ? 'Manage listings' : 'Seller profile', [root]);
+
+  function display(items) {
+    add.disabled = false;
+    if (items.length) content.replaceChildren(sellerListingTable(items, owner));
+    else {
+      const empty = el('div','seller-catalog-empty');
+      empty.setAttribute('role','status');
+      empty.append(el('strong','','List is empty'));
+      if (owner) empty.append(el('p','','Add an item to show it on your seller profile.'));
+      content.replaceChildren(empty);
+    }
+  }
+
+  async function load() {
+    const loading = el('p','seller-catalog-message','Loading listings…');
+    loading.setAttribute('role','status');
+    content.replaceChildren(loading);
+    const route = owner ? 'sellers/catalog' : 'sellers/catalog/contact/' + encodeURIComponent(contact.id);
+    try {
+      const result = await api(route);
+      if (!sellerDialogActive(root, epoch)) return;
+      if (!owner) {
+        name.textContent = result.name || contact.nickname;
+        status.textContent = result.verified ? 'Verified seller' : 'Seller';
+      }
+      display(result.items);
+    } catch (error) {
+      if (!sellerDialogActive(root, epoch)) return;
+      const message = el('p','seller-catalog-message',errorMessage(error));
+      message.setAttribute('role','alert');
+      content.replaceChildren(message, button('Retry', load, 'secondary-button'));
+    }
+  }
+
+  if (savedItems) display(savedItems);
+  else void load();
+}
+
+function sellerField(label, field) {
+  const wrap = el('label','seller-catalog-field');
+  wrap.append(el('span','',label),field);
+  return wrap;
+}
+
+function showOwnSellerProfile() {
+  if (!state.seller) return;
+  const field = el('input','nickname-input');
+  field.value = state.sellerName || 'Seller';
+  field.maxLength = 40;
+  const save = button('Save', async () => {
+    save.disabled = true;
+    try {
+      await api('sellers/profile',{name:field.value.trim()});
+      if (save.isConnected) closeModal();
+      await refresh();
+    } catch (error) {
+      if (!save.isConnected) return;
+      modalError(error);
+      save.disabled = false;
+    }
+  });
+  const status = el('span','seller-catalog-status',state.sellerVerified ? 'Verified seller' : 'Unverified seller');
+  const actions = el('div','seller-catalog-actions');
+  actions.append(save,button('Manage listings', () => showSellerCatalog(), 'secondary-button'));
+  show('Seller profile',[status,sellerField('Display name',field),actions]);
+}
+
+function editSellerListing(item) {
+  if (!state.seller) return;
+  const id = item?.id || crypto.randomUUID(), epoch = authEpoch;
+  const form = el('form','seller-catalog-form');
+  const title = el('input','nickname-input');
+  title.name = 'name';
+  title.value = item?.name || '';
+  title.maxLength = 80;
+  title.required = true;
+  const quantity = el('input','nickname-input');
+  quantity.name = 'quantity';
+  quantity.type = 'number';
+  quantity.inputMode = 'numeric';
+  quantity.min = '0';
+  quantity.max = '1000000';
+  quantity.step = '1';
+  quantity.value = item?.quantity ?? 1;
+  quantity.required = true;
+  const price = el('input','nickname-input');
+  price.name = 'price';
+  price.inputMode = 'decimal';
+  price.placeholder = '0.00';
+  price.maxLength = 10;
+  price.value = item ? (item.priceMinor / 100).toFixed(2) : '';
+  price.required = true;
+  const currency = el('select','nickname-input');
+  currency.name = 'currency';
+  for (const [code,label] of Object.entries(sellerCurrencyLabels)) {
+    const option = el('option','',code + ' · ' + label);
+    option.value = code;
+    currency.append(option);
+  }
+  currency.value = item?.currency || 'CHF';
+  const details = el('div','seller-catalog-fields');
+  details.append(sellerField('Quantity',quantity),sellerField('Price per item',price),sellerField('Currency',currency));
+  const note = el('p','','Set quantity to 0 when an item is out of stock.');
+  const error = el('p','seller-catalog-error');
+  error.setAttribute('role','alert');
+  const actions = el('div','seller-catalog-actions');
+  const submit = el('button','primary-button',item ? 'Save changes' : 'Add item');
+  submit.type = 'submit';
+  actions.append(submit,button('Cancel',() => showSellerCatalog(),'secondary-button'));
+  if (item) actions.append(button('Remove item',() => confirmRemoveSellerListing(item),'secondary-button danger-button'));
+  form.append(sellerField('Item name',title),details,note,error,actions);
+  form.addEventListener('submit',async event => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    submit.disabled = true;
+    error.textContent = '';
+    try {
+      const result = await api('sellers/catalog',{id,name:title.value,quantity:quantity.valueAsNumber,price:price.value,currency:currency.value});
+      if (sellerDialogActive(form,epoch)) showSellerCatalog(null,result.items);
+    } catch (failure) {
+      if (!sellerDialogActive(form,epoch)) return;
+      error.textContent = errorMessage(failure);
+      submit.disabled = false;
+    }
+  });
+  show(item ? 'Edit item' : 'Add item',[form]);
+  if (!native) title.focus({preventScroll:true});
+}
+
+function confirmRemoveSellerListing(item) {
+  const epoch = authEpoch, detail = el('p','',item.name + ' will be removed from your seller list.');
+  const remove = button('Remove item', async () => {
+    remove.disabled = true;
+    try {
+      const result = await api('sellers/catalog/remove',{id:item.id});
+      if (sellerDialogActive(remove,epoch)) showSellerCatalog(null,result.items);
+    } catch (error) {
+      if (!sellerDialogActive(remove,epoch)) return;
+      modalError(error);
+      remove.disabled = false;
+    }
+  },'primary-button danger-button');
+  show('Remove listing?',[detail,remove,button('Cancel',() => editSellerListing(item),'secondary-button')]);
+}
+
 function showContactManagement(contact) {
   const field=el('input','nickname-input');
   field.type='text';field.value=contact.peerRole==='admin'?'qzu-Support':contact.nickname;field.disabled=contact.peerRole==='admin';field.maxLength=40;field.setAttribute('aria-label','Nickname');
@@ -894,6 +1119,7 @@ function showContactManagement(contact) {
   });
   const confirmRemove=block=>{const request=contact.peerRole==='admin'&&!state.supportAgent;show(block?'Block contact?':request?'Request contact deletion?':'Delete contact?',[el('p','',block?'This removes the contact and prevents new connections.':request?'Ask Support to delete the contact and shared conversation for both sides.':'This deletes the contact and shared conversation for both users.'),button(block?'Block':request?'Request deletion':'Delete contact',async()=>{try{const result=await api('contacts/remove',{id:contact.id,block});closeModal();await refresh();if(result.requested)info('Deletion requested','Support has received your contact deletion request.');}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]);};
   const controls=[el('p','',contact.trusted?'Trusted contact · 30 days inactivity':'Contact · 14 days inactivity'),field,favoriteLabel,mutedLabel,save];
+  if (canViewSellerCatalog(contact)) controls.unshift(button('View seller list',() => showSellerCatalog(contact),'secondary-button'));
   if(contact.trusted)controls.push(button('Reset trust',()=>show('Reset trust?',[el('p','','Both users must verify a new chat. The regular inactivity limit applies.'),button('Reset trust',async()=>{try{await api('contacts/update',{id:contact.id,resetTrust:true});closeModal();await refresh();}catch(error){modalError(error);}},'primary-button danger-button'),button('Cancel',()=>showContactManagement(contact),'secondary-button')]),'secondary-button'));
   controls.push(button('Delete Contact',()=>confirmRemove(false),'secondary-button'));if(contact.peerRole!=='admin')controls.push(button('Block contact',()=>confirmRemove(true),'secondary-button'));controls.push(button('Close',closeModal,'secondary-button'));
   show('Manage contact',controls);
@@ -903,7 +1129,8 @@ $('manageContacts').addEventListener('click',()=>{
   for(const contact of state.contacts||[]){
     const row=el('div','request-item'),name=el('strong','contact-name',contact.nickname);
     addContactMarks(name,contact);
-    row.append(name,button('Manage',()=>showContactManagement(contact),'secondary-button'));
+    const seller = canViewSellerCatalog(contact);
+    row.append(name,button(seller?'Seller profile':'Manage',()=>seller?showSellerCatalog(contact):showContactManagement(contact),'secondary-button'));
     list.append(row);
   }
   if(!list.children.length)list.append(el('p','','No contacts.'));
@@ -925,6 +1152,32 @@ function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m
 function matchesChatSearch(query, ...names) {
   return !query || names.some(name => name?.toLocaleLowerCase().includes(query));
 }
+const messageDateFormat = new Intl.DateTimeFormat(undefined, {month:'short', day:'numeric', year:'numeric'});
+let unreadBoundary = null;
+
+function updateUnreadBoundary(room) {
+  const previous = unreadBoundary?.roomId === room.id
+    ? room.messages.find(message => message.id === unreadBoundary.messageId && !message.deleted)
+    : null;
+  const target = previous?.unread ? previous : room.messages.find(message => !message.mine && !message.deleted && message.unread) || previous;
+  unreadBoundary = target ? {roomId:room.id, messageId:target.id} : null;
+  return target?.id;
+}
+
+function renderMessageDivider(existing, id, label, theme) {
+  const divider = existing || el('div', 'message-divider ' + theme);
+  if (!existing) {
+    divider.id = id;
+    divider.setAttribute('role', 'separator');
+    divider.append(el('span'));
+  }
+  if (divider.getAttribute('aria-label') !== label) {
+    divider.setAttribute('aria-label', label);
+    divider.firstChild.textContent = label;
+  }
+  return divider;
+}
+
 function nextUnread(room) {
   if (!room || !canReadCurrent()) return [];
   const view = $('messages'), bottom = view.getBoundingClientRect().bottom;
@@ -949,7 +1202,8 @@ $('newMessages').addEventListener('click', () => {
   if (!message) return;
   const row = $('message-' + message.id);
   row?.focus({preventScroll:true});
-  row?.scrollIntoView({behavior:motionAllowed()?'smooth':'auto',block:'start'});
+  const divider = $('unread-divider');
+  (divider?.nextElementSibling === row ? divider : row)?.scrollIntoView({behavior:motionAllowed()?'smooth':'auto',block:'start'});
 });
 function updateNavigation(){
   const nav=$('bottomNav'),enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));
@@ -1088,6 +1342,7 @@ function renderChat() {
   const isAdmin = Boolean(current?.admin);
   const readOnly = Boolean(current?.readOnly);
   $('composer').hidden = !current || readOnly;
+  $('composerDock').hidden = !current || readOnly;
   if(!current||readOnly||current.support||!unlockToken)closeInlineAttachments();
   renderEncryptionNotice(current);
   $('adminComposer').hidden = !readOnly;
@@ -1102,6 +1357,7 @@ function renderChat() {
   $('groupInvite').hidden = !current?.canInvite;
   $('chatOptions').hidden = !current || readOnly;
   $('profileAvatar').disabled = !current;
+  $('profileAvatar').setAttribute('aria-label', canViewSellerCatalog(current?.contact) ? 'Open seller profile' : 'Contact information');
   updateNavigation();
   $('presenceLabel').hidden = !current || isAdmin;
   $('presenceLabel').textContent = current?.group ? (current.activeCount || 0) + ' active' : current?.activeCount ? 'Active' : 'Offline';
@@ -1120,36 +1376,65 @@ function renderChat() {
   if (!current) {
     updateMessageJump(null);
     $('messages').replaceChildren();
+    unreadBoundary = null;
     renderedRoom = null;
-    renderedMessages = [];
+    renderedMessages.clear();
     return;
   }
   $('threadName').textContent = nameFor(current);
   addContactMarks($('threadName'),current.contact,current);
-  $('chatTimer').textContent = supportClock(current,now);
   updateExpiry(current);
   const container = $('messages');
-  const ids = current.messages.map(message => JSON.stringify([message.id, message.text, message.edited, message.opened, message.deleted, message.reactions, message.reply, message.burnSeconds, message.burnAt, message.encryptedMedia, current.encryptionStatus]));
+  const signatures = new Map(current.messages.map(message => [message.id, JSON.stringify([
+    message.text, message.sender, message.edited, message.opened, message.deleted, message.reactions,
+    message.reply, message.burnSeconds, message.burnAt, message.encryptedMedia, current.encryptionStatus
+  ])]));
   const sameRoom = renderedRoom === current.id;
 
   const previousTop=container.scrollTop, remembered=scrollMemory.get(current.id);
   const follow = (!sameRoom&&(!remembered||remembered.bottom)) || (sameRoom&&container.scrollHeight - container.scrollTop - container.clientHeight < 100 ||
-    (ids.length > renderedMessages.length && current.messages.at(-1)?.mine));
+    (signatures.size > renderedMessages.size && current.messages.at(-1)?.mine));
 
   const viewportTop=container.getBoundingClientRect().top;
-  const anchor=sameRoom&&!follow?[...container.children].find(row=>row.getBoundingClientRect().bottom>viewportTop):null;
+  const anchor=sameRoom&&!follow?[...container.children].find(row=>row.classList.contains('message-row')&&row.getBoundingClientRect().bottom>viewportTop):null;
   const anchorTop=anchor?.getBoundingClientRect().top;
   if (!sameRoom) container.replaceChildren();
   const oldRows=new Map([...container.children].map(node=>[node.id,node]));
   const keep=new Set();
+  const firstUnread = updateUnreadBoundary(current);
+  const today = new Date(now).toDateString(), previousDate = new Date(now);
+  previousDate.setDate(previousDate.getDate()-1);
+  const yesterday = previousDate.toDateString();
+  let activeDay = '', slot = 0;
+  function placeRow(row) {
+    keep.add(row);
+    if (container.children[slot] !== row) container.insertBefore(row, container.children[slot] || null);
+    slot++;
+  }
   current.messages.forEach((message,index)=>{
+    const at = message.at || current.created;
+    const day = new Date(at).toDateString(), startsDay = day !== activeDay;
+    if (startsDay) {
+      activeDay = day;
+      const id = 'date-divider-' + message.id;
+      const label = day === today ? 'Today' : day === yesterday ? 'Yesterday' : messageDateFormat.format(at);
+      placeRow(renderMessageDivider(oldRows.get(id), id, label, 'date-divider'));
+    }
+    if (message.id === firstUnread) {
+      const id = 'unread-divider';
+      placeRow(renderMessageDivider(oldRows.get(id), id, 'Unread messages', 'unread-divider'));
+    }
     const id='message-'+message.id, old=oldRows.get(id);let row=old;
-    if(!old||!sameRoom||renderedMessages[index]!==ids[index]){
+    if(!old||!sameRoom||renderedMessages.get(message.id)!==signatures.get(message.id)){
       row=renderMessage(current,message);
       if(old){const before=old.querySelector('.message-reactions')?.textContent;if(before!==row.querySelector('.message-reactions')?.textContent)motion(row.querySelector('.message-reactions'),'motion-reaction');old.replaceWith(row);}
       else if(sameRoom){motion(row,'motion-message');if(message.mine)requestAnimationFrame(()=>animateFromComposer(row));}
     }
-    keep.add(row);if(container.children[index]!==row)container.insertBefore(row,container.children[index]||null);
+    const previous = current.messages[index-1];
+    row.classList.toggle('message-continuation', Boolean(previous && !startsDay && message.id !== firstUnread
+      && !message.deleted && !previous.deleted && message.mine === previous.mine && message.sender === previous.sender
+      && at - (previous.at || current.created) <= 4 * 60000));
+    placeRow(row);
   });
   for(const [key,item] of outbox){if(item.room!==current.id)continue;
     let row=oldRows.get('pending-'+key);const context=roomKeys.get(current.id)?.context;
@@ -1169,7 +1454,7 @@ function renderChat() {
       action.title=item.error;
       status.after(action);
     } else if (!item.failed || !item.retryable) retry?.remove();
-    keep.add(row);if(row.parentNode!==container)container.append(row);
+    placeRow(row);
   }
   for(const node of [...container.children])if(!keep.has(node))node.remove();
 
@@ -1181,7 +1466,7 @@ function renderChat() {
   }
 
   renderedRoom = current.id;
-  renderedMessages = ids;
+  renderedMessages = signatures;
   if (follow) container.scrollTop = container.scrollHeight;
   else {
     const restored=anchor && $(anchor.id);
@@ -1191,8 +1476,10 @@ function renderChat() {
 }
 
 function updateExpiry(room) {
+  const now = serverNow(), label = threadClock(room,now), timer = $('chatTimer');
+  if (timer.textContent !== label) timer.textContent = label;
   if (room.persistent) return;
-  const remaining = Math.max(0, room.expires - serverNow());
+  const remaining = Math.max(0, room.expires - now);
   const bar = $('expiryProgress');
   bar.max = room.expires - room.created;
   bar.value = remaining;
@@ -1398,7 +1685,7 @@ function renderReply() {
     $('replyComposer').hidden = false;
     if (atBottom) view.scrollTop=view.scrollHeight;
   }
-  $('replyName').textContent = 'Reply to ' + replyTarget.sender;
+  $('replyName').textContent = replyTarget.sender === 'You' ? 'Replying to yourself' : 'Replying to ' + replyTarget.sender;
   $('replyText').textContent = privacyMode && !revealedMessages.has(replyTarget.id) ? 'Message hidden' : replyTarget.text;
 }
 
@@ -1546,7 +1833,7 @@ $('retryInviteQR').addEventListener('click',()=>{
   renderConnect();
 });
 
-$('sellerProfileSettings').addEventListener('click',()=>{if(!state.seller)return;const field=el('input','nickname-input');field.value=state.sellerName||'Seller';field.maxLength=40;field.setAttribute('aria-label','Seller display name');const save=button('Save',async()=>{save.disabled=true;try{await api('sellers/profile',{name:field.value.trim()});closeModal();await refresh();}catch(e){modalError(e);save.disabled=false;}});show('Seller profile',[el('p','',state.sellerVerified?'Verified seller':'Unverified seller'),field,save,button('Close',closeModal,'secondary-button')]);});
+$('sellerProfileSettings').addEventListener('click',showOwnSellerProfile);
 function openControlCenter(initialTab) {
  if(!unlockToken||!state.supportAgent)return;
  if(!native){location.assign('/control');return;}
@@ -1621,10 +1908,7 @@ function purgeExpired() {
     if (remaining <= 0) label.closest('.message-row')?.replaceChildren(el('span', 'deleted-message', 'Timed message expired.'));
   }
   const room = state.rooms.find(r => r.id === selected);
-  if (room) {
-    $('chatTimer').textContent = supportClock(room,now);
-    updateExpiry(room);
-  }
+  if (room) updateExpiry(room);
   if (page === 'connect' && state.invite) updateInviteMotion(state.invite,now);
   if(page==='settings'||$('accessRemaining'))updateAccessDisplay();
 }
@@ -2249,7 +2533,7 @@ $('qzuInfoOpen').addEventListener('click', () => {
 $('qzuInfoBack').addEventListener('click', () => $('backToChats').click());
 $('backToChats').addEventListener('click', () => {
   closeInlineAttachments();
-  if(recordingCleanup)clearMedia();
+  if(mediaRoom)closeModal();
   rememberRoom();
   resetOnce();
   stopTyping();
@@ -2284,6 +2568,8 @@ function updateSendButton() {
   const room = state.rooms.find(room => room.id === selected);
   const needsSetup = encryptionRequired(room) && !encryptionReady(room);
   const send = $('send');
+  const reviewingVoice = !$('voicePreview').hidden;
+  $('attachmentMenu').disabled = $('cameraShortcut').disabled = $('voiceShortcut').disabled = reviewingVoice;
   const mediaReady=Boolean(room&&!room.admin&&!room.readOnly&&!needsSetup&&unlockToken&&!sendingMessage&&room.expires>serverNow());
   const hasText=Boolean($('message').value.trim());
   $('composerActions').classList.toggle('has-media',Boolean(room&&!room.admin&&!room.readOnly&&!needsSetup));
@@ -2999,6 +3285,7 @@ $('extensionNotice').addEventListener('click', () => {
 $('profileAvatar').addEventListener('click', () => {
   const room = state.rooms.find(item => item.id === selected);
   if (!room) return;
+  if (canViewSellerCatalog(room.contact)) { showSellerCatalog(room.contact); return; }
   if (room.contact) { showContactManagement(room.contact); return; }
   const title = nameFor(room);
   const details = room.group ? [el('p', '', room.memberCount + ' members'), ...room.members.map(name => el('p', '', name))]
@@ -3103,6 +3390,14 @@ function clearMedia() {
   }
   if (mediaDispose) mediaDispose();
   mediaDispose = null;
+  const preview = $('voicePreview');
+  if (!preview.hidden) {
+    const view = $('messages'), atBottom = view.scrollHeight-view.clientHeight-view.scrollTop<100;
+    preview.hidden = true;
+    preview.replaceChildren();
+    updateSendButton();
+    if (atBottom) view.scrollTop = view.scrollHeight;
+  }
   if (mediaUrl) URL.revokeObjectURL(mediaUrl);
   mediaUrl = null;
   mediaRoom = null;
@@ -3322,7 +3617,7 @@ function choosePhoto(room, camera = false) {
   const preview = el('img', 'temporary-media photo-preview');
   preview.alt = 'Photo preview';
   preview.hidden = true;
-  const status = el('p', 'media-status', 'Choose a photo');
+  const status = el('p', 'media-status');
   status.setAttribute('role', 'status');
   const epoch = authEpoch;
   const canViewOnce = onceAllowed(room);
@@ -3374,6 +3669,9 @@ function choosePhoto(room, camera = false) {
     }
   });
   send.disabled = true;
+  const fileLabel = el('label','photo-picker',camera ? 'Take a photo' : 'Choose a photo');
+  input.id = 'photoPicker';
+  fileLabel.htmlFor = input.id;
 
   function syncPhotoMode() {
     syncOnceToggle(toggle, once);
@@ -3390,7 +3688,8 @@ function choosePhoto(room, camera = false) {
     mediaUrl = URL.createObjectURL(blob);
     preview.src = mediaUrl;
     preview.hidden = false;
-    status.textContent = Math.max(1, Math.round(blob.size / 1024)) + ' KB';
+    fileLabel.textContent = camera ? 'Take another photo' : 'Choose another photo';
+    status.textContent = '';
     send.disabled = false;
   }
 
@@ -3424,7 +3723,7 @@ function choosePhoto(room, camera = false) {
     preview.removeAttribute('src');
     if (mediaUrl) URL.revokeObjectURL(mediaUrl);
     mediaUrl = null;
-    if (!file) return;
+    if (!file) { status.textContent = ''; return; }
     status.textContent = 'Preparing photo…';
     try {
       const clean = await QzuMetadata.cleanImage(file);
@@ -3441,15 +3740,52 @@ function choosePhoto(room, camera = false) {
   });
 
   syncPhotoMode();
-  const actions = el('div', 'qzu-media-actions');
-  actions.append(send, button('Cancel', closeModal, 'secondary-button'));
-  show(camera ? 'Camera' : 'Photo', [input, preview, editor, status, onceRow, recipient, actions]);
+  const image = el('div','photo-preview-stage');
+  image.append(preview, status);
+  show('Photo preview', [image, editor, onceRow, recipient, input, fileLabel, send]);
+  modal.classList.add('photo-sheet');
   mediaRoom = room.id;
   mediaDispose = () => {
     source = prepared = null;
     preview.removeAttribute('src');
   };
   input.click();
+}
+
+function reviewVoice(room, blob, once, elapsed) {
+  const epoch = authEpoch, panel = $('voicePreview'), view = $('messages');
+  const atBottom = view.scrollHeight-view.clientHeight-view.scrollTop<100;
+  const player = QzuMedia.voicePlayer(blob,{duration:elapsed});
+  const heading = el('h2', '', 'Voice message preview');
+  const actions = el('div','qzu-media-actions');
+  const status = el('p','qzu-media-alert');
+  status.setAttribute('role','status');
+  const send = button(once ? 'Send once' : 'Send recording', async () => {
+    send.disabled = discard.disabled = true;
+    status.textContent = '';
+    try { await sendAttachment(room,'audio',blob,once); }
+    catch(error) {
+      if (send.isConnected && epoch === authEpoch) {
+        send.disabled = discard.disabled = false;
+        status.textContent = errorMessage(error);
+      }
+    }
+  });
+  const discard = button('Discard', () => {
+    clearMedia();
+    if (!$('voiceShortcut').hidden) $('voiceShortcut').focus({preventScroll:true});
+  }, 'secondary-button');
+  actions.append(discard,send);
+  panel.append(heading,player.element);
+  if (once) panel.append(mediaOncePreview('Voice message'));
+  panel.append(actions,status);
+  panel.hidden = false;
+  updateSendButton();
+  mediaRoom = room.id;
+  mediaDispose = player.dispose;
+  if (atBottom) view.scrollTop = view.scrollHeight;
+  heading.tabIndex = -1;
+  heading.focus({preventScroll:true});
 }
 
 async function recordVoice(room,gesture=null) {
@@ -3459,6 +3795,7 @@ async function recordVoice(room,gesture=null) {
     info('Voice message', 'Recording is unavailable in this browser.');
     return;
   }
+  clearMedia();
   const epoch=authEpoch, label=el('p','voice-gesture-status','Allow microphone access to record.');
   const panel=el('div','voice-gesture-panel'), controls=el('div','voice-gesture-controls');
   const wave=el('canvas','voice-wave');wave.width=320;wave.height=38;
@@ -3467,8 +3804,19 @@ async function recordVoice(room,gesture=null) {
   const waveform=new Uint8Array(128);
   const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&selected===room.id&&page==='chat'&&(!mobile.matches||mobileOpen)&&!document.hidden&&room.expires>serverNow()&&panel.isConnected;
   const stopTracks=()=>{microphone?.getTracks().forEach(track=>track.stop());if(context){context.close().catch(()=>{});context=null;}clearInterval(ticker);clearTimeout(deadline);};
-  const cleanup=()=>{cancelled=true;stopTracks();if(recorder&&recorder.state!=='inactive')recorder.stop();chunks=[];panel.remove();$('composer').classList.remove('voice-recording');if(recordingCleanup===cleanup)recordingCleanup=null;if(voiceGesture===gesture)voiceGesture=null;};
-  const cancel=()=>{cleanup();if(!gesture)closeModal();};
+  const cleanup=()=>{
+    cancelled=true;
+    stopTracks();
+    if(recorder&&recorder.state!=='inactive')recorder.stop();
+    chunks=[];
+    if(panel.isConnected){
+      panel.remove();
+      $('composer').classList.remove('voice-recording');
+    }
+    if(recordingCleanup===cleanup)recordingCleanup=null;
+    if(voiceGesture===gesture)voiceGesture=null;
+  };
+  const cancel=()=>{if(recordingCleanup===cleanup)clearMedia();else cleanup();};
   const stop=()=>{if(finished||cancelled||!recorder||recorder.state==='inactive')return;recorder.stop();};
   const elapsed=()=>started?Math.max(0,((pausedAt||Date.now())-started-pausedTotal)/1000):0;
   const pause=button('Pause',()=>{if(recorder?.state==='recording'){recorder.pause();pausedAt=Date.now();pause.textContent='Resume';}else if(recorder?.state==='paused'){recorder.resume();pausedTotal+=Date.now()-pausedAt;pausedAt=0;pause.textContent='Pause';}},'secondary-button');
@@ -3477,14 +3825,19 @@ async function recordVoice(room,gesture=null) {
   const discard=button('Discard',cancel,'secondary-button');
   const lock=()=>{locked=true;controls.replaceChildren(discard,pause,preview);label.textContent='Recording hands-free';motion(controls,'motion-page');};
   if(gesture)gesture.session={cancel,lock,finish:stop};
-  if(gesture){$('composer').before(panel);$('composer').classList.add('voice-recording');controls.replaceChildren(discard);label.textContent='Release to preview · Slide left to discard · Slide up to lock';}
-  else{show('Voice message',[panel]);lock();}
+  const view = $('messages'), atBottom = view.scrollHeight-view.clientHeight-view.scrollTop<100;
+  $('composer').before(panel);
+  $('composer').classList.add('voice-recording');
+  if (atBottom) view.scrollTop = view.scrollHeight;
+  if (gesture) {
+    controls.replaceChildren(discard);
+    label.textContent='Release to preview · Slide left to discard · Slide up to lock';
+  } else lock();
   mediaRoom=room.id;
   recordingCleanup=cleanup;
   try{
     microphone=await navigator.mediaDevices.getUserMedia({audio:true});
-    if(cancelled||!active()||gesture?.action==='cancel'){cleanup();return;}
-    if(gesture?.action==='preview'){cleanup();return;}
+    if(cancelled||!active()||gesture?.action==='cancel'||gesture?.action==='preview'){cancel();return;}
     const mime=['audio/mp4','audio/webm','audio/ogg'].find(type=>MediaRecorder.isTypeSupported(type));
     if(!mime)throw Error('No supported recording format.');
     recorder=new MediaRecorder(microphone,{mimeType:mime,audioBitsPerSecond:64000});
@@ -3493,22 +3846,12 @@ async function recordVoice(room,gesture=null) {
     for(const track of microphone.getTracks())track.addEventListener('ended',()=>{if(!finished&&!cancelled)cancel();},{once:true});
     recorder.onstop=()=>{
       if(finished)return;finished=true;stopTracks();
-      if(recordingCleanup===cleanup)recordingCleanup=null;
-      if(cancelled||!active()){cleanup();return;}
+      if(cancelled||!active()){cancel();return;}
       const blob=new Blob(chunks,{type:mime});chunks=[];
-      if(!blob.size){cleanup();if(!gesture)closeModal();return;}
+      if(!blob.size){cancel();return;}
+      if(recordingCleanup===cleanup)recordingCleanup=null;
       panel.remove();$('composer').classList.remove('voice-recording');
-      const player=QzuMedia.voicePlayer(blob,{duration:elapsed()});
-      const actions=el('div','qzu-media-actions');
-      const send=button(once?'Send once':'Send recording',async()=>{
-        send.disabled=true;
-        try{await sendAttachment(room,'audio',blob,once);}
-        catch(error){if(send.isConnected&&epoch===authEpoch){send.disabled=false;modalError(error);}}
-      });
-      actions.append(send,button('Discard',closeModal,'secondary-button'));
-      show('Preview recording',once?[player.element,mediaOncePreview('Voice message'),actions]:[player.element,actions]);
-      mediaRoom=room.id;
-      mediaDispose=player.dispose;
+      reviewVoice(room,blob,once,elapsed());
     };
     recorder.start(300);started=Date.now();pause.disabled=false;preview.disabled=false;if(gesture?.action==='locked')lock();
     try{const AudioCtx=window.AudioContext||window.webkitAudioContext;if(AudioCtx){context=new AudioCtx();const source=context.createMediaStreamSource(microphone);analyser=context.createAnalyser();analyser.fftSize=256;source.connect(analyser);}}catch{}
@@ -3745,10 +4088,18 @@ $('privateNotifications').addEventListener('change',async event=>{
   }catch(error){$('pushStatus').textContent='Notification setting saved. Device registration will retry.';}
   finally{toggle.disabled=false;toggle.checked=!pushOptedOut();updateNavigation();}
 });
-const backgroundChoices = ['plain', 'grid', 'dots'];
+const backgroundChoices = {
+  plain: 'Minimal',
+  grid: 'Grid',
+  dots: 'Dots',
+  obsidian: 'Obsidian Contours',
+  ember: 'Ember Folds',
+  mist: 'Mist Paper'
+};
 function applyChatBackground(value) {
-  if (!backgroundChoices.includes(value)) value = 'plain';
+  if (!Object.hasOwn(backgroundChoices,value)) value = 'plain';
   document.documentElement.dataset.chatBackground = value;
+  $('chatBackgroundLabel').textContent = backgroundChoices[value];
   try { localStorage.setItem('qzu-chat-background', value); } catch {}
 }
 
@@ -3756,15 +4107,20 @@ try { applyChatBackground(localStorage.getItem('qzu-chat-background')); } catch 
 
 $('chatBackground').addEventListener('click', () => {
   const picker = el('div', 'background-picker');
-  for (const name of backgroundChoices) {
-    const choice = button('', () => { applyChatBackground(name); closeModal(); }, 'background-choice');
+  for (const [name,label] of Object.entries(backgroundChoices)) {
+    const choice = button('', () => {
+      applyChatBackground(name);
+      for (const item of picker.children) item.setAttribute('aria-pressed', String(item === choice));
+      haptic();
+    }, 'background-choice');
     const sample = el('div', 'background-preview pattern-' + name);
     sample.append(el('span', 'preview-bubble'), el('span', 'preview-bubble mine'));
-    choice.append(sample, el('span', '', name === 'plain' ? 'Minimal' : name === 'grid' ? 'Grid' : 'Dots'));
+    sample.setAttribute('aria-hidden', 'true');
+    choice.append(sample, el('span', '', label));
     choice.setAttribute('aria-pressed', String(document.documentElement.dataset.chatBackground === name));
     picker.append(choice);
   }
-  show('Chat background', [picker, button('Close', closeModal)]);
+  show('Chat background', [picker, button('Done', closeModal)]);
 });
 
 const chatPresets = [

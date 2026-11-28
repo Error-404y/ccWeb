@@ -21,9 +21,9 @@ function signedClient(origin){
   const value=await response.json();if(value.token)unlock=value.token;return {status:response.status,value};
  }};
 }
-test('live HTTP server: desktop authorization, seller activation, announcements and user ticket round trip',{timeout:30000},async()=>{
+test('live HTTP server: desktop authorization, seller activation and catalog, announcements and tickets',{timeout:30000},async()=>{
  const dir=mkdtempSync(join(tmpdir(),'qzu-v17-')),path=join(dir,'accounts.sqlite'),p=await port(),origin='http://127.0.0.1:'+p;
- const db=openAccounts(path);initDevices(db);initAccess(db);const adminKey=createSupportKey(db),normalKey=generatePlanKeys(db,'LT').keys[0].key;db.close();
+ const db=openAccounts(path);initDevices(db);initAccess(db);const adminKey=createSupportKey(db),[normalKey,otherKey]=generatePlanKeys(db,'LT',2).keys.map(row=>row.key);db.close();
  const child=spawn(process.execPath,['server.mjs'],{env:{...process.env,NODE_ENV:'test',QZU_DB:path,QZU_ADMIN_DIR:join(dir,'admin'),QZU_MOBILE_ONLY:'true',QZU_ACCESS_REQUIRED:'true',PORT:String(p),HOST:'127.0.0.1'},stdio:['ignore','pipe','pipe']});
  let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);
  let cookie='';async function admin(route,data,ua=desktopUA,auth=true){const response=await fetch(origin+route,{method:data===undefined?'GET':'POST',body:data===undefined?undefined:JSON.stringify(data),headers:{'User-Agent':ua,'Content-Type':'application/json','X-QZU':'1',...(auth&&cookie?{Cookie:cookie}:{})}});const set=response.headers.get('set-cookie');if(set)cookie=set.split(';')[0];return {status:response.status,value:await response.json().catch(()=>null)};}
@@ -89,5 +89,42 @@ test('live HTTP server: desktop authorization, seller activation, announcements 
   assert.equal((await customer.call('/api/tickets/send',{id:tid,text:'Closed',requestId:randomUUID()})).status,409);
   assert.equal((await admin('/api/control/tickets?archived=1')).value.items.length,1);
   assert.equal((await customer.call('/api/tickets')).value.receipts[0].id,tid);
+
+  const other=signedClient(origin);
+  assert.equal((await other.call('/api/session',{accessKey:otherKey})).status,200);
+  assert.equal((await other.call('/api/login/setup',{pin:'735281'})).status,200);
+  assert.equal((await other.call('/api/terms/accept',{version:1})).status,200);
+  const catalog='/api/sellers/catalog';
+  const item={id:randomUUID(),name:'Print',quantity:5,price:'12.05',currency:'CHF'};
+  assert.equal((await customer.call(catalog)).status,403);
+  assert.equal((await customer.call(catalog,item)).status,403);
+  assert.equal((await customer.call(catalog+'/remove',{id:item.id})).status,403);
+  assert.deepEqual((await seller.call(catalog)).value,{items:[]});
+  assert.equal((await seller.call('/api/sellers/profile',{name:'Studio'})).status,200);
+  assert.equal((await customer.call('/api/connect',{code:state.value.invite.code,nickname:'Seller contact'})).status,200);
+  const pending=(await seller.call('/api/state')).value.requests.find(row=>row.incoming);
+  assert.equal((await customer.call(catalog+'/contact/'+pending.id)).status,404);
+  const accepted=await seller.call('/api/connection/respond',{id:pending.id,accept:true,nickname:'Customer'});
+  assert.equal(accepted.status,200);
+  const connected=(await customer.call('/api/state')).value;
+  const contact=connected.contacts.find(row=>row.nickname==='Seller contact');
+  const viewerPath=catalog+'/contact/'+contact.id;
+  assert.equal(contact.peerSeller,true);
+  assert.equal(connected.rooms.find(room=>room.id===accepted.value.id).contact.peerSeller,true);
+  assert.equal((await other.call(viewerPath)).status,404);
+  assert.equal((await seller.call(viewerPath)).status,403);
+  assert.deepEqual((await customer.call(viewerPath)).value,{name:'Studio',verified:false,items:[]});
+  const listed={id:item.id,name:'Print',quantity:5,priceMinor:1205,currency:'CHF'};
+  assert.deepEqual((await seller.call(catalog,item)).value,{items:[listed]});
+  assert.deepEqual((await seller.call(catalog,item)).value,{items:[listed]});
+  assert.deepEqual((await customer.call(viewerPath)).value,{name:'Studio',verified:false,items:[listed]});
+  assert.deepEqual((await seller.call(catalog,{...item,quantity:0})).value,{items:[{...listed,quantity:0}]});
+  assert.deepEqual((await seller.call(catalog+'/remove',{id:item.id})).value,{items:[]});
+  assert.equal((await admin('/api/control/sellers/access',{id,suspended:true})).status,200);
+  assert.equal((await customer.call(viewerPath)).status,404);
+  assert.equal((await admin('/api/control/sellers/access',{id,suspended:false})).status,200);
+  assert.equal((await customer.call(viewerPath)).status,200);
+  assert.equal((await customer.call('/api/contacts/remove',{id:contact.id,block:true})).status,200);
+  assert.equal((await customer.call(viewerPath)).status,404);
  }finally{if(child.exitCode===null){child.kill();await once(child,'exit');}rmSync(dir,{recursive:true,force:true});}
 });
