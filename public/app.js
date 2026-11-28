@@ -1328,6 +1328,8 @@ function renderConnect() {
   }
 }
 
+$('sellerProfileSettings').addEventListener('click',()=>{if(!state.seller)return;const field=el('input','nickname-input');field.value=state.sellerName||'Seller';field.maxLength=40;field.setAttribute('aria-label','Seller display name');const save=button('Save',async()=>{save.disabled=true;try{await api('sellers/profile',{name:field.value.trim()});closeModal();await refresh();}catch(e){modalError(e);save.disabled=false;}});show('Seller profile',[el('p','',state.sellerVerified?'Verified seller':'Unverified seller'),field,save,button('Close',closeModal,'secondary-button')]);});
+$('sellerDirectorySettings').addEventListener('click',async()=>{if(!state.seller)return;try{const result=await api('sellers/directory');const list=el('div','request-list');for(const p of result.items){const row=el('div','request-item'),name=el('strong','',p.name);if(p.verified)name.append(svg('sellerBadge','admin-badge'));const connect=button('Connect',async()=>{connect.disabled=true;try{const r=await api('sellers/connect',{id:p.id});closeModal();await refresh();navigate('/chat');if(r.id)selectRoom(r.id);else info('Request sent','Awaiting approval.');}catch(e){modalError(e);connect.disabled=false;}},'secondary-button');row.append(name,connect);list.append(row);}if(!result.items.length)list.append(el('p','','No other active sellers.'));show('Seller directory',[list,button('Close',closeModal,'secondary-button')]);}catch(e){showError(e);}});
 function renderSettings() {
   if (page !== 'settings') return;
   const requested = location.pathname.split('/')[2] || 'main';
@@ -1345,6 +1347,7 @@ function renderSettings() {
   $('writeSupport').disabled = !unlockToken;
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('recoverySettings').hidden=Boolean(state.supportAgent)||!native;
+  $('sellerProfileSettings').hidden=!state.seller;$('sellerDirectorySettings').hidden=!state.seller;$('sellerProfileStatus').textContent=state.sellerVerified?'Verified':'Unverified';
   $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
   $('userInterfaceHeading').hidden=!state.supportAgent;
   $('adminInboxCount').textContent=state.supportAgent?String((state.supportRequests||[]).length):'';
