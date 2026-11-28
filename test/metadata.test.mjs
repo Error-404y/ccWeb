@@ -4,6 +4,22 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 const scope={Blob,Uint8Array,DataView};
 vm.runInNewContext(readFileSync(new URL('../public/metadata.js',import.meta.url),'utf8'),scope);
+test('photo crop uses the chosen ratio after rotation',()=>{
+  const geometry=scope.QzuMetadata.photoGeometry;
+  const original=geometry(1200,800);
+  assert.equal(original.width,1200);
+  assert.equal(original.height,800);
+  const square=geometry(1200,800,0,1);
+  assert.equal(square.x,200);
+  assert.equal(square.y,0);
+  assert.equal(square.width,800);
+  assert.equal(square.height,800);
+  const portrait=geometry(1200,800,90,0.8);
+  assert.equal(portrait.width,800);
+  assert.equal(portrait.height,1000);
+  assert.equal(portrait.x,100);
+  assert.throws(()=>geometry(1200,800,45));
+});
 test('clean PNG removes ancillary metadata and trailing data',async()=>{
   const chunk=(type,data=[])=>{const len=Buffer.alloc(4);len.writeUInt32BE(data.length);return Buffer.concat([len,Buffer.from(type),Buffer.from(data),Buffer.alloc(4)]);};
   const bytes=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',Array(13).fill(0)),chunk('eXIf',[1,2,3]),chunk('tEXt',[4,5]),chunk('iTXt',[6]),chunk('iCCP',[7]),chunk('IDAT',[8]),chunk('IEND'),Buffer.from('trailing')]);

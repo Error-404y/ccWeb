@@ -69,7 +69,17 @@ test('live HTTP server: desktop authorization, seller activation, announcements 
   assert.equal(inbox.claimableTickets,0);
   assert.equal(inbox.assignedTickets,1);
   assert.equal((await admin('/api/control/tickets/action',{id:tid,action:'assign',seller:id})).status,200);
-  assert.equal((await seller.call('/api/tickets/send',{id:tid,text:'Seller reply',requestId:randomUUID()})).status,200);
+  const sellerReply=await seller.call('/api/tickets/send',{id:tid,text:'Seller reply',requestId:randomUUID()});
+  assert.equal(sellerReply.status,200);
+  const messageId=sellerReply.value.messages.at(-1).id;
+  const ticketUpdate=(await customer.call('/api/state')).value.ticketUpdate;
+  assert.deepEqual(ticketUpdate,{ticketId:tid,messageId});
+  assert.equal((await customer.call('/api/tickets/read',{id:tid,message:messageId})).status,200);
+  assert.equal((await customer.call('/api/state')).value.ticketUpdate,null);
+  const {reference}=(await customer.call('/api/account/support-reference')).value;
+  assert.equal((await admin('/api/control/accounts?q='+tid)).value.items[0].id,reference);
+  const detail=await admin('/api/control/accounts/'+reference);
+  assert.ok(detail.value.cases.some(entry=>entry.id===tid&&entry.type==='ticket'));
   assert.equal((await customer.call('/api/tickets/state',{id:tid})).value.messages.at(-1).role,'verified-seller');
   assert.equal((await admin('/api/control/sellers/verify',{id,verified:false})).status,200);
   assert.equal((await customer.call('/api/tickets/state',{id:tid})).value.messages.at(-1).role,'seller');
@@ -78,5 +88,6 @@ test('live HTTP server: desktop authorization, seller activation, announcements 
   assert.equal((await admin('/api/control/tickets/action',{id:tid,action:'close'})).status,200);
   assert.equal((await customer.call('/api/tickets/send',{id:tid,text:'Closed',requestId:randomUUID()})).status,409);
   assert.equal((await admin('/api/control/tickets?archived=1')).value.items.length,1);
+  assert.equal((await customer.call('/api/tickets')).value.receipts[0].id,tid);
  }finally{if(child.exitCode===null){child.kill();await once(child,'exit');}rmSync(dir,{recursive:true,force:true});}
 });

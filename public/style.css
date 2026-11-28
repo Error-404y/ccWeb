@@ -2308,7 +2308,6 @@ dialog.update-sheet[open] .modal-head h2 {
 #adminFeedbackList .support-request-preview{white-space:pre-wrap;}
 #feedbackOlder{margin-top:12px;}
 
-#chatOptions{display:none!important}
 .profile-avatar,.profile-name{padding:0;background:transparent;color:inherit;text-align:left;display:flex;align-items:center;min-width:0}
 .profile-avatar .avatar{flex:none}
 .profile-name #threadName{font-size:16px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2356,7 +2355,6 @@ html.booting dialog{visibility:hidden}
 .background-pin-note{font-size:12px;color:var(--muted);padding:0 14px 10px;line-height:1.45}
 .composer .media-shortcut{flex:none;width:34px;height:40px;display:grid;place-items:center;color:var(--muted)}.composer .media-shortcut svg{width:22px;height:22px}.composer #voiceShortcut{color:var(--accent)}.media-tile{display:flex;align-items:center;gap:10px;min-height:45px;padding:8px 12px;border-radius:14px;background:var(--hover)}.media-tile svg{width:22px;height:22px}.photo-preview{max-height:38dvh;background:var(--sub)}.media-status{text-align:center;color:var(--muted);font-size:12px}.recording-indicator{color:var(--danger);font-weight:650;font-variant-numeric:tabular-nums}.recording-indicator::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-right:8px;animation:recordPulse 1s infinite alternate}@keyframes recordPulse{to{opacity:.35}}.bubble{animation:messageIn .16s ease-out}@keyframes messageIn{from{opacity:.6;translate:0 3px}to{opacity:1;translate:0 0}}@media(prefers-reduced-motion:reduce){.bubble,.recording-indicator::before{animation:none}}
 
-/* v0.12 Motion: transforms and opacity, no animation on polling */
 :root{--motion-ease:cubic-bezier(.2,.8,.2,1)}
 .motion-page{animation:qzuPage .18s var(--motion-ease) both}
 .motion-thread{animation:qzuThread .28s var(--motion-ease) both}
@@ -2404,7 +2402,6 @@ html.booting dialog{visibility:hidden}
 
 .once-content{white-space:pre-wrap;overflow-wrap:anywhere;user-select:none;-webkit-user-select:none}
 
-/* Refinement: grouped native settings and attachment sheet. */
 .settings-panel .settings-group,#adminInterface{background:var(--sub);border:1px solid var(--line);border-radius:18px;padding:0 12px;margin:0 0 16px;overflow:hidden}
 .settings-panel #adminInterface[hidden]{display:none}
 .settings-group .settings-row:last-child{border-bottom:0}
@@ -2457,7 +2454,6 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 @media(prefers-reduced-motion:reduce){.motion-settings,.skeleton-contact{animation:none!important}}
 
 
-/* View once: dotted ring, neutral unopened/consumed placeholders. */
 .once-message{display:flex;align-items:center;gap:8px;min-height:40px;min-width:112px;padding:4px 2px;background:transparent;border:0;color:inherit;text-align:left;font-size:15px;font-weight:550}
 .once-message svg,.once-toggle svg,.once-loading svg{flex:none;width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.8}
 .once-message:disabled{opacity:1;cursor:default}
@@ -2475,7 +2471,6 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 @media(max-width:360px){.composer .once-toggle{width:30px}}
 
 
-/* Control update: retain the live QR, fit the connection tools on one screen. */
 #connectPage .page-content{container-type:size;overflow:auto;overscroll-behavior:none;padding:8px 14px 12px;align-items:center;justify-content:center}
 #connectPage .connect-panel{width:100%;max-width:390px;gap:8px;margin:0;padding:10px 16px;align-self:center}
 #connectPage h1{margin:0;font-size:clamp(20px,5vw,24px)}
@@ -2493,7 +2488,6 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 @media(max-height:729px){#connectPage .page-content{align-items:flex-start}}
 @media(max-height:600px){#connectPage .connect-panel{padding:4px 10px;gap:5px}#connectPage .qr-box{width:112px;height:112px}}
 
-/* Inline keyboard-replacement attachment menu and submitted report snapshots. */
 .inline-attachments{flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-content:start;gap:18px 6px;margin:0 5px 5px;padding:22px 12px max(22px,env(safe-area-inset-bottom));min-height:min(245px,31dvh);border-radius:24px;background:var(--sub);border:1px solid var(--line);animation:inlineAttachmentIn .22s ease-out both;overflow:auto}
 .inline-attachments[hidden]{display:none!important}
 .inline-attachment-tile{display:flex;flex-direction:column;align-items:center;justify-content:start;gap:8px;min-width:0;background:none;border:0;color:var(--ink);font-size:12px;padding:0;text-align:center}
@@ -2514,7 +2508,6 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .report-transcript .snapshot-other{align-self:flex-start;background:var(--sub)}
 .report-transcript .reported{outline:1px solid var(--accent)}
 
-/* Original launch sequence restored from the first text-free boot revision. */
 #bootSplash{position:fixed;inset:0;z-index:10000;background:#050505;overflow:hidden;pointer-events:none;display:none}
 #bootSplash.boot-running{display:block;animation:none;pointer-events:auto}
 .boot-grid{position:absolute;inset:0;background-image:linear-gradient(#bd000018 1px,transparent 1px),linear-gradient(90deg,#bd000018 1px,transparent 1px);background-size:24px 24px;mask-image:radial-gradient(ellipse,#000,transparent 75%);animation:bootGrid 1.25s both}
@@ -2543,13 +2536,11 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 #bootSplash.boot-ready{animation:bootExit .28s ease both}
 @media(prefers-reduced-motion:reduce){#bootSplash{display:none!important}}
 
-/* Follow native viewport frames and retain the conversation scroll anchor. */
 .messages{overflow-anchor:none;scroll-behavior:auto}.composer{flex-shrink:0}.composer textarea{transition:background-color .15s,border-color .15s}.composer textarea:focus{border-color:var(--line)}
 @media(prefers-reduced-motion:reduce){.composer textarea{transition:none}}
 
 #ticketsPage .page-content.user-ticket-content{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;max-width:620px;width:100%;margin:0 auto;gap:12px;min-height:0;overflow:auto;padding:14px}.user-ticket-list,.user-ticket-form{display:flex;flex-direction:column;gap:10px}.user-ticket-row{display:flex;align-items:center;gap:12px;text-align:left;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:14px;padding:14px;font:inherit}.user-ticket-title{flex:1;overflow-wrap:anywhere}.user-ticket-icon,.user-ticket-hero{width:30px;height:30px;stroke:var(--accent);fill:none;stroke-width:1.6}.user-ticket-hero{width:52px;height:52px;align-self:center}.user-ticket-form h2{text-align:center}.ticket-open{color:#3fbf8b}.ticket-solved{color:var(--muted)}.user-ticket-form textarea{min-height:120px}.user-ticket-head{display:flex;align-items:center;gap:10px}.user-ticket-feed{flex:1;min-height:180px;overflow:auto;display:flex;flex-direction:column;gap:8px}.user-ticket-compose{display:flex;gap:8px;align-items:center}.user-ticket-compose textarea{flex:1;min-width:0;max-height:100px}.user-ticket-name{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)}.user-ticket-compose[hidden]{display:none}.user-ticket-new{margin-top:auto}
 
-/* Verified identity belongs to the conversation name, not the timer area. */
 .thread-name-line{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%}.thread-name-line .profile-name{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.thread-name-line #threadBadge:not([hidden]){display:block;width:15px;height:15px;min-width:15px;flex:0 0 15px;visibility:visible;opacity:1}.thread-name-line #threadBadge[hidden]{display:none!important}
 
 #ticketsPage .user-ticket-content:has(>.user-ticket-form){justify-content:flex-start}.user-ticket-content>.user-ticket-form{margin-block:auto;flex-shrink:0;width:100%;gap:14px;padding-block:16px}.user-ticket-form .user-ticket-hero{margin-bottom:8px}.user-ticket-form .pay-note:empty{display:none}
@@ -2558,7 +2549,6 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 
 .ticket-admin-avatar{width:22px;height:22px;flex:0 0 22px;display:block}
 
-/* Simplicity update: access entitlement, exact unread badges and edge navigation. */
 .official-unread{width:auto;height:22px;min-width:22px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;background:#d82235;color:#fff;font-size:12px;font-weight:750;border-radius:999px;box-shadow:none}.official-unread[hidden]{display:none!important}
 .access-settings-summary{color:var(--muted);font-size:12px;white-space:nowrap;flex:0 0 auto}.access-summary-panel{display:grid;gap:7px;padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--sub)}.access-summary-caption{font-size:12px;color:var(--muted);margin-top:8px}.access-summary-caption:first-child{margin-top:0}.access-summary-plan{font-size:26px;font-weight:750;letter-spacing:-.5px}.access-summary-value{font-size:21px;color:var(--accent)}.access-summary-status{font-size:14px;font-weight:650;color:var(--muted)}.access-summary-status[data-state=Active]{color:#49bb86}.access-summary-status[data-state=Expired],.access-summary-status[data-state=Inactive]{color:var(--danger)}
 @media(max-width:700px){#chatPage.thread-open #thread{touch-action:pan-y;overscroll-behavior-x:contain}}.native-app #chatPage.thread-open #thread{touch-action:pan-y;overscroll-behavior-x:contain}
@@ -2569,3 +2559,135 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 #officialPageError { max-width: 540px; margin: 0 auto; color: var(--danger); }
 .thread-title .profile-name { cursor: default; font-size: 16px; font-weight: 650; }
 #bootSplash.boot-ready { animation: bootExit .18s ease both; pointer-events: none; }
+
+.chat-list-tools {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 10px;
+}
+.chat-list-tools input {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 36px;
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sub);
+  color: var(--ink);
+  font-size: 16px;
+}
+.chat-list-tools .secondary-button {
+  min-height: 36px;
+  width: auto;
+  padding: 5px 10px;
+  font-size: 13px;
+}
+.chat-list-tools .secondary-button[aria-pressed=true] {
+  color: var(--accent);
+  background: var(--active);
+}
+.contact-mark { width: 14px; height: 14px; }
+.contact-expiry { color: var(--muted); font-size: 11px; }
+.message-feed { position: relative; display: flex; min-height: 0; flex: 1; }
+.message-feed .messages { width: 100%; scroll-padding-top: 12px; }
+.message-feed .new-messages {
+  position: absolute;
+  z-index: 1;
+  inset: auto 12px 10px auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 38px;
+  width: auto;
+  padding: 6px 10px 6px 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 12px;
+  box-shadow: 0 3px 12px #0002;
+}
+.new-messages svg { width: 15px; height: 15px; transform: rotate(90deg); }
+.expiry:hover { background: var(--hover); color: var(--ink); }
+.pending-retry {
+  min-height: 28px;
+  padding: 2px 7px;
+  border-radius: 8px;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 650;
+}
+.pending-retry:hover { background: var(--hover); }
+.composer-actions { display: flex; align-items: center; justify-content: flex-end; flex: none; }
+.composer-actions.has-media { min-width: 68px; }
+.view-once-hint { margin: 0; padding: 5px 14px; background: var(--sub); color: var(--muted); font-size: 12px; }
+.reply-composer:not([hidden]), .composer-actions button:not([hidden]), .new-messages:not([hidden]) {
+  animation: chat-control-in .16s ease-out both;
+}
+@keyframes chat-control-in {
+  from { opacity: .55; translate: 0 3px; }
+  to { opacity: 1; translate: 0 0; }
+}
+.connect-options { color: var(--muted); font-size: 13px; text-align: left; }
+.connect-options summary { padding: 7px 0; cursor: pointer; }
+.connect-options button { width: 100%; }
+.connect-options .invite-actions { margin-bottom: 6px; }
+.connect-options .invite-actions:has(>[hidden]+[hidden]) { display: none; }
+.theme-preset-list { display: grid; gap: 8px; }
+.theme-preset {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sub);
+  color: var(--ink);
+  text-align: left;
+}
+.theme-preset[aria-pressed=true] { border-color: var(--accent); }
+.appearance-sample {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  color: var(--ink);
+  background-color: var(--surface);
+  border-radius: 8px;
+  text-align: start;
+}
+.appearance-sample span {
+  justify-self: start;
+  padding: 5px 10px;
+  background: var(--received);
+  border-radius: 10px;
+}
+.appearance-sample span.mine { justify-self: end; background: var(--sent); }
+.sample-midnight { --surface:#000; --ink:#f7f7f7; --line:#292929; --received:#1c1c1c; --sent:#77232c; }
+.sample-graphite { --surface:#000; --ink:#f7f7f7; --line:#292929; --received:#1c1c1c; --sent:#363636; }
+.sample-paper { --surface:#fff; --ink:#151515; --line:#e5e5e5; --received:#f0f0f0; --sent:#fbe6e8; }
+:root[data-chat-text-size=large] { --chat-text-size:17px; }
+:root[data-chat-text-size=extra] { --chat-text-size:20px; }
+.messages .bubble, .appearance-sample { font-size: var(--chat-text-size, 14px); }
+.settings-select { padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--sub); }
+@media(prefers-reduced-motion:reduce) {
+  .reply-composer:not([hidden]), .composer-actions button:not([hidden]), .new-messages:not([hidden]) { animation: none; }
+}
+.reaction-choice[aria-pressed=true] { background: var(--active); box-shadow: 0 0 0 1px var(--accent); }
+.view-once-hint { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.view-once-hint button { color:var(--accent); font-weight:650; min-height:28px; padding:0 5px; }
+.encryption-details { padding:10px; border:1px solid var(--line); border-radius:12px; }
+.encryption-details summary { cursor:pointer; font-weight:650; }
+.encryption-details .primary-button { margin-top:12px; }
+.once-text-preview { display:grid; gap:10px; }
+.once-text-preview .once-message { width:max-content; }
+.activity-banner.interactive { padding:4px; }
+.activity-banner .activity-link { width:100%; padding:8px 12px; border-radius:10px; text-align:start; color:var(--ink); }
+.nav-icon .ticket-unread-dot { width:9px; height:9px; min-width:0; min-height:0; padding:0; border-radius:50%; }
+.user-ticket-receipt { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 8px; align-items:center; padding:10px; border:1px solid var(--line); border-radius:12px; }
+.user-ticket-receipt strong, .user-ticket-receipt p { grid-column:1 / -1; margin:0; }
+.user-ticket-receipt input { min-width:0; }
+.user-ticket-receipts { margin-block:12px; }
+.user-ticket-receipts summary { padding:8px 0; cursor:pointer; }
+.user-ticket-receipts .user-ticket-row { width:100%; margin-top:6px; }
+.pay-timeline { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:4px; list-style:none; padding:0; margin:10px 0; }
+.pay-timeline li { border-top:3px solid var(--line); padding:5px 1px 0; font-size:11px; line-height:1.3; color:var(--muted); overflow-wrap:anywhere; }
+.pay-timeline li[data-complete=true] { border-color:var(--accent); }
+.pay-timeline li[aria-current=step] { border-color:var(--accent); color:var(--ink); font-weight:700; }

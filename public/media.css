@@ -1,0 +1,23 @@
+.qzu-voice-player{display:grid;gap:10px;padding:12px;border:1px solid var(--line,#303137);border-radius:14px;background:var(--sub,#1b1c21);min-width:0}
+.qzu-voice-toolbar{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.qzu-voice-play{min-width:72px;min-height:40px;color:inherit}
+.qzu-voice-speed,.qzu-photo-crop{color:inherit;background:var(--surface,#26272c);border:1px solid var(--line,#303137);border-radius:9px;padding:6px 8px;min-height:36px}
+.qzu-voice-speed{width:auto;min-width:64px}
+.qzu-voice-time{font-size:13px;font-variant-numeric:tabular-nums;color:var(--muted,#b5b7c1);white-space:nowrap}
+.qzu-voice-timeline{position:relative;display:grid;min-height:44px;overflow:hidden;border-radius:9px}
+.qzu-voice-track{width:100%;height:44px;color:var(--accent,#ff646d);pointer-events:none}
+.qzu-voice-seek{position:absolute;inset:0;box-sizing:border-box;width:100%;height:100%;margin:0;opacity:0;touch-action:pan-y;cursor:pointer}
+.qzu-voice-seek:disabled{cursor:default}
+.qzu-voice-timeline:focus-within{outline:2px solid var(--accent,#ff646d);outline-offset:2px}
+.qzu-media-alert{font-size:13px;color:var(--danger,#ff686f);margin:0}
+.qzu-photo-editor,.qzu-media-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.qzu-photo-editor{justify-content:space-between}
+.qzu-photo-editor label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.qzu-photo-editor button,.qzu-photo-crop{min-height:38px}
+.qzu-media-actions>*{flex:1}
+.qzu-once-label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:13px;margin:0}
+.qzu-once-label svg{width:19px;height:19px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7}
+.qzu-once-preview{display:grid;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--sub);font-size:13px}
+.qzu-once-preview>p:last-child{margin:0;color:var(--muted);line-height:1.35}
+.qzu-once-caption{display:grid;line-height:1.15;gap:3px}
+.qzu-once-caption small{font-size:11px;color:var(--muted);font-style:normal}

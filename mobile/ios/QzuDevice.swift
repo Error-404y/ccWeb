@@ -183,9 +183,6 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
             scrollView.bounces = false
             scrollView.alwaysBounceVertical = false
             scrollView.alwaysBounceHorizontal = false
-            scrollView.minimumZoomScale = 1
-            scrollView.maximumZoomScale = 1
-            scrollView.pinchGestureRecognizer?.isEnabled = false
             scrollView.showsHorizontalScrollIndicator = false
         }
         print("[qzu] QzuDevice loaded")
@@ -205,6 +202,17 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
         let panel = UIView(frame: view.bounds)
         panel.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         panel.backgroundColor = UIColor(red: 0.067, green: 0.082, blue: 0.078, alpha: 1)
+        panel.accessibilityViewIsModal = true
+        let brand = UILabel()
+        brand.text = "qzu."
+        brand.textColor = .white
+        brand.font = .systemFont(ofSize: 38, weight: .bold)
+        brand.translatesAutoresizingMaskIntoConstraints = false
+        panel.addSubview(brand)
+        NSLayoutConstraint.activate([
+            brand.centerXAnchor.constraint(equalTo: panel.centerXAnchor),
+            brand.centerYAnchor.constraint(equalTo: panel.centerYAnchor)
+        ])
         view.addSubview(panel)
         privacyCover = panel
     }

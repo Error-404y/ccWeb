@@ -1,4 +1,5 @@
 import {adminAudit} from './lib/admin-audit.mjs';
+import {caseWorkspace} from './lib/case-workspace.mjs';
 import express from 'express';
 import {desktopMessenger} from './lib/desktop-messenger.mjs';
 import {sellerStore} from './lib/sellers.mjs';
@@ -60,6 +61,30 @@ const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN suppor
 const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.adminAccount=id=>desktopChats.role(id)==='admin'?desktopChats.principal(id).admin:chats.profileRole(id)==='admin'?id:null;chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
 const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id),name:id=>sellers.name(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
 const notifyHelp=(id,actor)=>push.notify(helpTickets.recipients(id).filter(x=>x!==actor));
+function supportRecord(admin, id) {
+  const room=chats.rooms.get(id);
+  if (!room?.support || room.supportAgent!==admin || room.expires<=Date.now()) return null;
+  const finished=['solved','rejected'].includes(room.supportStatus);
+  return {
+    status:room.deletionRequested?'deletion requested':room.supportStatus||'accepted',
+    accountId:room.users.find(user=>user!==admin), assignee:admin,
+    closed:finished&&!room.deletionRequested, archived:Boolean(room.supportArchived)
+  };
+}
+function supportForAccount(admin,account) {
+  const cases=[];
+  for(const room of chats.rooms.values()){
+    if(!room.users.includes(account)||account===admin)continue;
+    const record=supportRecord(admin,room.id);
+    if(record)cases.push({id:room.id,type:'support',title:'Support conversation',status:record.status,
+      archived:record.archived,at:room.messages.at(-1)?.at||room.requestAt||room.created});
+  }
+  return cases;
+}
+const workspace=caseWorkspace(db,{audit:auditLedger,reports:compliance,isAdmin:isTicketAdmin,support:supportRecord,supportForAccount});
+workspace.sweep();
+setInterval(()=>workspace.sweep(),600000).unref();
+const controlSource=req=>req.deviceId?'mobile':'desktop';
 const production = process.env.NODE_ENV === 'production';
 if (production && !process.env.PUBLIC_ORIGIN) throw new Error('Set PUBLIC_ORIGIN to your HTTPS origin.');
 const publicOrigin = process.env.PUBLIC_ORIGIN;
@@ -283,7 +308,13 @@ app.get('/api/control/inbox',(req,res)=>{
   const work=controlWork(req.account.id);
   res.json({version,environment:production?'production':'development',paymentTickets:work.paymentTickets,supportRequests:work.supportRequests+work.deletionRequests,userTickets:helpTickets.count(),adminId:req.account.id,work});
 });
-app.get('/api/control/accounts',(req,res)=>res.json({items:controlAccounts(db,req.query.q||'',req.query.after||'')}));
+app.get('/api/control/accounts',(req,res)=>{
+  const q=req.query.q??'';
+  res.json({items:controlAccounts(db,workspace.accountForReference(req.account.id,q)||q,req.query.after??'')});
+});
+app.get('/api/control/accounts/:id',(req,res)=>res.json(workspace.account(req.account.id,controlSource(req),req.params.id)));
+app.get('/api/control/cases/:type/:id',(req,res)=>res.json(workspace.view(req.account.id,req.params.type,req.params.id)));
+app.post('/api/control/cases/:type/:id',(req,res)=>res.json(workspace.act(req.account.id,controlSource(req),req.params.type,req.params.id,req.body||{})));
 app.get('/api/control/keys',(req,res)=>res.json({items:listAccessKeys(db,req.query.q||'')}));
 app.post('/api/control/keys/generate',(req,res)=>res.json(generatePlanKeys(db,req.body?.plan,req.body?.count,req.account.id)));
 app.post('/api/control/keys/replace',(req,res)=>res.json(replaceUnusedKey(db,req.body?.id,req.account.id)));
@@ -300,10 +331,10 @@ app.post('/api/control/payment-tickets/state',(req,res)=>res.json(tickets.view(r
 app.post('/api/control/payment-tickets/send',(req,res)=>{tickets.send(req.body?.id,req.account.id,{text:req.body?.text,requestId:req.body?.requestId});res.json(tickets.view(req.body?.id));});
 app.post('/api/control/payment-tickets/proof',(req,res)=>{const proof=tickets.proof(req.body?.id,req.body?.message);if(!proof)return res.sendStatus(404);res.json({data:Buffer.from(proof).toString('base64')});});
 app.post('/api/control/payment-tickets/verify',async(req,res)=>{const id=req.body?.id,t=tickets.view(id);if(t.state==='submitted')await verifyCryptoInvoice(db,t.invoiceId);res.json(tickets.view(id));});
-app.post('/api/control/payment-tickets/release',(req,res)=>{tickets.release(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
-app.post('/api/control/payment-tickets/review',(req,res)=>{tickets.review(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
-app.post('/api/control/payment-tickets/reject',(req,res)=>{tickets.reject(req.body?.id,req.account.id,req.body?.reason);res.json(tickets.view(req.body?.id));});
-app.post('/api/control/payment-tickets/close',(req,res)=>{tickets.close(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/release',(req,res)=>{workspace.requireAssignedOrUnclaimed(req.account.id,'payment-ticket',req.body?.id);tickets.release(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/review',(req,res)=>{workspace.requireAssignedOrUnclaimed(req.account.id,'payment-ticket',req.body?.id);tickets.review(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/reject',(req,res)=>{workspace.requireAssignedOrUnclaimed(req.account.id,'payment-ticket',req.body?.id);tickets.reject(req.body?.id,req.account.id,req.body?.reason);res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/close',(req,res)=>{workspace.requireAssignedOrUnclaimed(req.account.id,'payment-ticket',req.body?.id);tickets.close(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
 app.get('/api/control/support',(req,res)=>{
  const archived=req.query.archived==='1',id=req.account.id;
  res.json({requests:archived?[]:chats.supportRequests(id,true),deletions:archived?[]:deletionInbox(id),rooms:archived?[]:chats.snapshot(id).filter(r=>r.support&&r.supportAgent&&r.supportStatus==='accepted').map(r=>({id:r.id,expires:r.expires,deletionRequested:r.deletionRequested,messages:r.messages.slice(-50).map(m=>({mine:m.mine,at:m.at,text:m.deleted?'Deleted message':m.once||m.burnSeconds?'Temporary message':m.kind==='text'?m.text:'Attachment',sender:m.sender}))})),finished:chats.finishedSupport(id,archived)});
@@ -313,13 +344,17 @@ app.post('/api/control/support/delete-direct',(req,res)=>{const id=req.body?.id,
 app.post('/api/control/support/delete-contact',(req,res)=>{const id=req.body?.id,room=chats.rooms.get(id);if(req.body?.confirmed!==true||!room||room.supportAgent!==req.account.id)return res.status(403).json({error:'Assigned support conversation and confirmation required.'});const recipients=room.users.filter(x=>x!==req.account.id);const result=chats.deleteSupportContact(req.account.id,id,true);push.notify(recipients);res.json(result);});
 app.post('/api/control/support/finish',(req,res)=>res.json(chats.finishSupport(req.account.id,req.body?.id,req.body?.action)));
 app.post('/api/control/archive',(req,res)=>{const b=req.body||{};if(b.category==='support')return res.json(chats.finishSupport(req.account.id,b.id,b.restore===true?'restore':'archive'));res.json(archiveControlRecord(db,b.category,b.id,req.account.id,b.restore===true));});
-app.post('/api/control/support/respond',(req,res)=>res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true)));
-app.post('/api/control/support/send',(req,res)=>{const room=chats.requireRoom(req.account.id,req.body?.id);if(room.supportAgent!==req.account.id||room.supportStatus!=='accepted'||typeof req.body?.text!=='string')return res.status(403).json({error:'Assigned support conversation required.'});chats.send(req.account.id,room.id,req.body.text);push.notify(room.users.filter(id=>id!==req.account.id));res.json({ok:true});});
-app.get('/api/control/audit',(req,res)=>res.json({items:auditLedger.list({q:req.query.q||'',before:req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before)}),legacy:controlAudit(db)}));
+app.post('/api/control/support/respond',(req,res)=>{
+  const result=chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true);
+  notifyRoom(req.account.id,result.id);
+  res.json(result);
+});
+app.post('/api/control/support/send',(req,res)=>{const room=chats.requireRoom(req.account.id,req.body?.id);if(room.supportAgent!==req.account.id||room.supportStatus!=='accepted'||typeof req.body?.text!=='string')return res.status(403).json({error:'Assigned support conversation required.'});chats.send(req.account.id,room.id,req.body.text);notifyRoom(req.account.id,room.id);res.json({ok:true});});
+app.get('/api/control/audit',(req,res)=>res.json({items:auditLedger.list({q:req.query.q??'',type:req.query.type??'',outcome:req.query.outcome??'',before:req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before)}),legacy:controlAudit(db)}));
 app.get('/api/control/reports',(req,res)=>res.json({items:compliance.list(true,req.query.archived==='1')}));
 app.get('/api/control/reports/media/:id',(req,res)=>{const m=compliance.media(req.params.id);if(!m)return res.sendStatus(404);res.set('Cache-Control','no-store').type(m.mime).send(Buffer.from(m.body));});
 app.post('/api/control/reports/collaborate',(req,res)=>{const b=req.body||{},result=compliance.collaborate(b.id,req.account.id,b.status,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
-app.post('/api/control/reports/resolve',(req,res)=>{const b=req.body||{},result=compliance.resolve(b.id,b.action,req.account.id,b.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
+app.post('/api/control/reports/resolve',(req,res)=>{const b=req.body||{};workspace.requireAssignedOrUnclaimed(req.account.id,'report',b.id);const result=compliance.resolve(b.id,b.action,req.account.id,b.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
 app.get('/api/control/feedback',(req,res)=>res.json({items:feedback.list(true,req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before),req.query.archived==='1')}));
 app.post('/api/control/feedback/status',(req,res)=>{const b=req.body||{},result=feedback.status(true,b.id,b.status,req.account.id,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
 app.post('/api/control/chats/identity',(req,res)=>res.json(desktopChats.bind(req.account.id,req.body?.record)));
@@ -442,7 +477,7 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
   res.json({ ok: true });
 });
 
-function deleteAccount(id){controlSessions.revokeAccount(id);helpTickets.erase(id);sellers.erase(id,chats);desktopChats.erase(id);
+function deleteAccount(id){controlSessions.revokeAccount(id);workspace.eraseAccount(id);helpTickets.erase(id);sellers.erase(id,chats);desktopChats.erase(id);
   chats.erase(id);prekeys.remove(id);compliance.purge(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
 }
 app.use('/api',(req,res,next)=>{
@@ -455,7 +490,6 @@ app.post('/api/admin/logout',guard('admin-logout',5,60000),(req,res)=>{
   if(a.access_plan!=='admin'||!req.deviceId||req.body?.confirmed!==true)return res.status(403).json({error:'Confirmed admin logout required.'});
   if(a.suspended&&(!a.suspended_until||a.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
   if(!db.prepare('SELECT hash FROM support_keys WHERE account=? AND redeemed IS NOT NULL').get(a.id))return res.status(409).json({error:'Admin key unavailable.'});
-  // Assigned support cases belong to the slot; personal conversations and device secrets do not.
   chats.erase(a.id,true);chats.hidePresence(a.id);prekeys.remove(a.id);push.remove(a.id);official.erase(a.id);unlocks.revokeAll(a.id);
   db.prepare('DELETE FROM blocks WHERE owner=? OR target=?').run(a.id,a.id);
   db.prepare('DELETE FROM security_activity WHERE owner=?').run(a.id);
@@ -463,6 +497,7 @@ app.post('/api/admin/logout',guard('admin-logout',5,60000),(req,res)=>{
   controlSessions.revokeAccount(a.id);res.json(releaseSupportKey(db,a.id));
 });
 app.post('/api/account/recovery-code',guard('recovery-code',5,60000),(req,res)=>res.json(issueRecovery(db,req.account.id,req.body?.pin)));
+app.get('/api/account/support-reference',guard('support-reference',20,60000),(req,res)=>res.json({reference:req.account.id}));
 app.post('/api/account/deletion-code',guard('deletion-code',5,60000),(req,res)=>res.json({code:compliance.deletionCode(req.account.id)}));
 app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(req,res)=>{
   if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});
@@ -481,9 +516,10 @@ app.use('/api',(req,res,next)=>{
 app.get('/api/sellers/directory',guard('seller-directory',30,60000),(req,res)=>res.json({items:sellers.directory(req.account.id)}));
 app.post('/api/sellers/profile',guard('seller-profile',10,60000),(req,res)=>res.json(sellers.rename(req.account.id,req.body?.name)));
 app.post('/api/sellers/connect',guard('seller-connect',10,60000),(req,res)=>{if(!sellers.isActive(req.account.id)||!sellers.isActive(req.body?.id))return res.status(403).json({error:'Seller unavailable.'});if(req.account.restricted_until>Date.now())return res.status(403).json({error:'Messaging is temporarily restricted.'});const invite=sellers.ensureCode(req.body.id,chats);res.json(chats.requestConnection(req.account.id,invite.code,sellers.name(req.body.id)));});
-app.get('/api/tickets',guard('user-tickets',60,60000),(req,res)=>res.json({items:helpTickets.list(req.account.id),completed:helpTickets.completions(req.account.id)}));
+app.get('/api/tickets',guard('user-tickets',60,60000),(req,res)=>res.json({items:helpTickets.list(req.account.id),completed:helpTickets.completions(req.account.id),receipts:helpTickets.receipts(req.account.id)}));
 app.post('/api/tickets/open',guard('user-ticket-open',10,60000),(req,res)=>{if(req.account.access_plan==='admin')return res.status(403).json({error:'Use Control to manage tickets.'});const b=req.body||{},t=helpTickets.open(req.account.id,b.topic,b.text,b.requestId);notifyPaymentAdmins();res.json(t);});
 app.post('/api/tickets/state',guard('user-ticket-state',60,60000),(req,res)=>res.json(helpTickets.view(req.body?.id,req.account.id)));
+app.post('/api/tickets/read',guard('user-ticket-read',60,60000),(req,res)=>res.json(helpTickets.markRead(req.body?.id,req.account.id,req.body?.message)));
 app.post('/api/tickets/send',guard('user-ticket-send',30,60000),(req,res)=>{const b=req.body||{},t=helpTickets.send(b.id,req.account.id,false,b.text,b.requestId);notifyHelp(t.id,req.account.id);if(!t.assigned)notifyPaymentAdmins();res.json(t);});
 app.post('/api/report',guard('report',5,60000),(req,res)=>{
   const room=chats.requireRoom(req.account.id,req.body?.id);
@@ -511,9 +547,34 @@ app.post('/api/report',guard('report',5,60000),(req,res)=>{
 });
 app.get('/api/admin/reports',guard('report-list',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json({items:compliance.list(true)});});
 app.get('/api/admin/reports/media/:id',guard('report-media',40,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const media=compliance.media(req.params.id);if(!media)return res.sendStatus(404);res.set('Cache-Control','no-store').type(media.mime).send(Buffer.from(media.body));});
-app.post('/api/admin/reports/collaborate',guard('report-collaborate',30,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.collaborate(req.body?.id,req.account.id,req.body?.status,req.body?.note??'');if(req.body?.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
-app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);const result=compliance.resolve(req.body?.id,req.body?.action,req.account.id,req.body?.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
-app.post('/api/admin/reports/reinstate',guard('reinstate',20,60000),(req,res)=>{if(req.account.access_plan!=='admin')return res.sendStatus(403);res.json(compliance.reinstate(req.body?.target,req.account.id,req.body?.notes??''));});
+app.post('/api/admin/reports/collaborate',guard('report-collaborate',30,60000),(req,res)=>{
+  if(req.account.access_plan!=='admin')return res.sendStatus(403);
+  const {id,status,note=''}=req.body||{};
+  const result=compliance.collaborate(id,req.account.id,status,note);
+  if(status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));
+  auditLedger.record(req.account.id,'mobile','reports/collaborate','report',id,null,status);
+  res.json(result);
+});
+app.post('/api/admin/reports/resolve',guard('report-resolve',20,60000),(req,res)=>{
+  if(req.account.access_plan!=='admin')return res.sendStatus(403);
+  const {id,action,notes=''}=req.body||{};
+  workspace.requireAssignedOrUnclaimed(req.account.id,'report',id);
+  const result=compliance.resolve(id,action,req.account.id,notes);
+  auditLedger.record(req.account.id,'mobile','reports/resolve','report',id,result.target||result.warn,action);
+  if(result.warn){
+    chats.sendAdmin(result.warn,'Moderation warning\nYour account has received a warning. Please follow the Terms of Service.');
+    push.notify([result.warn]);
+  }
+  if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}
+  res.json({ok:true});
+});
+app.post('/api/admin/reports/reinstate',guard('reinstate',20,60000),(req,res)=>{
+  if(req.account.access_plan!=='admin')return res.sendStatus(403);
+  const {target,notes=''}=req.body||{};
+  const result=compliance.reinstate(target,req.account.id,notes);
+  auditLedger.record(req.account.id,'mobile','reports/reinstate','account',target,null,'restore');
+  res.json(result);
+});
 const activeSupportAccounts=()=>{
  const mobile=db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND access_revoked=0 AND pin_state!='retired' AND login_hash IS NOT NULL AND device_id IS NOT NULL AND (suspended=0 OR suspended_until<=?)").all(Date.now()).map(a=>a.id);
  return [...new Set([...mobile,...controlSessions.activeDesktopIds()])].map(id=>({id}));
@@ -537,7 +598,10 @@ app.post('/api/support/contact/delete',guard('support-contact-delete',20,60000),
 app.post('/api/support/delete',guard('support-delete',20,60000),(req,res)=>{if(req.account.access_plan!=='admin'||req.body?.confirmed!==true)return res.status(403).json({error:'Confirmed support admin required.'});const result=approveDeletion(req.account.id,req.body.id);auditLedger.record(req.account.id,'mobile','support/delete','support',req.body.id);res.json(result);});
 app.post('/api/support/respond', guard('support-respond', 40, 60000), (req,res) => {
   if(req.account.access_plan!=='admin')return res.status(403).json({error:'Support admin required.'});
-  res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true));
+  const result=chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true);
+  auditLedger.record(req.account.id,'mobile','support/respond','support',result.id,null,req.body.action);
+  notifyRoom(req.account.id,result.id);
+  res.json(result);
 });
 app.post('/api/contacts/open', guard('contacts-open', 30, 60000), (req,res) => res.json({id:chats.openContact(req.account.id,req.body?.id)}));
 app.post('/api/contacts/update', guard('contacts-update', 30, 60000), (req,res) => res.json(chats.updateContact(req.account.id,req.body?.id,req.body||{})));
@@ -566,13 +630,16 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'qzu. Admin & Seller Network: desktop admin messaging, seller verification, rotating codes and user tickets.',
-  changes: ['Desktop admin messenger and announcements','Seller activation and verification','28-day seller codes','User tickets with seller assignment and archive'],
+  notes: 'Find chats faster, preview media before sending, and follow support and payment progress.',
+  changes: ['Chat search, pinned contacts and unread navigation','Voice previews and photo editing','Ticket receipts and payment progress','Control Center case management and audit history'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
   if(req.account.access_plan!=='admin')return res.status(403).json({error:'Support admin required.'});
-  res.json(chats.setSupportTimer(req.account.id,req.body?.id,req.body?.mode,true));
+  const {id,mode}=req.body||{};
+  const result=chats.setSupportTimer(req.account.id,id,mode,true);
+  auditLedger.record(req.account.id,'mobile','support/lifetime','support',id,null,mode);
+  res.json(result);
 });
 app.post('/api/chat/extend', guard('extend', 15, 60000), (req, res) => res.json(chats.extend(req.account.id, req.body?.id, req.body?.action, req.body?.requestId)));
 app.post('/api/message/burn-open', guard('burn-open', 80, 60000), (req, res) => res.json(chats.openBurn(req.account.id, req.body?.id, req.body?.messageId, Boolean(req.account.invisible))));
@@ -623,6 +690,7 @@ function stateData(a, paged) {
     supportAgent: a.access_plan==='admin',
     seller:a.access_plan==='seller',sellerName:sellers.name(a.id),sellerVerified:sellers.role(a.id)==='verified-seller',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
+    ticketUpdate: a.access_plan==='admin'?null:helpTickets.unread(a.id),
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
     supportDeletions:a.access_plan==='admin'?deletionInbox(a.id):[],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
@@ -666,7 +734,6 @@ app.get('/api/state/live',guard('live',180,60000),(req,res,next)=>{
     }catch(error){cleanup();next(error);}
   }
   const unsubscribe=liveWakeup.subscribe(check);
-  // Recheck time-based changes and changes made outside HTTP, such as developer commands.
   const timer=setTimeout(()=>check(true),4500);
   res.once('close',cleanup);
 });
@@ -713,7 +780,7 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
 });
 function notifyRoom(sender,id){
   const room=chats.rooms.get(id);if(!room)return;
-  push.notify(room.users.filter(account=>account!==sender&&!contacts.between(account,sender)?.muted));
+  push.notify(room.users.filter(account=>account!==sender&&!contacts.between(account,sender)?.muted&&!chats.isRoomMuted(account,id)));
 }
 app.post('/api/message', guard('send', 80, 60_000), (req, res) => {
   chats.send(req.account.id, req.body?.id, req.body?.text, req.body?.replyTo ?? null, req.body || {});
@@ -809,6 +876,7 @@ app.post('/api/chat/delete', (req, res) => {
   if(result?.requested&&!result.duplicate&&!alreadyRequested&&room)notifyDeletionAdmin(room.users.find(x=>x!==req.account.id));else if(!result?.requested&&room){push.notify(room.users.filter(x=>x!==req.account.id));if(req.account.access_plan==='admin')auditLedger.record(req.account.id,'mobile','chat/delete','chat',req.body.id);}
   res.json({ok:true,...result});
 });
+app.post('/api/chat/mute',guard('chat-mute',25,60000),(req,res)=>res.json(chats.setRoomMute(req.account.id,req.body?.id,req.body?.mode)));
 app.post('/api/pin/issue', guard('pin-issue', 5, 60_000), (req, res) => {
   const pin = issuePin(db, req.account.id, req.body?.pin);
   if (pin === null) return res.status(409).json({
@@ -876,7 +944,7 @@ app.get('/downloads/' + apkName, (req, res) => {
   res.download(apkPath, apkName);
 });
 app.get(['/control','/control.html','/control/monitoring'],(req,res)=>desktopRequest(req)?res.sendFile(resolve(root,'public/control.html')):res.status(403).type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu. Control</title><h1>Desktop only</h1><p>Open qzu. Control on a Windows or Mac computer.</p></html>'));
-app.get(['/control.js','/control.css','/desktop-messenger.js','/e2ee.js','/metadata.js','/ui-simplicity.js'],(req,res)=>res.sendFile(resolve(root,'public',req.path.slice(1))));
+app.get(['/control.js','/control.css','/desktop-messenger.js','/e2ee.js','/metadata.js','/ui-simplicity.js','/media.js','/media.css'],(req,res)=>res.sendFile(resolve(root,'public',req.path.slice(1))));
 app.use((req, res, next) => {
   if (!mobileOnly) return next();
   if (req.path === '/') return res.type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu.</title><h1>qzu.</h1><p>Mobile app only.</p></html>');

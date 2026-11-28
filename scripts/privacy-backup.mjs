@@ -12,7 +12,8 @@ const excluded=new Set([
   'feedback_inbox','feedback_events',
   'abuse_reports','report_media','report_collaboration','moderation_actions',
   'payment_cases','payment_case_messages','payment_tickets','payment_ticket_messages',
-  'user_tickets','user_ticket_messages','user_ticket_sellers'
+  'user_tickets','user_ticket_messages','user_ticket_sellers','user_ticket_reads',
+  'admin_case_claims','admin_case_notes'
 ]);
 const quote=name=>'"'+name.replaceAll('"','""')+'"';
 let input,output;
