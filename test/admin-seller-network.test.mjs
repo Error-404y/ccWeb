@@ -150,7 +150,7 @@ test('accepted and pending legacy deletion requests appear only in assigned admi
  let c=new Chats(()=>start);c.attachSupportStore(db);
  const accepted=c.openMobileSupport('customer','admin',true),pending=c.openMobileSupport('other','admin');
  c.remove('customer',accepted);c.remove('customer',accepted);c.remove('other',pending);
- assert.equal(c.supportRequests('admin',true).length,1);
+ assert.equal(c.supportRequests('admin',true).length,0); // Deletion requests must not appear as new connection requests.
  assert.deepEqual(new Set(c.supportDeletions('admin',true).map(x=>x.id)),new Set([accepted,pending]));
  assert.equal(c.supportDeletions('another-admin',true).length,0);assert.throws(()=>c.supportDeletions('admin'));
  assert.throws(()=>c.approveSupportDeletion('another-admin',accepted,true));assert.throws(()=>c.approveSupportDeletion('admin',accepted,false));
