@@ -2819,3 +2819,9 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .pay-timeline li { border-top:3px solid var(--line); padding:5px 1px 0; font-size:11px; line-height:1.3; color:var(--muted); overflow-wrap:anywhere; }
 .pay-timeline li[data-complete=true] { border-color:var(--accent); }
 .pay-timeline li[aria-current=step] { border-color:var(--accent); color:var(--ink); font-weight:700; }
+.group-notice {
+  margin: 6px auto;
+  color: var(--muted);
+  font-size: .82rem;
+  text-align: center;
+}

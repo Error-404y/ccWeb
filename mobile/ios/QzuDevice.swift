@@ -23,13 +23,17 @@ public class QzuDevice: CAPPlugin, CAPBridgedPlugin {
 
     @objc func deviceInfo(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            #if targetEnvironment(simulator)
+            let model = "iOS Simulator"
+            #else
             var info = utsname()
             uname(&info)
             let model = withUnsafeBytes(of: info.machine) { bytes in
                 String(bytes: bytes.prefix { $0 != 0 }, encoding: .utf8)
-            }
+            } ?? UIDevice.current.model
+            #endif
             call.resolve([
-                "model": model ?? UIDevice.current.model,
+                "model": model,
                 "osVersion": UIDevice.current.systemVersion
             ])
         }

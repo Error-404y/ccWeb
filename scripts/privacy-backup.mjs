@@ -8,12 +8,13 @@ const target=resolve(process.argv[2]);
 if(!existsSync(source)||source===target)throw Error('Invalid backup source or destination.');
 const fd=openSync(target,'wx',0o600);closeSync(fd);
 const excluded=new Set([
-  'mobile_support_rooms','push_devices','device_profiles','encryption_prekeys','contact_deletions',
+  'mobile_support_rooms','push_devices','device_profiles','account_device_changes','encryption_prekeys','contact_deletions',
   'feedback_inbox','feedback_events',
   'abuse_reports','report_media','report_collaboration','report_followups','moderation_actions',
   'payment_cases','payment_case_messages','payment_tickets','payment_ticket_messages',
   'user_tickets','user_ticket_messages','user_ticket_sellers','user_ticket_reads',
-  'admin_case_claims','admin_case_notes','seller_stock_alerts','seller_catalog_drafts'
+  'admin_case_claims','admin_case_notes','seller_stock_alerts','seller_catalog_drafts',
+  'seller_shop_reviews','seller_shop_updates','seller_shop_seen','group_rooms'
 ]);
 const quote=name=>'"'+name.replaceAll('"','""')+'"';
 let input,output;

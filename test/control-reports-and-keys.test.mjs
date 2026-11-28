@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {generateKeyPairSync, randomBytes, randomUUID, sign} from 'node:crypto';
 import {once} from 'node:events';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, rmSync, statSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import net from 'node:net';
 import {openAccounts, createAccount, digest} from '../lib/accounts.mjs';
-import {accessKeyInventory, applyRenewal, createSupportKey, generatePlanKeys, initAccess, redeemAccess} from '../lib/access.mjs';
+import {accessKeyInventory, applyRenewal, createSupportKey, generatePlanKeys, initAccess, invoiceStatus, redeemAccess} from '../lib/access.mjs';
 import {complianceStore} from '../lib/compliance.mjs';
-import {initPayments} from '../lib/crypto-payments.mjs';
+import {createCryptoInvoice, initPayments} from '../lib/crypto-payments.mjs';
+import {paymentTickets} from '../lib/payment-tickets.mjs';
 import {deviceProfiles, initDevices} from '../lib/devices.mjs';
 
 function testDevice() {
@@ -28,7 +29,7 @@ function testDevice() {
       'X-QZU-Signature':sign('sha256',Buffer.from(message),keys.privateKey).toString('base64'),'Content-Type':'application/json'
     }});
     const value=await response.json();
-    if(path==='/api/login/setup'&&response.ok)unlock=value.token;
+    if((path==='/api/login/setup'||path==='/api/login/unlock')&&response.ok)unlock=value.token;
     return {status:response.status,value};
   }};
 }
@@ -71,7 +72,7 @@ test('device profiles accept the registered app identity and reset on device cha
     assert.equal(profiles.get(id).model,null);
     profiles.update(account.get(id),'b'.repeat(64),'ios');
     assert.deepEqual(profiles.get(id),{platform:'ios',model:null,osVersion:null,appVersion:null,
-      fingerprint:'b'.repeat(64),registeredAt:1000,lastSeenAt:1000,source:'signed-session'});
+      fingerprint:'b'.repeat(64),registeredAt:null,firstSeenAt:1000,lastSeenAt:1000,lastSignedInAt:null,source:'signed-session'});
   } finally {
     db.close();
   }
@@ -135,6 +136,8 @@ test('Control reports audit submitted chat access and key removal preserves the 
   assert.equal((await control(evidence)).status,401);
   assert.equal((await control('reports/follow-up',{id:report,requestId:randomUUID(),text:'Request'})).status,401);
   assert.equal((await control('keys/purge-used/preview',{})).status,401);
+  assert.equal((await control('keys/reveal',{id:unused.id})).status,401);
+  assert.equal((await control('keys/delete',{id:unused.id,confirmed:true})).status,401);
   assert.equal((await reporterDevice.fetch(origin,reportPath)).status,423);
   for(const device of [targetDevice,reporterDevice,otherDevice]){
     assert.equal((await device.fetch(origin,'/api/login/setup',{pin:'146298'})).status,200);
@@ -220,6 +223,105 @@ test('Control reports audit submitted chat access and key removal preserves the 
     assert.notEqual(row.secret,digest(paid.key));
     assert.equal(row.redeemed_account,null);
     assert.equal(after.prepare('SELECT 1 FROM device_profiles WHERE account=?').get(target),undefined);
+
+    const detail = async id => (await control('keys/'+id)).value.key;
+    const remove = (key, confirmed = true) => control('keys/delete',{id:key.id,confirmed,deleteToken:key.deleteToken});
+    assert.equal(statSync(database+'.access-key-vault').mode&0o777,0o600);
+    const unusedRow = after.prepare('SELECT secret,key_box FROM access_invoices WHERE id=?').get(unused.id);
+    assert.equal(unusedRow.secret,digest(unused.key));
+    assert.equal(Buffer.from(unusedRow.key_box).includes(unused.key),false);
+    const unusedDetail = await detail(unused.id);
+    assert.equal(unusedDetail.revealAvailable,true);
+    assert.equal(JSON.stringify(unusedDetail).includes(unused.key),false);
+    assert.equal(JSON.stringify((await control('keys')).value).includes(unused.key),false);
+    assert.equal((await control('keys/reveal',{id:unused.id})).value.key,unused.key);
+    assert.equal((await control('keys/reveal',{id:protectedKey.id})).status,409);
+    assert.equal((await detail(protectedKey.id)).deletable,false);
+    assert.equal((await remove(await detail(protectedKey.id))).status,403);
+    assert.equal((await remove(unusedDetail,false)).status,400);
+    assert.deepEqual((await remove(unusedDetail)).value,{removedKey:true,deletedAccount:null,retainedPayment:false});
+    assert.equal((await control('keys/'+unused.id)).status,404);
+    assert.throws(()=>redeemAccess(after,unused.key),{status:404});
+
+    const generated = (await control('keys/generate',{plan:'1M',count:1})).value.keys[0];
+    after.prepare('UPDATE access_invoices SET key_box=NULL WHERE id=?').run(generated.id);
+    assert.equal((await detail(generated.id)).revealAvailable,false);
+    assert.equal((await control('keys/reveal',{id:generated.id})).status,409);
+    const beforeReplace = await detail(generated.id);
+    const replacement = (await control('keys/replace',{id:generated.id})).value;
+    assert.equal((await remove(beforeReplace)).status,409);
+    assert.equal((await control('keys/reveal',{id:generated.id})).value.key,replacement.key);
+    assert.throws(()=>redeemAccess(after,generated.key),{status:404});
+    const beforeRedemption = await detail(generated.id);
+    const linked = redeemAccess(after,replacement.key).id;
+    assert.equal((await remove(beforeRedemption)).status,409);
+    assert.equal((await control('accounts/'+linked)).status,200);
+    const redeemedDetail = await detail(generated.id);
+    assert.equal(redeemedDetail.revealAvailable,false);
+    assert.equal(redeemedDetail.deleteAccount,linked);
+    assert.equal(after.prepare('SELECT key_box FROM access_invoices WHERE id=?').get(generated.id).key_box,null);
+    assert.deepEqual((await remove(redeemedDetail)).value,{removedKey:true,deletedAccount:linked,retainedPayment:false});
+    assert.equal((await control('accounts/'+linked)).status,404);
+    assert.throws(()=>redeemAccess(after,replacement.key),{status:404});
+
+    const existingCustomer = createAccount(after).id;
+    const paidOrder = createCryptoInvoice(after,'month','LTC',100,existingCustomer);
+    after.prepare("UPDATE access_invoices SET state='confirmed',verified_at=?,txid=?,vout=0 WHERE id=?")
+      .run(Date.now(),'e'.repeat(64),paidOrder.id);
+    const pending = invoiceStatus(after,paidOrder.orderKey);
+    const paymentCase = paymentTickets(after).open(pending.id);
+    const pendingDetail = await detail(pending.id);
+    assert.equal(pendingDetail.retainsPayment,true);
+    assert.equal(pendingDetail.deleteAccount,null);
+    assert.equal((await control('keys/reveal',{id:pending.id})).value.key,pending.activationKey);
+    assert.deepEqual((await remove(pendingDetail)).value,{removedKey:true,deletedAccount:null,retainedPayment:true});
+    assert.equal((await control('accounts/'+existingCustomer)).status,200);
+    const receipt = after.prepare('SELECT state,txid,key_erased,key_box,account FROM access_invoices WHERE id=?').get(pending.id);
+    assert.equal(receipt.state,'confirmed');
+    assert.equal(receipt.txid,'e'.repeat(64));
+    assert.ok(receipt.key_erased);
+    assert.equal(receipt.key_box,null);
+    assert.equal(receipt.account,null);
+    assert.throws(()=>invoiceStatus(after,paidOrder.orderKey),{status:404});
+    assert.equal(paymentTickets(after).view(paymentCase.id).closed,true);
+    assert.equal((await control('overview')).value.totals.keys.unused,0);
+    const audit = (await control('audit?type=key&outcome=success')).value.items;
+    assert.ok(audit.some(item=>item.action==='keys/reveal'&&item.target===unused.id));
+    assert.ok(audit.some(item=>item.action==='keys/delete'&&item.target===generated.id));
+    assert.equal(JSON.stringify(audit).includes(unused.key),false);
+
+    const previousDevice = testDevice(), replacementDevice = testDevice();
+    const transferKey = generatePlanKeys(after,'1M').keys[0];
+    const transferring = redeemAccess(after,transferKey.key,Date.now(),previousDevice.fingerprint).id;
+    const pin = '146298';
+    assert.equal((await previousDevice.fetch(origin,'/api/login/setup',{pin})).status,200);
+    assert.equal((await previousDevice.fetch(origin,'/api/login/unlock',{pin})).status,200);
+    assert.equal((await control('accounts/'+transferring)).value.account.deviceAlarm,false);
+    const {recoveryCode} = (await previousDevice.fetch(origin,'/api/account/recovery-code',{pin})).value;
+    assert.equal((await replacementDevice.fetch(origin,'/api/access/recover',{code:recoveryCode,pin:'000000',confirmed:true})).status,403);
+    assert.equal((await control('accounts/'+transferring)).value.account.deviceAlarm,false);
+    assert.equal((await replacementDevice.fetch(origin,'/api/access/recover',{code:recoveryCode,pin,confirmed:true})).status,200);
+    assert.equal((await previousDevice.fetch(origin,'/api/account/support-reference')).status,401);
+    assert.equal((await replacementDevice.fetch(origin,'/api/login/unlock',{pin})).status,200);
+    const afterTransfer = (await control('accounts/'+transferring)).value;
+    assert.equal(afterTransfer.account.deviceAlarm,true);
+    assert.equal(afterTransfer.account.device.fingerprint,replacementDevice.fingerprint);
+    assert.equal((await control('accounts?q='+transferring)).value.items[0].deviceAlarm,true);
+    const [change] = afterTransfer.deviceChanges;
+    assert.equal(change.previousFingerprint,previousDevice.fingerprint);
+    assert.equal(change.currentFingerprint,replacementDevice.fingerprint);
+    assert.equal(change.reviewedAt,null);
+    const review = {id:transferring,changeId:change.id};
+    assert.equal((await replacementDevice.fetch(origin,'/api/control/accounts/device-alarm/review',review)).status,403);
+    assert.equal((await control('accounts/device-alarm/review',{...review,id:existingCustomer})).status,404);
+    assert.deepEqual((await control('accounts/device-alarm/review',review)).value,{ok:true});
+    assert.deepEqual((await control('accounts/device-alarm/review',review)).value,{ok:true});
+    const reviewedTransfer = (await control('accounts/'+transferring)).value;
+    assert.equal(reviewedTransfer.account.deviceAlarm,false);
+    assert.ok(reviewedTransfer.deviceChanges[0].reviewedAt>=change.changedAt);
+    const reviewAudit = (await control('audit?q='+change.id)).value.items;
+    assert.equal(reviewAudit.filter(item=>item.action==='accounts/device-alarm/review'&&item.target===transferring).length,1);
+    assert.equal(JSON.stringify(reviewAudit).includes(previousDevice.fingerprint),false);
   } finally {
     after.close();
   }

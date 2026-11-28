@@ -28,6 +28,7 @@ import {accessKeyInventory,generatePlanKeys,replaceUnusedKey,revokeAccessKey,use
 import {initPayments,COINS,createCryptoInvoice,existingCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice,verifyNetwork} from './lib/crypto-payments.mjs';
 import {initPaymentTickets,paymentTickets} from './lib/payment-tickets.mjs';
 import { initDevices, findDeviceAccount, deviceVerifier, deviceProfiles } from './lib/devices.mjs';
+import { deviceChanges } from './lib/device-changes.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
 import { handleAdminCommand } from './lib/admin.mjs';
@@ -46,6 +47,9 @@ setInterval(() => pruneActivity(db), 3600000).unref();
 const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).version;
 const devices = deviceVerifier();
 const registeredDevices = deviceProfiles(db);
+const registeredDeviceChanges = deviceChanges(db);
+registeredDeviceChanges.sweep();
+setInterval(()=>registeredDeviceChanges.sweep(),3600000).unref();
 const blocks = connectionBlocks(db);
 const chats = new Chats(Date.now, undefined, blocks);
 chats.attachSupportStore(db);
@@ -61,7 +65,7 @@ const controlSessions=createControlSessions(db),auditLedger=adminAudit(db);
 const sellers=sellerStore(db);chats.sellerInvites=sellers;chats.profileRole=id=>sellers.role(id);sellers.sync(chats);
 const catalogBuyer=db.prepare('SELECT access_plan,paid_until,access_revoked,suspended,suspended_until,pin_state FROM accounts WHERE id=?');
 const customerAccount=account=>account&&!['admin','seller'].includes(account.access_plan);
-const catalog=sellerCatalog(db,{isSeller:id=>sellers.isActive(id),canView:(buyer,seller,contact)=>{
+const catalog=sellerCatalog(db,{reviewRequired:true,isSeller:id=>sellers.isActive(id),canView:(buyer,seller,contact)=>{
   const account=catalogBuyer.get(buyer);
   const now=Date.now();
   return customerAccount(account)&&account.pin_state!=='retired'&&accessStatus(account,now).active&&
@@ -96,7 +100,7 @@ function supportForAccount(admin,account) {
   return cases;
 }
 const workspace=caseWorkspace(db,{audit:auditLedger,reports:compliance,isAdmin:isTicketAdmin,support:supportRecord,supportForAccount,
-  deviceInfo:registeredDevices.get,accountName:chats.profileName});
+  deviceInfo:registeredDevices.get,deviceHistory:registeredDeviceChanges.history,accountName:chats.profileName});
 workspace.sweep();
 setInterval(()=>workspace.sweep(),600000).unref();
 const controlSource=req=>req.deviceId?'mobile':'desktop';
@@ -312,7 +316,8 @@ function controlWork(id) {
     paymentTickets: payments.open,
     paymentReleases: payments.readyToRelease,
     supportRequests: pending.size,
-    deletionRequests: deletions.size
+    deletionRequests: deletions.size,
+    shopReviews:catalog.pendingCount()
   };
 }
 app.get('/api/control/overview',(req,res)=>{
@@ -329,9 +334,25 @@ app.get('/api/control/accounts',(req,res)=>{
   res.json({items:controlAccounts(db,workspace.accountForReference(req.account.id,q)||q,req.query.after??'')});
 });
 app.get('/api/control/accounts/:id',(req,res)=>res.json(workspace.account(req.account.id,controlSource(req),req.params.id)));
+app.post('/api/control/accounts/device-alarm/review',(req,res)=>{
+  const {id,changeId}=req.body||{};
+  registeredDeviceChanges.review(id,changeId,()=>auditLedger.record(
+    req.account.id,controlSource(req),'accounts/device-alarm/review','account',id.toLowerCase(),changeId.toLowerCase()));
+  res.json({ok:true});
+});
 app.get('/api/control/cases/:type/:id',(req,res)=>res.json(workspace.view(req.account.id,req.params.type,req.params.id)));
 app.post('/api/control/cases/:type/:id',(req,res)=>res.json(workspace.act(req.account.id,controlSource(req),req.params.type,req.params.id,req.body||{})));
 app.get('/api/control/keys',(req,res)=>res.json(accessKeyInventory(db,req.query.q??'',{scope:req.query.scope,after:req.query.after})));
+app.get('/api/control/keys/:id',(req,res)=>res.json({key:keyCleanup.detail(req.params.id)}));
+app.post('/api/control/keys/reveal',(req,res)=>{
+  const id=req.body?.id;
+  let key;
+  try {key=keyCleanup.reveal(id);}
+  catch(error){auditLedger.record(req.account.id,controlSource(req),'keys/reveal','key',id,null,null,'rejected');throw error;}
+  auditLedger.record(req.account.id,controlSource(req),'keys/reveal','key',id);
+  res.json({key});
+});
+app.post('/api/control/keys/delete',(req,res)=>res.json(keyCleanup.removeKey(req.body?.id,req.body?.confirmed,req.body?.deleteToken)));
 app.post('/api/control/keys/purge-used/preview',(req,res)=>res.json(keyCleanup.preview()));
 app.post('/api/control/keys/purge-used',(req,res)=>res.json(keyCleanup.purge(req.body?.confirmation,req.body?.previewToken)));
 app.post('/api/control/keys/generate',(req,res)=>res.json(generatePlanKeys(db,req.body?.plan,req.body?.count,req.account.id)));
@@ -412,10 +433,36 @@ app.post('/api/control/chats/once',(req,res)=>{const p=desktopChats.requireIdent
 app.post('/api/control/chats/once/send',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{},id=chats.sendEncrypted(p.principal,b.id,b.cipher,'text',null,null,true);notifyRoom(p.principal,b.id);res.json({id});});
 app.post('/api/control/chats/receipts',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};chats.requireRoom(p.principal,b.id);const ids=Array.isArray(b.ids)?b.ids.slice(0,50):[];chats.acknowledge(p.principal,[{id:b.id,delivered:ids,read:ids,seen:ids}]);res.json({ok:true});});
 app.get('/api/control/sellers',(req,res)=>res.json({items:sellers.list(chats)}));
+app.get('/api/control/shop-reviews',(req,res)=>res.json({items:catalog.queue().map(item=>({...item,seller:sellers.name(item.owner)}))}));
+app.post('/api/control/shop-reviews/review',(req,res)=>{
+  const {notified}=catalog.review(req.body?.id,req.body?.approve);
+  if(notified.length)push.notify(notified);
+  res.json({ok:true});
+});
+app.get('/api/control/groups',(req,res)=>res.json({items:chats.groups(req.account.id)}));
+app.post('/api/control/groups/join',(req,res)=>{
+  const id=chats.joinGroup(req.account.id,req.body?.id,null,true);
+  notifyRoom(req.account.id,id);
+  res.json({id});
+});
+app.get('/api/control/groups/:id',(req,res)=>{
+  const room=chats.requireRoom(req.account.id,req.params.id);
+  if(!room.group)return res.status(404).json({error:'Group unavailable.'});
+  const group=chats.snapshot(req.account.id).find(item=>item.id===room.id);
+  res.json({...group,messages:group.messages.slice(-50)});
+});
+app.post('/api/control/groups/send',(req,res)=>{
+  const room=chats.requireRoom(req.account.id,req.body?.id);
+  if(!room.group)return res.status(404).json({error:'Group unavailable.'});
+  chats.send(req.account.id,room.id,req.body?.text);
+  notifyRoom(req.account.id,room.id);
+  res.json({ok:true});
+});
 app.post('/api/control/sellers/generate',(req,res)=>res.json(sellers.generateKey(req.account.id)));
 app.post('/api/control/sellers/rotate',(req,res)=>res.json(sellers.rotate(req.body?.id,chats,req.account.id)));
 app.post('/api/control/sellers/access',(req,res)=>{const b=req.body||{};if(!sellers.isSeller(b.id)||typeof b.suspended!=='boolean')return res.status(404).json({error:'Seller unavailable.'});const result=accountAction(db,b.id,req.account.id,b.suspended?'revoke':'restore','Seller access management');if(b.suspended){unlocks.revokeAll(b.id);push.remove(b.id);chats.hidePresence(b.id);}sellers.sync(chats);res.json(result);});
 app.post('/api/control/sellers/verify',(req,res)=>res.json(sellers.verify(req.body?.id,req.body?.verified,req.account.id)));
+app.post('/api/control/sellers/rename',(req,res)=>res.json(sellers.renameAsAdmin(req.body?.id,req.body?.name,req.account.id)));
 app.get('/api/control/announcements',(req,res)=>res.json(req.query.before===undefined?official.recent():official.history(Number(req.query.before),{paged:true})));
 app.post('/api/control/announcements/publish',(req,res)=>{const result=official.publish(req.body?.text,true);push.broadcast(req.account.id);res.json(result);});
 app.post('/api/control/announcements/delete',(req,res)=>res.json(official.remove(req.body?.id,true)));
@@ -428,8 +475,8 @@ app.use('/api/control',(req,res)=>res.status(404).json({error:'Unknown control e
 app.post('/api/access/recover',paymentRate('recover',5),(req,res)=>{
  if(!req.deviceId||req.account||req.body?.confirmed!==true)return res.status(403).json({error:'Unregistered mobile device and confirmation required.'});
  const result=recoverAccount(db,req.body?.code,req.body?.pin,req.deviceId);
- registeredDevices.erase(result.id);
- unlocks.revokeAll(result.id);push.remove(result.id);prekeys.remove(result.id);chats.erase(result.id);chats.hidePresence(result.id);
+ registeredDevices.register(result.id,req.deviceId,nativePlatform(req));
+ unlocks.revokeAll(result.id);push.remove(result.id);prekeys.remove(result.id);chats.erase(result.id,false,{keepGroups:true});chats.hidePresence(result.id);
  res.json({ok:true,needsSetup:false});
 });
 app.post('/api/session', (req, res) => {
@@ -441,6 +488,7 @@ app.post('/api/session', (req, res) => {
     if ((accessRequired || req.deviceId) && !req.body?.accessKey) return res.json({ accessRequired: true });
     const review = validReviewKey(req.body?.accessKey);
     const { token, id } = review ? redeemReviewAccess(db,req.body.accessKey,req.deviceId,{key:process.env.QZU_REVIEW_KEY,pin:process.env.QZU_REVIEW_PIN}) : accessRequired || req.deviceId ? redeemAccess(db, req.body.accessKey, Date.now(), req.deviceId || null) : createAccount(db);
+    if (req.deviceId) registeredDevices.register(id,req.deviceId,nativePlatform(req));
     compliance.requireTerms(id);
     if (!req.deviceId) res.cookie(cookieName, token, {
       httpOnly: true,
@@ -475,7 +523,7 @@ app.post('/api/login/setup', guard('login-setup', 5, 60_000), (req, res) => {
     error: 'Choose a different PIN or unlock.'
   });
   recordActivity(db, req.account.id, 'PIN created');
-  registeredDevices.update(req.account,req.deviceId,nativePlatform(req));
+  registeredDevices.update(req.account,req.deviceId,nativePlatform(req),{},{signedIn:true});
   if (!chats.inviteFor(req.account.id)) chats.newCode(req.account.id);
   res.json({
     token: unlocks.issue(req.account.id,Boolean(req.deviceId&&req.body?.keepUnlocked===true)),
@@ -486,7 +534,7 @@ app.post('/api/login/unlock', guard('unlock', 10, 60_000), (req, res) => {
   const result = verifyLogin(db, req.account.id, req.body?.pin);
   recordActivity(db, req.account.id, result === 'ok' ? 'Unlock successful' : result === 'locked' ? 'Unlock temporarily blocked' : 'Unlock rejected');
   if (result !== 'ok') return loginError(res, result);
-  registeredDevices.update(req.account,req.deviceId,nativePlatform(req));
+  registeredDevices.update(req.account,req.deviceId,nativePlatform(req),{},{signedIn:true});
   res.json({
     token: unlocks.issue(req.account.id,Boolean(req.deviceId&&req.body?.keepUnlocked===true)),
     access: accessStatus(req.account),termsVersion:TERMS_VERSION,termsAccepted:req.account.terms_version===TERMS_VERSION,suspended:Boolean(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))
@@ -518,8 +566,8 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
   res.json({ ok: true });
 });
 
-function deleteAccount(id){controlSessions.revokeAccount(id);workspace.eraseAccount(id);helpTickets.erase(id);sellers.erase(id,chats);desktopChats.erase(id);
-  chats.erase(id);prekeys.remove(id);compliance.purge(id);registeredDevices.erase(id);catalog.erase(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
+function deleteAccount(id,afterErase){controlSessions.revokeAccount(id);workspace.eraseAccount(id);helpTickets.erase(id);sellers.erase(id,chats);desktopChats.erase(id);
+  chats.erase(id);prekeys.remove(id);compliance.purge(id,afterErase);registeredDevices.erase(id);catalog.erase(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
 }
 app.use('/api',(req,res,next)=>{
   if(!unlocks.check(req.account.id,req.get('x-qzu-unlock')))return res.status(423).json({error:'Locked.'});
@@ -535,7 +583,6 @@ app.post('/api/admin/logout',guard('admin-logout',5,60000),(req,res)=>{
   db.prepare('DELETE FROM blocks WHERE owner=? OR target=?').run(a.id,a.id);
   db.prepare('DELETE FROM security_activity WHERE owner=?').run(a.id);
   db.prepare('UPDATE accounts SET deletion_hash=NULL,terms_version=0 WHERE id=?').run(a.id);
-  registeredDevices.erase(a.id);
   controlSessions.revokeAccount(a.id);res.json(releaseSupportKey(db,a.id));
 });
 app.post('/api/account/recovery-code',guard('recovery-code',5,60000),(req,res)=>res.json(issueRecovery(db,req.account.id,req.body?.pin)));
@@ -576,6 +623,11 @@ app.get('/api/sellers/catalog/contact/:id',guard('seller-catalog-contact',40,600
   if(!customerAccount(req.account))return res.status(403).json({error:'Customer contact required.'});
   const peer=contacts.peer(req.account.id,req.params.id);
   res.json({...catalog.forContact(req.account.id,peer,req.params.id),name:sellers.name(peer),verified:sellers.role(peer)==='verified-seller'});
+});
+app.post('/api/sellers/catalog/contact/:id/seen',guard('seller-shop-seen',40,60000),(req,res)=>{
+  if(!customerAccount(req.account))return res.status(403).json({error:'Customer contact required.'});
+  const peer=contacts.peer(req.account.id,req.params.id);
+  res.json(catalog.seenShop(req.account.id,peer,req.params.id,req.body?.version));
 });
 app.get('/api/sellers/catalog/alerts',guard('seller-stock-alerts',40,60000),(req,res)=>{
   if(!customerAccount(req.account))return res.status(403).json({error:'Customer contact required.'});
@@ -723,8 +775,8 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Ask sellers about listings, follow the reports you submit, and see when a message is waiting to send.',
-  changes: ['Seller listing inquiries through chat','Private drafts and pickup or delivery options','One-time stock alerts and report follow-ups','Clearer outgoing message status and retry'],
+  notes: 'Seller listings go through staff review. Groups have owner-controlled deletion timers, and Control shows device change alarms.',
+  changes: ['Seller Shop workspace, review queue and a quiet update dot','Group join approval, separate deletion timers and visible staff entry','Readable device model names and reviewable signing-key change alarms','Audited key reveal, individual key deletion and seller name tools'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {
@@ -774,14 +826,15 @@ app.get('/api/encryption/media/:room/:message', guard('encrypted-media', 80, 600
 function stateData(a, paged) {
   const savedContacts=contacts.list(a.id).map(contact=>{
     const peer=contacts.peer(a.id,contact.id);
+    const peerSeller=sellers.isActive(peer)&&!chats.isBlocked(a.id,peer);
     return {...contact,peerRole:chats.profileRole(peer),peerAdmin:chats.adminAccount(peer),peerName:chats.profileName(peer),
-      peerSeller:sellers.isActive(peer)&&!chats.isBlocked(a.id,peer)};
+      peerSeller,shopUpdate:peerSeller&&customerAccount(a)?catalog.shopNotice(a.id,peer,contact.id):null};
   });
   const contactsById=new Map(savedContacts.map(contact=>[contact.id,contact]));
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, queuedTextSends:true, encryptedOnce:true, sellerListingsV2:true, reportFollowups:true, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, queuedTextSends:true, encryptedOnce:true, sellerListingsV2:true, shopReview:true, groupTimers:true, reportFollowups:true, live: true },
     prekeyCount:prekeys.count(a.id),
     official:official.snapshot(a.id,{paged}),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
@@ -892,7 +945,10 @@ app.post('/api/message', guard('send', 80, 60_000), (req, res) => {
   res.json(typeof sent==='string'?{ok:true}:{ok:true,...sent});
 });
 app.post('/api/connection/respond', guard('connection-response', 30, 60_000), (req, res) => {
-  res.json(chats.respondConnection(req.account.id, req.body?.id, req.body?.accept === true, req.body?.nickname));
+  const group=chats.requests.get(req.body?.id)?.group;
+  const result=chats.respondConnection(req.account.id, req.body?.id, req.body?.accept === true, req.body?.nickname);
+  if(group&&result.id)notifyRoom(req.account.id,result.id);
+  res.json(result);
 });
 
 app.post('/api/message/unsend', guard('unsend', 40, 60_000), (req, res) => {
@@ -955,8 +1011,9 @@ app.post('/api/unblock', guard('unblock', 20, 60_000), (req, res) => {
 });
 
 app.post('/api/group/create', guard('group-create', 10, 60_000), (req, res) => {
-  res.json({ id: chats.createGroup(req.account.id) });
+  res.json({ id: chats.createGroup(req.account.id,req.body?.name) });
 });
+app.post('/api/group/timers',guard('group-timers',20,60000),(req,res)=>res.json(chats.groupTimers(req.account.id,req.body?.id,req.body)));
 
 app.post('/api/group/invite', guard('group-invite', 20, 60_000), (req, res) => {
   res.json(chats.groupInvite(req.account.id, req.body?.id));
@@ -1058,7 +1115,7 @@ app.use(express.static(resolve(root, 'public'), {
   etag: false,
   lastModified: false
 }));
-app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about','/tickets'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
+app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/shop', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about','/tickets'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
 app.use((req, res) => res.status(404).send('Not found'));
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
