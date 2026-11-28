@@ -217,3 +217,35 @@ test('desktop messenger retains encrypted send and view-once routes with contact
  for(const feature of ["Search contacts","+ Add contact","Saved contacts","Connection request","cc-chat-verified","scrollPositions","cc-chat-composer","QzuCrypto.encrypt(context,text)","api('chats/once/send'","api('chats/confirm'","Contact identity changed"])assert.ok(js.includes(feature),feature);
  assert.doesNotThrow(()=>new Function(js));assert.ok(css.includes('.cc-chat-verified.seller'));assert.ok(css.includes('.cc-chat-composer'));
 });
+
+test('ordinary contact deletion removes both contact entries and shared chats but chat deletion preserves contacts',()=>{
+ const db=setup();try{
+ const c=new Chats(()=>start);c.contacts=contactStore(db,()=>start);
+ const id=c.contacts.add('a','b','B','A'),room=c.openContact('a',id);
+ c.remove('a',room);assert.equal(c.rooms.has(room),false);assert.equal(c.contacts.list('b').length,1);
+ const next=c.openContact('b',id);c.removeContact('a',id);assert.equal(c.contacts.list('a').length,0);assert.equal(c.contacts.list('b').length,0);assert.equal(c.rooms.has(next),false);
+ }finally{db.close();}
+});
+test('customer deletion requests for admin contacts are scoped, idempotent, persistent and approval-only',()=>{
+ const db=setup();try{
+ const c=new Chats(()=>start);c.contacts=contactStore(db,()=>start);c.profileRole=id=>['admin','other-admin'].includes(id)?'admin':null;
+ const id=c.contacts.add('customer','admin','qzu-Support','Customer'),room=c.openContact('customer',id);
+ const a=c.remove('customer',room);assert.equal(a.requested,true);assert.equal(c.rooms.has(room),true);
+ assert.equal(c.remove('customer',room).requestId,a.requestId);
+ const b=c.removeContact('customer',id);assert.equal(b.requested,true);assert.equal(c.contacts.list('customer').length,1);
+ assert.equal(c.directDeletionRequests('admin').length,2);assert.equal(c.directDeletionRequests('other-admin').length,0);
+ assert.throws(()=>c.approveDirectDeletion('other-admin',a.requestId));assert.throws(()=>c.approveDirectDeletion('customer',b.requestId));
+ c.approveDirectDeletion('admin',a.requestId);assert.equal(c.rooms.has(room),false);assert.equal(c.contacts.list('customer').length,1);
+ const restarted=new Chats(()=>start);restarted.contacts=contactStore(db,()=>start);restarted.profileRole=c.profileRole;
+ assert.equal(restarted.directDeletionRequests('admin')[0].id,b.requestId);
+ restarted.approveDirectDeletion('admin',b.requestId);assert.equal(restarted.contacts.list('customer').length,0);assert.equal(restarted.contacts.list('admin').length,0);
+ const next=restarted.contacts.add('customer','admin','qzu-Support','Customer');restarted.removeContact('admin',next);assert.equal(restarted.contacts.list('customer').length,0);
+ }finally{db.close();}
+});
+test('ticket creation defaults to centered form and desktop supports distinct contact deletion',()=>{
+ const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),css=readFileSync(new URL('../public/style.css',import.meta.url),'utf8'),desktop=readFileSync(new URL('../public/desktop-messenger.js',import.meta.url),'utf8');
+ assert.ok(app.includes("if(!state.supportAgent&&!items.length){ticketLast='[]';renderNewUserTicket(true);return;}"));
+ assert.ok(css.includes('.user-ticket-content>.user-ticket-form{margin-block:auto'));
+ assert.ok(desktop.includes("api('chats/contact/delete',{id,confirmed:true})"));
+ assert.doesNotThrow(()=>new Function(desktop));
+});
