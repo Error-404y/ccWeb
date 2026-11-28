@@ -1274,8 +1274,20 @@ async function acknowledgeMessages() {
 
 let inviteMotionKey='',inviteMotionDuration=1;
 function updateInviteMotion(inv,now=serverNow()){const key=inv?.code+':'+inv?.expires;if(key!==inviteMotionKey){inviteMotionKey=key;inviteMotionDuration=Math.max(1,(inv?.expires||now)-now);}const remaining=inv?Math.max(0,inv.expires-now):0;$('inviteProgress').max=inviteMotionDuration;$('inviteProgress').value=remaining;$('inviteTimer').textContent=inv?clock(remaining):'Generating code…';}
+function fitConnectPage(){
+  const content=$('connectPage').querySelector('.page-content'),panel=content.querySelector('.connect-panel');
+  if(!content.clientHeight)return;
+  const style=getComputedStyle(content),available=content.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom);
+  content.classList.toggle('connect-fits',panel.getBoundingClientRect().height<=available+1);
+}
+if(typeof ResizeObserver==='function'){
+  const connectObserver=new ResizeObserver(fitConnectPage);
+  connectObserver.observe($('connectPage').querySelector('.page-content'));
+  connectObserver.observe($('connectPage').querySelector('.connect-panel'));
+}
 function renderConnect() {
   if (page !== 'connect' || !unlockToken) return;
+  fitConnectPage();
   const inv = state.invite && state.invite.expires > serverNow() ? state.invite: null;
   $('inviteCode').textContent = inv?.code || '– – – – – –';
   updateInviteMotion(inv);
@@ -3214,6 +3226,12 @@ function showKeyEntry(renewal) {
 
 function showRenewal() {
   if(playBuild){showRestrictedAccount('Access unavailable','Your current access is no longer active.');return;}
+  if(state.access?.plan!=='monthly'){
+    const input=el('input','access-key-input');input.placeholder='Enter renewal access key';input.autocomplete='off';input.spellcheck=false;input.maxLength=52;
+    const apply=button('Apply renewal',async()=>{apply.disabled=true;try{await api('access/renew',{key:input.value.trim().toUpperCase()});accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}catch(error){dialogError(error);apply.disabled=false;}});
+    showCheckout('Renew access',[el('p','','Enter a new access key to extend your existing account.'),input,apply,button(accessDue?'Lock':'Close',accessDue?()=>{delete modal.dataset.checkout;checkoutReturn=null;lock();}:()=>{modalLocked=false;closeModal();},'secondary-button'),button('Delete account',showDeleteAccount,'secondary-button'),button('External deletion code',showDeletionCode,'secondary-button')],true);
+    return;
+  }
   const plan = el('div', 'access-plan');
   plan.append(el('strong', 'access-price', '€2.99'), el('span', '', 'One month · Incl. 19% tax'));
   const controls = [plan, button('Renew access', async () => {
@@ -3397,5 +3415,5 @@ $('accessSettings').addEventListener('click', () => {
   }
   if(playBuild){info('qzu-Access','Existing access until '+new Date(access.paidUntil).toLocaleDateString()+'.');return;}
   const date = new Date(access.paidUntil).toLocaleDateString();
-  show('qzu-Access', [el('p', '', 'Paid through ' + date), el('p', '', 'Months paid: ' + access.monthsPaid + '. Renewal €2.99 including 19% tax.'), button('Renew access', showRenewal), button('Close', closeModal, 'secondary-button')]);
+  show('qzu-Access', [el('p', '', 'Paid through ' + date), el('p', '', access.plan==='monthly'?'Months paid: '+access.monthsPaid+'. Legacy renewal €2.99 including 19% tax.':'Your account is renewed using a new access key.'), button('Renew access', showRenewal), button('Close', closeModal, 'secondary-button')]);
 });
