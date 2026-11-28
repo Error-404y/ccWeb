@@ -1826,7 +1826,7 @@ $('officialOlder').addEventListener('click',async()=>{
   const older=$('officialOlder'),first=Math.min(...[...officialHistory,...(state.official?.posts||[])].map(post=>post.id));
   if(!Number.isFinite(first)||first<=1)return;
   older.disabled=true;const epoch=authEpoch;
-  try{const result=await api('official/history?before='+first);if(epoch!==authEpoch||!unlockToken)return;officialHistory=[...result.posts,...officialHistory];renderOfficial(selected===officialChannel);if(!result.posts.length)older.hidden=true;}
+  try{const result=await api('official/history?before='+first);if(epoch!==authEpoch||!unlockToken||result.deletedRevision!==undefined&&result.deletedRevision!==officialDeleteRevision)return;officialHistory=[...result.posts,...officialHistory];renderOfficial(selected===officialChannel);if(!result.posts.length)older.hidden=true;}
   catch(error){if(epoch===authEpoch)showError(error);}finally{older.disabled=false;}
 });
 $('officialMessage').addEventListener('input',()=>{$('officialSend').disabled=!$('officialMessage').value.trim();});
