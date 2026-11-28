@@ -2542,3 +2542,7 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 #bootSplash .boot-cursor{animation:bootBlink .8s .15s both}
 #bootSplash.boot-ready{animation:bootExit .28s ease both}
 @media(prefers-reduced-motion:reduce){#bootSplash{display:none!important}}
+
+/* Follow native viewport frames and retain the conversation scroll anchor. */
+.messages{overflow-anchor:none;scroll-behavior:auto}.composer{flex-shrink:0}.composer textarea{transition:background-color .15s,border-color .15s}.composer textarea:focus{border-color:var(--line)}
+@media(prefers-reduced-motion:reduce){.composer textarea{transition:none}}

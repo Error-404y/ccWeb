@@ -19,6 +19,7 @@ import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, red
 import {initControl,createControlSessions,issueRecovery,recoverAccount,controlOverview,controlAccounts,accountAction,controlPayments,controlAudit} from './lib/control.mjs';
 import {listAccessKeys,generatePlanKeys,replaceUnusedKey,revokeAccessKey} from './lib/access.mjs';
 import {initPayments,COINS,createCryptoInvoice,existingCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice,verifyNetwork} from './lib/crypto-payments.mjs';
+import {initPaymentTickets,paymentTickets} from './lib/payment-tickets.mjs';
 import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
@@ -29,7 +30,8 @@ import {complianceStore,TERMS_VERSION} from './lib/compliance.mjs';
 process.umask(0o077);
 const root = dirname(fileURLToPath(import.meta.url));
 const app = express(), db = openAccounts();
-initAccess(db);initPayments(db);initControl(db);
+initAccess(db);initPayments(db);initControl(db);initPaymentTickets(db);
+const tickets=paymentTickets(db);tickets.sweep();setInterval(()=>tickets.sweep(),3600000).unref();
 initDevices(db);
 initActivity(db);
 pruneActivity(db);
@@ -80,7 +82,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use((req, res, next) => express.json({
-  limit: ['/api/message', '/api/encryption/message','/api/encryption/once/send','/api/report'].includes(req.path) ? '3mb' : '12kb',
+  limit: ['/api/message', '/api/encryption/message','/api/encryption/once/send','/api/report','/api/access/ticket/send'].includes(req.path) ? '3mb' : '12kb',
   verify: (req, res, buffer) => { req.rawBody = buffer.toString('utf8'); }
 })(req, res, next));
 const cookieName = production ? '__Host-qzu': 'qzu';
@@ -157,7 +159,7 @@ async function checkoutQR(invoice,row){
 }
 app.get('/api/access/methods',paymentRate('methods',30),(req,res)=>res.json({coins:Object.keys(COINS).map(coin=>({coin,name:COINS[coin].name,available:rpcConfigured(coin)}))}));
 app.post('/api/access/invoice',paymentRate('invoice',5),async(req,res)=>{
- const {plan,coin,renewal,accepted,requestKey}=req.body||{};
+ const {plan,coin,renewal,accepted,requestKey,ticketFlow}=req.body||{};
  if(accepted!==true)return res.status(400).json({error:'Accept the displayed payment terms first.'});
  let account=null;
  if(renewal===true||plan==='renewal'){
@@ -171,7 +173,7 @@ app.post('/api/access/invoice',paymentRate('invoice',5),async(req,res)=>{
   if(!invoice){
     if(!rpcConfigured(coin))return res.status(503).json({error:'Payment network not configured. No payment has been requested.'});
     const [,price]=await Promise.all([verifyNetwork(coin),quotePrice(coin)]);
-    invoice=createCryptoInvoice(db,plan,coin,price,account,Date.now(),requestKey||null);
+    invoice=createCryptoInvoice(db,plan,coin,price,account,Date.now(),requestKey||null,ticketFlow===true);
   }
  }else{
   return res.status(426).json({error:'Update qzu. to create a new USD-priced order. Existing orders can still be recovered.'});
@@ -189,6 +191,21 @@ app.post('/api/access/submit',paymentRate('payment-submit',8),(req,res)=>{
  if(row.account&&(!req.account||req.account.id!==row.account||!unlocks.check(req.account.id,req.get('x-qzu-unlock'))))return res.status(403).json({error:'Unlock your account.'});
  res.json(submitPayment(db,req.body.key,req.body.txid));
 });
+function ticketOrder(req){
+ const key=req.body?.key;
+ if(typeof key!=='string'||!/^QZO-[A-F0-9]{48}$/.test(key))throw Object.assign(Error('Order reference required.'),{status:403});
+ const row=invoiceRow(db,key);
+ if(row.account&&(!req.account||req.account.id!==row.account||!unlocks.check(req.account.id,req.get('x-qzu-unlock'))))throw Object.assign(Error('Unlock your account.'),{status:403});
+ if(req.deviceId&&compliance.suspended(req.deviceId))throw Object.assign(Error('Device access suspended.'),{status:403});
+ if(!rate('ticket:'+row.id,100,60000))throw Object.assign(Error('Try again shortly.'),{status:429});
+ return row;
+}
+function notifyPaymentAdmins(){push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND device_id IS NOT NULL").all().map(a=>a.id));}
+app.post('/api/access/ticket/open',paymentRate('ticket-open',10),(req,res)=>{const r=ticketOrder(req),t=tickets.open(r.id,{fresh:req.body?.fresh===true});if(t.created===t.updated&&!t.closed)notifyPaymentAdmins();res.json(tickets.view(t.id,r.id,req.body.key));});
+app.post('/api/access/ticket/state',paymentRate('ticket-state',60),(req,res)=>{const r=ticketOrder(req);res.json(tickets.view(req.body?.ticketId,r.id,req.body.key));});
+app.post('/api/access/ticket/send',paymentRate('ticket-send',20),(req,res)=>{const r=ticketOrder(req);tickets.send(req.body?.ticketId,'customer',req.body,r.id);notifyPaymentAdmins();res.json(tickets.view(req.body.ticketId,r.id,req.body.key));});
+app.post('/api/access/ticket/proof',paymentRate('ticket-proof',20),(req,res)=>{const r=ticketOrder(req),proof=tickets.proof(req.body?.ticketId,req.body?.message,r.id);if(!proof)return res.sendStatus(404);res.json({data:Buffer.from(proof).toString('base64')});});
+app.post('/api/access/ticket/transaction',paymentRate('ticket-transaction',8),(req,res)=>{const r=ticketOrder(req),t=tickets.view(req.body?.ticketId,r.id);if(t.closed)return res.status(409).json({error:'Ticket closed.'});submitPayment(db,req.body.key,req.body.txid);res.json(tickets.view(t.id,r.id,req.body.key));});
 app.post('/api/access/renew', paymentRate('renewal', 10), (req, res) => {
   if (!req.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock'))) return res.status(403).json({ error: 'Unlock your account.' });
   res.json(applyRenewal(db, req.body?.key, req.account.id));
@@ -220,6 +237,15 @@ app.post('/api/control/keys/replace',(req,res)=>res.json(replaceUnusedKey(db,req
 app.post('/api/control/keys/revoke',(req,res)=>res.json(revokeAccessKey(db,req.body?.id,req.account.id,req.body?.reason)));
 app.post('/api/control/accounts/action',(req,res)=>{const b=req.body||{},result=accountAction(db,b.id,req.account.id,b.action,b.reason,b.plan);if(b.action==='revoke'){unlocks.revokeAll(b.id);push.remove(b.id);chats.hidePresence(b.id);}res.json(result);});
 app.get('/api/control/payments',(req,res)=>res.json({items:controlPayments(db)}));
+app.get('/api/control/payment-tickets',(req,res)=>res.json({items:tickets.list()}));
+app.post('/api/control/payment-tickets/state',(req,res)=>res.json(tickets.view(req.body?.id)));
+app.post('/api/control/payment-tickets/send',(req,res)=>{tickets.send(req.body?.id,req.account.id,{text:req.body?.text,requestId:req.body?.requestId});res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/proof',(req,res)=>{const proof=tickets.proof(req.body?.id,req.body?.message);if(!proof)return res.sendStatus(404);res.json({data:Buffer.from(proof).toString('base64')});});
+app.post('/api/control/payment-tickets/verify',async(req,res)=>{const id=req.body?.id,t=tickets.view(id);if(t.state==='submitted')await verifyCryptoInvoice(db,t.invoiceId);res.json(tickets.view(id));});
+app.post('/api/control/payment-tickets/release',(req,res)=>{tickets.release(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/review',(req,res)=>{tickets.review(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/reject',(req,res)=>{tickets.reject(req.body?.id,req.account.id,req.body?.reason);res.json(tickets.view(req.body?.id));});
+app.post('/api/control/payment-tickets/close',(req,res)=>{tickets.close(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
 app.get('/api/control/support',(req,res)=>res.json({requests:chats.supportRequests(req.account.id,true),rooms:chats.snapshot(req.account.id).filter(r=>r.support&&r.supportAgent&&r.supportStatus==='accepted').map(r=>({id:r.id,expires:r.expires,deletionRequested:r.deletionRequested,messages:r.messages.slice(-50).map(m=>({mine:m.mine,at:m.at,text:m.deleted?'Deleted message':m.once||m.burnSeconds?'Temporary message':m.kind==='text'?m.text:'Attachment',sender:m.sender}))}))}));
 app.post('/api/control/support/respond',(req,res)=>res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true)));
 app.post('/api/control/support/send',(req,res)=>{const room=chats.requireRoom(req.account.id,req.body?.id);if(room.supportAgent!==req.account.id||room.supportStatus!=='accepted'||typeof req.body?.text!=='string')return res.status(403).json({error:'Assigned support conversation required.'});const result=chats.send(req.account.id,room.id,req.body.text);push.notify(room.users.filter(id=>id!==req.account.id));res.json({ok:true});});
@@ -432,8 +458,8 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'qzu. Control Update: access plans, cryptocurrency checkout, admin dashboard and account recovery.',
-  changes: ['Original startup animation and compact QR Connect page','Four access plans and LTC, BTC and SOL checkout','Mobile and paired desktop Control Center','Verified recovery codes and audited key management','Report snapshots, collaborative moderation and inline attachment menu'],
+  notes: 'qzu. Fluid Update: compact checkout, persistent payment tickets and smoother keyboard transitions.',
+  changes: ['Compact checkout and native-network payment quotes','Persistent payment-support tickets and proof uploads','Admin ticket review, completion and rejection','Verified activation-key delivery','Keyboard viewport anchoring and smoother chat layout'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {

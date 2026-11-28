@@ -12,7 +12,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  let revision=0,current='Overview',query='',cursor='',objectURL=null;
  const header=el('header','','cc-header');const brand=el('h1','qzu.');brand.append(el('span',' Control','cc-accent'));header.append(brand,button(mobile?'Close':'Sign out',async()=>{revision++;if(objectURL)URL.revokeObjectURL(objectURL);if(!mobile)await api('logout',{}).catch(()=>{});root.replaceChildren();onExit();},'cc-secondary'));
  const layout=el('div','','cc-layout'),nav=el('nav','','cc-nav'),main=el('section','','cc-content');main.setAttribute('aria-label','Control Center content');layout.append(nav,main);root.append(header,layout);
- const tabs=['Overview','Accounts','Keys','Payments','Reports','Feedback','Support','Audit'];
+ const tabs=['Overview','Accounts','Keys','Payments','Payment tickets','Reports','Feedback','Support','Audit'];
  for(const tab of tabs)nav.append(button(tab,()=>{current=tab;query='';cursor='';load();},'cc-tab'));
  const alive=token=>isActive()&&token===revision;
  function error(e){if(isActive())main.prepend(el('p',e?.message||'Request failed.','cc-error'));}
@@ -24,12 +24,33 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  function confirmAction(title,fn,{plan=false}={}){
   const box=card(title);const reason=input('Reason (required)');reason.maxLength=500;const picker=select(plans);if(plan)box.append(picker);box.append(reason,action('Confirm',async()=>{if(!reason.value.trim())throw Error('Enter a reason.');await fn(reason.value.trim(),picker.value);await load();},'cc-danger'),button('Cancel',()=>box.remove(),'cc-secondary'));main.prepend(box);
  }
+ async function openPaymentTicket(id){
+  const token=++revision;main.replaceChildren(el('h2','Payment Ticket'),button('‹ Back',load,'cc-secondary'));
+  const n=el('div','','cc-ticket'),summary=el('div','','cc-muted'),chat=el('div','','cc-snapshot cc-ticket-chat'),field=el('textarea'),feedback=el('p','','cc-muted');
+  field.placeholder='Write a reply';field.maxLength=2000;let last='',busy=false,polling=false,pending=null,mutation=0;
+  const actions=el('div','','cc-actions');
+  const send=action('Send reply',async()=>{if(busy||!field.value.trim())return;const text=field.value.trim(),requestId=pending?.text===text?pending.requestId:crypto.randomUUID();pending={text,requestId};busy=true;mutation++;try{const t=await api('payment-tickets/send',{id,text,requestId});if(alive(token)){field.value='';pending=null;render(t);}}finally{busy=false;}});
+  const verify=action('Verify transaction',async()=>{if(busy)return;busy=true;mutation++;try{render(await api('payment-tickets/verify',{id}));}finally{busy=false;}});
+  const release=action('Release verified key',async()=>{if(busy)return;busy=true;mutation++;try{render(await api('payment-tickets/release',{id}));}finally{busy=false;}});
+  const close=action('Close ticket',async()=>{if(busy)return;busy=true;mutation++;try{render(await api('payment-tickets/close',{id}));}finally{busy=false;}},'cc-secondary');
+  const review=action('Start review',async()=>{if(busy)return;busy=true;mutation++;try{render(await api('payment-tickets/review',{id}));}finally{busy=false;}},'cc-secondary');
+  const reject=button('Reject ticket',()=>{const box=card('Reject ticket',[el('p','This closes the chat, not the payment order. A customer can open another ticket.')]);const reason=el('textarea');reason.placeholder='Reason for rejection';reason.maxLength=500;box.append(reason,action('Confirm rejection',async()=>{if(busy||!reason.value.trim())return;busy=true;mutation++;try{render(await api('payment-tickets/reject',{id,reason:reason.value.trim()}));box.remove();}finally{busy=false;}},'cc-danger'),button('Cancel',()=>box.remove(),'cc-secondary'));n.append(box);},'cc-danger');
+  actions.append(review,verify,release,reject,close);n.append(summary,chat,feedback,field,send,actions);main.append(n);
+  function render(t){
+   if(!alive(token))return;summary.textContent=t.plan+' · $'+t.usd+' · '+t.coin+' · '+t.amount+' '+t.coin+' · '+t.state+(t.txid?' · '+t.txid:'');
+   const fp=JSON.stringify([t.messages.map(m=>m.id),t.state,t.released,t.redeemed,t.closed,t.confirmations,t.txid,t.status,t.reason]);
+   if(fp!==last){last=fp;const bottom=chat.scrollHeight-chat.scrollTop-chat.clientHeight<80,top=chat.scrollTop;chat.replaceChildren();for(const m of t.messages){const b=el('div','','cc-bubble '+(m.actor==='customer'?'other':'mine'));b.append(el('small',(m.actor==='customer'?'Customer':'Support · '+m.actor.slice(0,8))+' · '+date(m.at)));if(m.text)b.append(el('p',m.text));if(m.hasProof)b.append(action('View proof',async()=>{const data=await api('payment-tickets/proof',{id,message:m.id});if(alive(token)&&b.isConnected){const image=el('img');image.src='data:image/png;base64,'+data.data;image.alt='Submitted payment proof';image.className='cc-evidence';b.append(image);}}));chat.append(b);}if(t.released)chat.append(el('p','Verified key delivered to customer.','cc-muted'));if(t.reason)chat.append(el('p','Rejected: '+t.reason,'cc-error'));chat.scrollTop=bottom?chat.scrollHeight:top;}
+   review.hidden=t.closed||t.status==='review';reject.hidden=t.closed||t.state==='confirmed'||t.confirmations>0;verify.hidden=t.closed||t.state!=='submitted';release.hidden=t.closed||t.released||t.state!=='confirmed';close.hidden=t.closed||!t.released;field.disabled=t.closed;send.hidden=t.closed;feedback.textContent=t.closed?'This ticket is closed.':t.status==='review'?'Under review': 'Open ticket';
+  }
+  async function poll(){if(!alive(token)||polling)return;polling=true;try{if(!busy){const observed=mutation,t=await api('payment-tickets/state',{id});if(alive(token)&&!busy&&observed===mutation)render(t);}}catch(e){if(alive(token)){if(e.message==='Ticket unavailable.'){revision++;main.replaceChildren(el('h2','Ticket unavailable'),button('Back to tickets',load,'cc-secondary'));}else feedback.textContent=e.message;}}finally{polling=false;if(alive(token))setTimeout(poll,5000);}}
+  poll();
+ }
  async function load(){
   const token=++revision;if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
   for(const b of nav.children){b.classList.toggle('selected',b.textContent===current);b.setAttribute('aria-current',b.textContent===current?'page':'false');}
   main.replaceChildren(el('h2',current),el('p','Loading…','cc-muted'));
   try{
-   const route=current==='Overview'?'overview':current==='Audit'?'audit':current.toLowerCase();
+   const route=current==='Overview'?'overview':current==='Audit'?'audit':current==='Payment tickets'?'payment-tickets':current.toLowerCase();
    const url=route+(['Accounts','Keys'].includes(current)?'?q='+encodeURIComponent(query)+(cursor?'&after='+encodeURIComponent(cursor):''):'');
    const data=await api(url);if(!alive(token))return;main.replaceChildren(el('h2',current),button('Refresh',load,'cc-secondary'));
    if(current==='Overview'){
@@ -52,6 +73,13 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     }
    }else if(current==='Payments'){
     for(const p of data.items){main.append(card(p.id,[status(p.state),details([['Plan',p.plan],['Network',p.coin||'LTC (legacy)'],['Price',p.usd_cents==null?'€'+(p.eur_cents/100).toFixed(2):'$'+(p.usd_cents/100).toFixed(2)],['Transaction',p.txid],['Confirmations',p.confirmations],['Verified',date(p.verified_at)],['Account',p.redeemed_account]])]));}
+   }else if(current==='Payment tickets'){
+    const open=data.items.filter(t=>!['completed','rejected'].includes(t.status)),done=data.items.filter(t=>['completed','rejected'].includes(t.status));
+    for(const [title,items] of [['Open Tickets',open],['Completed Tickets',done]]){
+     const group=el('section','','cc-ticket-group');group.append(el('h3',title+' · '+items.length));if(!items.length)group.append(el('p','No tickets.','cc-muted'));
+     for(const t of items){const label=t.status==='review'?'Under review':t.status==='completed'?'Completed':t.status==='rejected'?'Rejected':'Open';const badge=el('span',label,'cc-status '+(t.status==='completed'?'green':t.status==='rejected'?'red':t.status==='review'?'yellow':'neutral'));const n=card('Ticket · '+t.id.slice(0,8),[badge,details([['Plan',t.plan],['Total','$'+(t.usd_cents/100).toFixed(2)+' · '+t.coin],['Opened',date(t.created)],['Payment',t.state],['Updated',date(t.updated)]]),button('Open chat',()=>openPaymentTicket(t.id))]);if(t.status==='rejected')n.append(el('p','Hidden from dashboard 12h after rejection.','cc-muted'));group.append(n);}main.append(group);
+    }
+    setTimeout(()=>{if(alive(token)&&current==='Payment tickets'&&!document.hidden)load();},30000);
    }else if(current==='Reports'){
     for(const r of data.items){const n=card(r.reason,[status(r.resolved?'solved':r.workflow||'inspection'),details([['Report',r.id],['Reported account',r.target],['Reporter',r.reporter],['Received',date(r.created)],['Previous reports',r.previousReports]]),el('p',r.evidence||'No additional details')]);
      const snap=el('div','','cc-snapshot');for(const m of r.context||[]){const bubble=el('div','','cc-bubble '+(m.sender==='Reporter'?'mine':'other')+(m.reported?' flagged':''));bubble.append(el('small',m.sender+' · '+date(m.at)),el('p',m.text),el('small',m.source==='reporter-submitted'?'Reporter-submitted':'Server-confirmed'));snap.append(bubble);}n.append(snap);
