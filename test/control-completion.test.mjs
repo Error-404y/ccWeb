@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {openAccounts,createAccount,setLogin,findAccount} from '../lib/accounts.mjs';
 import {initDevices,findDeviceAccount} from '../lib/devices.mjs';
-import {initAccess,invoiceRow,invoiceStatus,submitPayment,approvePayment,redeemAccess,applyRenewal} from '../lib/access.mjs';
+import {initAccess,createSupportKey,rotateSupportKey,releaseSupportKey,invoiceRow,invoiceStatus,submitPayment,approvePayment,redeemAccess,applyRenewal} from '../lib/access.mjs';
 import {initPayments,createCryptoInvoice,inspectTransaction,verifyCryptoInvoice,COINS} from '../lib/crypto-payments.mjs';
-import {initControl,issueRecovery,recoverAccount,createControlSessions,accountAction} from '../lib/control.mjs';
+import {initControl,issueRecovery,recoverAccount,createControlSessions,desktopControlAllowed,accountAction} from '../lib/control.mjs';
 import {complianceStore} from '../lib/compliance.mjs';
 const now=Date.UTC(2026,10,28);
 function setup(){const db=openAccounts(':memory:');initDevices(db);initAccess(db);initPayments(db);initControl(db);complianceStore(db);return db;}
@@ -43,12 +43,29 @@ test('recovery requires PIN and one-time code, retains entitlement, invalidates 
  assert.equal(findAccount(db,a.token),null);assert.throws(()=>recoverAccount(db,recoveryCode,'123456','other-device',now+3));
  }finally{db.close();}
 });
-test('desktop admin pairing is one-time, expires, and revokes on device retirement',()=>{
+test('desktop admin keys do not consume or transfer mobile slots, and reject normal keys',()=>{
  const db=setup();try{
- let time=now;const a=createAccount(db,'admin-device'),u=createAccount(db,'user-device');setLogin(db,a.id,'123456');setLogin(db,u.id,'123456');db.prepare("UPDATE accounts SET access_plan='admin' WHERE id=?").run(a.id);
- const sessions=createControlSessions(db,()=>time);
- assert.throws(()=>sessions.issue(u.id,'user-device','123456'));
- const {pairingCode}=sessions.issue(a.id,'admin-device','123456');const {token}=sessions.exchange(pairingCode);assert.equal(sessions.check(token).id,a.id);assert.throws(()=>sessions.exchange(pairingCode));
- db.prepare('UPDATE accounts SET device_id=NULL WHERE id=?').run(a.id);assert.equal(sessions.check(token),null);
+ let time=now;const key=createSupportKey(db,now),sessions=createControlSessions(db,()=>time);
+ assert.throws(()=>sessions.login('QZU-'+ 'A'.repeat(48)));
+ assert.throws(()=>sessions.login('QZU-ADMIN-'+ 'A'.repeat(48)));
+ const {token,id}=sessions.login(key,'');assert.equal(sessions.check(token).id,id);
+ const slot=db.prepare('SELECT redeemed,account FROM support_keys').get();
+ assert.equal(slot.redeemed,null);assert.equal(slot.account,id);
+ const a=redeemAccess(db,key,now+1,'admin-device');assert.equal(a.id,id);assert.equal(sessions.check(token),null);
+ setLogin(db,a.id,'123456');assert.throws(()=>sessions.login(key,''));
+ const linked=sessions.login(key,'123456');assert.equal(sessions.check(linked.token).id,id);
+ assert.equal(findDeviceAccount(db,'admin-device').id,id);
+ releaseSupportKey(db,id);assert.equal(sessions.check(linked.token),null);
+ const fresh=sessions.login(key,'');time+=15*60000;assert.equal(sessions.check(fresh.token),null);
+ const again=sessions.login(key,'');const replacement=rotateSupportKey(db,key);assert.equal(sessions.check(again.token),null);assert.throws(()=>sessions.login(key,''));const updated=sessions.login(replacement,'');assert.equal(updated.id,id);db.prepare('DELETE FROM support_keys').run();assert.equal(sessions.check(updated.token),null);
  }finally{db.close();}
+});
+test('Control Center accepts desktop Windows and macOS browser identifiers and rejects mobile identifiers',()=>{
+ assert.equal(desktopControlAllowed('Mozilla/5.0 (Windows NT 10.0; Win64; x64)','?0','"Windows"'),true);
+ assert.equal(desktopControlAllowed('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'),true);
+ assert.equal(desktopControlAllowed('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0) Mobile'),false);
+ assert.equal(desktopControlAllowed('Mozilla/5.0 (Linux; Android 15) Mobile'),false);
+ assert.equal(desktopControlAllowed('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)','?1'),false);
+ assert.equal(desktopControlAllowed('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)','','"Android"'),false);
+ assert.equal(desktopControlAllowed(''),false);
 });

@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.15.0';
+const installedVersion = window.QZU_APP_VERSION || '0.15.1';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -104,7 +104,7 @@ const openingOnce = new Set();
 let mediaRoom = null;
 let mediaMessage = null;
 let invisibleSaving = false;
-let mediaUrl = null,controlCleanup=null;
+let mediaUrl = null;
 let recordingCleanup = null;
 const reactions = ['👍', '❤️', '😂', '🔥', '😮', '👎'];
 let privacyMode = false;
@@ -2472,21 +2472,6 @@ async function openModeration(){
   }catch(error){showError(error);}
 }
 $('adminReports').addEventListener('click',openModeration);
-function openControlCenter(){
- if(!state.supportAgent||!unlockToken||!window.QzuControl)return;
- const root=el('div','cc-mobile'),epoch=authEpoch;
- show('Control Center',[root]);
- const active=()=>epoch===authEpoch&&Boolean(unlockToken)&&!document.hidden&&body.contains(root);
- async function call(path,data){if(!active())throw Error('Locked.');const value=await api('control/'+path,data);if(!active())throw Error('Locked.');return value;}
- async function media(id){if(!active())throw Error('Locked.');const response=await transport('/api/control/reports/media/'+encodeURIComponent(id),{headers:{'X-QZU-Unlock':unlockToken},cache:'no-store',credentials:'same-origin'});if(!response.ok||!active())throw Error('Evidence unavailable.');return response.blob();}
- function pair(){
-  const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Admin PIN';pin.autocomplete='off';
-  const generate=button('Generate one-time pairing code',async()=>{generate.disabled=true;try{const result=await api('control/pair',{pin:pin.value});pin.value='';if(epoch!==authEpoch||!unlockToken||document.hidden||!body.contains(generate))return;const value=el('p','access-address',result.pairingCode);show('Pair desktop',[el('p','','Open '+apiOrigin+'/control in your browser. This code expires in 2 minutes and works only once.'),value,button('Copy code',()=>navigator.clipboard.writeText(result.pairingCode)),button('Back',openControlCenter,'secondary-button')]);}catch(e){dialogError(e);generate.disabled=false;}});
-  show('Pair desktop',[el('p','','Verify your admin PIN to authorize a browser.'),pin,generate,button('Back',openControlCenter,'secondary-button')]);
- }
- const mounted=window.QzuControl.mount(root,call,{mobile:true,isActive:active,onExit:closeModal,pair,media});controlCleanup=()=>mounted.close();
-}
-$('adminControl').addEventListener('click',openControlCenter);
 $('recoverySettings').addEventListener('click',()=>{
  if(!unlockToken||state.supportAgent)return;
  const pin=el('input','access-key-input');pin.type='password';pin.inputMode='numeric';pin.maxLength=6;pin.placeholder='Current login PIN';pin.autocomplete='off';
@@ -2631,7 +2616,6 @@ $('accentSettings').addEventListener('click', () => {
 });
 
 function clearMedia() {
-  if(controlCleanup){const cleanup=controlCleanup;controlCleanup=null;cleanup();}
   if (recordingCleanup) {
     const cleanup = recordingCleanup;
     recordingCleanup = null;

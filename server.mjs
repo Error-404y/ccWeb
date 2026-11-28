@@ -16,7 +16,7 @@ import { contactStore } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
 import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey } from './lib/access.mjs';
-import {initControl,createControlSessions,issueRecovery,recoverAccount,controlOverview,controlAccounts,accountAction,controlPayments,controlAudit} from './lib/control.mjs';
+import {initControl,createControlSessions,desktopControlAllowed,issueRecovery,recoverAccount,controlOverview,controlAccounts,accountAction,controlPayments,controlAudit} from './lib/control.mjs';
 import {listAccessKeys,generatePlanKeys,replaceUnusedKey,revokeAccessKey} from './lib/access.mjs';
 import {initPayments,COINS,createCryptoInvoice,existingCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice,verifyNetwork} from './lib/crypto-payments.mjs';
 import {initPaymentTickets,paymentTickets} from './lib/payment-tickets.mjs';
@@ -55,6 +55,7 @@ const publicOrigin = process.env.PUBLIC_ORIGIN;
 const mobileOnly = process.env.QZU_MOBILE_ONLY === 'true' || (production && process.env.QZU_MOBILE_ONLY !== 'false');
 chats.requireEncryptedDirect = mobileOnly;
 const nativeOrigins = new Set(['capacitor://localhost', 'https://localhost']);
+const desktopRequest=req=>!req.get('x-qzu-device')&&!nativeOrigins.has(req.get('origin'))&&desktopControlAllowed(req.get('user-agent')||'',req.get('sec-ch-ua-mobile')||'',req.get('sec-ch-ua-platform')||'');
 if (production && !publicOrigin.startsWith('https://')) throw new Error('HTTPS required.');
 if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -117,6 +118,10 @@ app.use('/api', (req, res, next) => {
   if (!rate('ip:' + req.ip, 600, 60_000)) return res.status(429).json({
     error: 'Try again shortly.'
   });
+  if (/^\/control(?:\/|$)/i.test(req.path)) {
+    if(!desktopRequest(req))return res.status(403).json({error:'Control Center is available on Windows and Mac computers only.'});
+    return next();
+  }
   if (req.get('x-qzu-device')) {
     req.deviceId = devices.authenticate({
       publicKey: req.get('x-qzu-device'), signature: req.get('x-qzu-signature'), timestamp: req.get('x-qzu-time'), nonce: req.get('x-qzu-nonce'),
@@ -125,7 +130,6 @@ app.use('/api', (req, res, next) => {
     if (!req.deviceId) return res.status(401).json({ error: 'Device verification failed.' });
     req.account = findDeviceAccount(db, req.deviceId);
   } else {
-    if (req.path==='/control'||req.path.startsWith('/control/')) { next(); return; }
     if (mobileOnly) return res.status(403).json({ error: 'Use the qzu. mobile app.' });
     req.account = findAccount(db, readToken(req));
     if (req.account?.device_id) return res.status(403).json({ error: 'Use your registered device.' });
@@ -215,20 +219,18 @@ const controlCookie=production?'__Host-qzu-control':'qzu-control';
 const readControl=req=>req.headers.cookie?.split(';').map(x=>x.trim()).find(x=>x.startsWith(controlCookie+'='))?.slice(controlCookie.length+1);
 const controlCookieOptions={httpOnly:true,secure:production,sameSite:'strict',path:'/'};
 const controlRate=(req,res,next)=>rate('control:'+req.ip,120,60000)?next():res.status(429).json({error:'Try again shortly.'});
-app.post('/api/control/exchange',controlRate,(req,res)=>{
- if(req.deviceId||!rate('pair:'+req.ip,8,60000))return res.status(403).json({error:'Pairing unavailable.'});
- const result=controlSessions.exchange(req.body?.code);
+app.post('/api/control/login',controlRate,(req,res)=>{
+ if(!rate('control-login:'+req.ip,5,60000))return res.status(429).json({error:'Try again shortly.'});
+ const result=controlSessions.login(req.body?.key,req.body?.pin);
  res.cookie(controlCookie,result.token,{...controlCookieOptions,maxAge:8*3600000});res.json({ok:true});
 });
 app.use('/api/control',(req,res,next)=>{
- if(req.deviceId){
-  const a=req.account;if(!a||a.access_plan!=='admin'||a.pin_state==='retired'||!accessStatus(a).active||(a.suspended&&(!a.suspended_until||a.suspended_until>Date.now()))||!unlocks.check(a.id,req.get('x-qzu-unlock')))return res.status(403).json({error:'Admin unlock required.'});
- }else{req.account=controlSessions.check(readControl(req));if(!req.account)return res.status(401).json({error:'Pair this browser using your admin phone.'});}
+ req.account=controlSessions.check(readControl(req));
+ if(!req.account)return res.status(401).json({error:'Sign in with your admin key.'});
  if(!rate('control-admin:'+req.account.id,120,60000))return res.status(429).json({error:'Try again shortly.'});
  next();
 });
-app.post('/api/control/pair',controlRate,(req,res)=>{if(!req.deviceId)return res.sendStatus(403);res.json(controlSessions.issue(req.account.id,req.deviceId,req.body?.pin));});
-app.post('/api/control/logout',(req,res)=>{if(req.deviceId)controlSessions.revokeAccount(req.account.id);else controlSessions.revoke(readControl(req));res.clearCookie(controlCookie,controlCookieOptions);res.json({ok:true});});
+app.post('/api/control/logout',(req,res)=>{controlSessions.revoke(readControl(req));res.clearCookie(controlCookie,controlCookieOptions);res.json({ok:true});});
 app.get('/api/control/overview',(req,res)=>res.json(controlOverview(db)));
 app.get('/api/control/accounts',(req,res)=>res.json({items:controlAccounts(db,req.query.q||'',req.query.after||'')}));
 app.get('/api/control/keys',(req,res)=>res.json({items:listAccessKeys(db,req.query.q||'')}));
@@ -752,7 +754,7 @@ app.get('/downloads/' + apkName, (req, res) => {
   if (!existsSync(apkPath)) return res.sendStatus(404);
   res.download(apkPath, apkName);
 });
-app.get('/control',(req,res)=>res.sendFile(resolve(root,'public/control.html')));
+app.get(['/control','/control.html'],(req,res)=>desktopRequest(req)?res.sendFile(resolve(root,'public/control.html')):res.status(403).type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>qzu. Control</title><h1>Desktop only</h1><p>Open qzu. Control on a Windows or Mac computer.</p></html>'));
 app.get(['/control.js','/control.css'],(req,res)=>res.sendFile(resolve(root,'public',req.path.slice(1))));
 app.use((req, res, next) => {
   if (!mobileOnly) return next();

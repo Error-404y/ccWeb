@@ -112,6 +112,13 @@ async function api(path,data){
  const value=await response.json().catch(()=>({}));if(!response.ok)throw Error(value.error||'Request failed.');return value;
 }
 async function media(id){const r=await fetch('/api/control/reports/media/'+encodeURIComponent(id),{cache:'no-store',credentials:'same-origin'});if(!r.ok)throw Error('Evidence unavailable.');return r.blob();}
-function login(){desktop.className='cc-root';desktop.replaceChildren();const form=el('form','','cc-pair');const field=input('One-time pairing code');field.maxLength=57;const message=el('p','Open the admin app → Control Center → Pair desktop.','cc-muted');const submit=el('button','Connect securely','cc-button');form.append(el('h1','qzu. Control'),message,field,submit);desktop.append(form);form.addEventListener('submit',async e=>{e.preventDefault();submit.disabled=true;try{await api('exchange',{code:field.value.trim().toUpperCase()});field.value='';mount(desktop,api,{onExit:login,media});}catch(e){message.textContent=e.message;}finally{submit.disabled=false;}});}
-api('overview').then(()=>mount(desktop,api,{onExit:login,media})).catch(login);
+function login(){
+ desktop.className='cc-root';desktop.replaceChildren();
+ const form=el('form','','cc-pair'),field=input('Admin key','password'),pin=input('Admin PIN (if already registered)','password');
+ field.maxLength=58;field.required=true;pin.maxLength=6;pin.inputMode='numeric';
+ const message=el('p','Sign in with your QZU-ADMIN key. If the key is registered on a phone, enter its existing login PIN.','cc-muted');
+ const submit=el('button','Sign in securely','cc-button');form.append(el('h1','qzu. Control'),message,field,pin,submit);desktop.append(form);
+ form.addEventListener('submit',async e=>{e.preventDefault();submit.disabled=true;try{await api('login',{key:field.value.trim().toUpperCase(),pin:pin.value});field.value='';pin.value='';mount(desktop,api,{onExit:login,media});}catch(e){message.textContent=e.message;pin.value='';}finally{submit.disabled=false;}});
+}
+if(/Macintosh/i.test(navigator.userAgent)&&navigator.maxTouchPoints>1){desktop.replaceChildren(el('h1','Desktop only'),el('p','Open qzu. Control on a Windows or Mac computer.'));}else api('overview').then(()=>mount(desktop,api,{onExit:login,media})).catch(login);
 })();
