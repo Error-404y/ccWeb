@@ -751,19 +751,26 @@ applyTheme(theme);
 $('theme').value = theme;
 $('theme').addEventListener('change', () => applyTheme($('theme').value));
 
-function setViewport() {
-  const viewport = window.visualViewport;
-  const root = document.documentElement;
-  const normalScale = !native || !viewport || Math.abs(viewport.scale - 1) < .02;
-  const h = (normalScale && viewport?.height) || window.innerHeight;
-  root.style.setProperty('--app-height', Math.round(h) + 'px');
-  root.style.setProperty('--viewport-top', Math.max(0, Math.round(normalScale ? viewport?.offsetTop || 0 : 0)) + 'px');
-  if (native && (window.scrollX || window.scrollY)) window.scrollTo(0, 0);
+let viewportFrame=0,viewportHeight=0,viewportTop=-1;
+function setViewport(){
+ if(viewportFrame)return;
+ viewportFrame=requestAnimationFrame(()=>{
+  viewportFrame=0;
+  const viewport=window.visualViewport,root=document.documentElement;
+  if(native&&viewport&&Math.abs(viewport.scale-1)>=.02)return;
+  const h=Math.round(viewport?.height||window.innerHeight),top=Math.max(0,Math.round(viewport?.offsetTop||0));
+  if(h===viewportHeight&&top===viewportTop)return;
+  const views=[$('messages'),document.querySelector('.pay-ticket-messages')].filter(v=>v&&v.clientHeight>0);
+  const positions=views.map(v=>({v,bottom:v.scrollHeight-v.clientHeight-v.scrollTop<85,scroll:v.scrollTop}));
+  viewportHeight=h;viewportTop=top;root.style.setProperty('--app-height',h+'px');root.style.setProperty('--viewport-top',top+'px');
+  for(const {v,bottom,scroll} of positions)v.scrollTop=bottom?v.scrollHeight:scroll;
+  if(native&&(window.scrollX||window.scrollY))window.scrollTo(0,0);
+ });
 }
 setViewport();
-window.addEventListener('resize', setViewport);
-window.visualViewport?.addEventListener('resize', setViewport);
-window.visualViewport?.addEventListener('scroll', setViewport);
+window.addEventListener('resize',setViewport);
+window.visualViewport?.addEventListener('resize',setViewport);
+window.visualViewport?.addEventListener('scroll',setViewport);
 if (native) {
   const selectable = target => target instanceof Element && Boolean(target.closest('input, textarea, [contenteditable="true"], .access-address, .fingerprint-code, .pin-display, .reference'));
   for (const type of ['selectstart', 'contextmenu']) document.addEventListener(type, event => {
