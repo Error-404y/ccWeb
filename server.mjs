@@ -16,6 +16,7 @@ import { contactStore } from './lib/contacts.mjs';
 import { openAccounts, createAccount, findAccount, issuePin, usePin, requestReset, setLogin, verifyLogin, changeLogin, validPin, markRequestSent, connectionBlocks } from './lib/accounts.mjs';
 
 import { initAccess, accessStatus, createInvoice, invoiceStatus, invoiceRow, redeemAccess, redeemReviewAccess, validReviewKey, applyRenewal, submitPayment, releaseSupportKey } from './lib/access.mjs';
+import {initPayments,COINS,createCryptoInvoice,quotePrice,paymentURI,rpcConfigured,verifyCryptoInvoice} from './lib/crypto-payments.mjs';
 import { initDevices, findDeviceAccount, deviceVerifier } from './lib/devices.mjs';
 import { Unlocks } from './lib/unlocks.mjs';
 import { sendReset, sendFeedback, sendPayment } from './lib/discord.mjs';
@@ -26,7 +27,7 @@ import {complianceStore,TERMS_VERSION} from './lib/compliance.mjs';
 process.umask(0o077);
 const root = dirname(fileURLToPath(import.meta.url));
 const app = express(), db = openAccounts();
-initAccess(db);
+initAccess(db);initPayments(db);
 initDevices(db);
 initActivity(db);
 pruneActivity(db);
@@ -129,11 +130,13 @@ const accessRequired = process.env.QZU_ACCESS_REQUIRED !== 'false';
 const paymentRate = (name, max) => (req, res, next) => rate(name + ':' + req.ip, max, 60_000) ? next() : res.status(429).json({ error: 'Try again shortly.' });
 let paymentBusy = false;
 async function paymentLoop() {
-  if (paymentBusy || !process.env.QZU_PAYMENT_WEBHOOK) return;
+  if (paymentBusy) return;
   paymentBusy = true;
   try {
+    const pending=db.prepare("SELECT id,coin FROM access_invoices WHERE coin IS NOT NULL AND state='submitted' AND submitted>? ORDER BY COALESCE(verified_at,0),submitted LIMIT 20").all(Date.now()-7*86400000);
+    for(const row of pending)if(rpcConfigured(row.coin))await verifyCryptoInvoice(db,row.id).catch(()=>{});
     if (process.env.QZU_PAYMENT_WEBHOOK) {
-      const rows = db.prepare("SELECT id,plan,sats,eur_cents FROM access_invoices WHERE state='confirmed' AND notified=0 LIMIT 20").all();
+      const rows = db.prepare("SELECT id,plan,sats,eur_cents,usd_cents,coin,verified_at FROM access_invoices WHERE state='confirmed' AND notified=0 LIMIT 20").all();
       for (const row of rows) {
         await sendPayment(row);
         db.prepare('UPDATE access_invoices SET notified=1 WHERE id=?').run(row.id);
@@ -143,33 +146,42 @@ async function paymentLoop() {
 }
 setInterval(paymentLoop, 15_000).unref();
 
-app.post('/api/access/invoice', paymentRate('invoice', 5), async (req, res) => {
-  const plan = req.body?.plan;
-  let account = null;
-  if (plan === 'renewal') {
-    if (!req.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')) || req.account.access_plan !== 'monthly') return res.status(403).json({ error: 'Unlock your monthly account first.' });
-    account = req.account.id;
-  } else if (plan !== 'monthly') return res.status(400).json({ error: 'Choose a plan.' });
-  if (req.body?.accepted !== true) return res.status(400).json({ error: 'Accept the displayed payment terms first.' });
-  const invoice = createInvoice(db, plan, account);
-  const qr = await QRCode.toDataURL('litecoin:' + invoice.address, { width: 320, margin: 3 });
-  res.json({ ...invoice, qr });
+async function checkoutQR(invoice,row){
+ if(invoice.state!=='pending')return null;
+ if(row.coin)return QRCode.toDataURL(paymentURI(row),{width:320,margin:3});
+ return QRCode.toDataURL('litecoin:'+invoice.address,{width:320,margin:3});
+}
+app.get('/api/access/methods',paymentRate('methods',30),(req,res)=>res.json({coins:Object.keys(COINS).map(coin=>({coin,name:COINS[coin].name,available:rpcConfigured(coin)}))}));
+app.post('/api/access/invoice',paymentRate('invoice',5),async(req,res)=>{
+ const {plan,coin,renewal,accepted}=req.body||{};
+ if(accepted!==true)return res.status(400).json({error:'Accept the displayed payment terms first.'});
+ let account=null;
+ if(renewal===true||plan==='renewal'){
+  if(!req.account||!unlocks.check(req.account.id,req.get('x-qzu-unlock'))||!['monthly','week','month','year'].includes(req.account.access_plan)||req.account.access_revoked)return res.status(403).json({error:'Unlock your eligible account first.'});
+  account=req.account.id;
+ }
+ let invoice;
+ if(coin){
+  if(!Object.hasOwn(COINS,coin)||!rpcConfigured(coin))return res.status(503).json({error:'Payment network not configured. No payment has been requested.'});
+  invoice=createCryptoInvoice(db,plan,coin,await quotePrice(coin),account);
+ }else{
+  if(plan!=='monthly'&&plan!=='renewal')return res.status(400).json({error:'Choose a payment network.'});
+  if(plan==='renewal'&&req.account?.access_plan!=='monthly')return res.status(403).json({error:'Legacy monthly renewal only.'});
+  invoice=createInvoice(db,plan,account);
+ }
+ res.json({...invoice,qr:await checkoutQR(invoice,invoiceRow(db,invoice.orderKey))});
 });
-
-app.post('/api/access/status', paymentRate('invoice-status', 30), async (req, res) => {
-  const row = invoiceRow(db, req.body?.key);
-  if (row.account && (!req.account || req.account.id !== row.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')))) return res.status(403).json({ error: 'Unlock your account.' });
-  const invoice = invoiceStatus(db, req.body.key);
-  const qr = invoice.state === 'pending' ? await QRCode.toDataURL('litecoin:' + invoice.address, { width: 320, margin: 3 }) : null;
-  res.json({ ...invoice, qr });
+app.post('/api/access/status',paymentRate('invoice-status',30),async(req,res)=>{
+ const row=invoiceRow(db,req.body?.key);
+ if(row.account&&(!req.account||req.account.id!==row.account||!unlocks.check(req.account.id,req.get('x-qzu-unlock'))))return res.status(403).json({error:'Unlock your account.'});
+ const invoice=invoiceStatus(db,req.body.key);
+ res.json({...invoice,qr:await checkoutQR(invoice,row)});
 });
-
-app.post('/api/access/submit', paymentRate('payment-submit', 8), (req, res) => {
-  const row = invoiceRow(db, req.body?.key);
-  if (row.account && (!req.account || req.account.id !== row.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock')))) return res.status(403).json({ error: 'Unlock your account.' });
-  res.json(submitPayment(db, req.body.key, req.body.txid));
+app.post('/api/access/submit',paymentRate('payment-submit',8),(req,res)=>{
+ const row=invoiceRow(db,req.body?.key);
+ if(row.account&&(!req.account||req.account.id!==row.account||!unlocks.check(req.account.id,req.get('x-qzu-unlock'))))return res.status(403).json({error:'Unlock your account.'});
+ res.json(submitPayment(db,req.body.key,req.body.txid));
 });
-
 app.post('/api/access/renew', paymentRate('renewal', 10), (req, res) => {
   if (!req.account || !unlocks.check(req.account.id, req.get('x-qzu-unlock'))) return res.status(403).json({ error: 'Unlock your account.' });
   res.json(applyRenewal(db, req.body?.key, req.account.id));
