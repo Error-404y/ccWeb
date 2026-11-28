@@ -56,7 +56,7 @@ const controlSessions=createControlSessions(db);
 const sellers=sellerStore(db);chats.sellerInvites=sellers;chats.profileRole=id=>sellers.role(id);sellers.sync(chats);
 const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN support_keys k ON k.account=a.id WHERE a.id=? AND a.access_plan='admin' AND a.access_revoked=0 AND (a.suspended=0 OR a.suspended_until<=?) AND k.expires>?").get(id,Date.now(),Date.now()));
 const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
-const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
+const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id),name:id=>sellers.name(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
 const notifyHelp=(id,actor)=>push.notify(helpTickets.recipients(id).filter(x=>x!==actor));
 const production = process.env.NODE_ENV === 'production';
 if (production && !process.env.PUBLIC_ORIGIN) throw new Error('Set PUBLIC_ORIGIN to your HTTPS origin.');
@@ -433,7 +433,7 @@ app.use('/api',(req,res,next)=>{
 app.get('/api/sellers/directory',guard('seller-directory',30,60000),(req,res)=>res.json({items:sellers.directory(req.account.id)}));
 app.post('/api/sellers/profile',guard('seller-profile',10,60000),(req,res)=>res.json(sellers.rename(req.account.id,req.body?.name)));
 app.post('/api/sellers/connect',guard('seller-connect',10,60000),(req,res)=>{if(!sellers.isActive(req.account.id)||!sellers.isActive(req.body?.id))return res.status(403).json({error:'Seller unavailable.'});if(req.account.restricted_until>Date.now())return res.status(403).json({error:'Messaging is temporarily restricted.'});const invite=sellers.ensureCode(req.body.id,chats);res.json(chats.requestConnection(req.account.id,invite.code,sellers.name(req.body.id)));});
-app.get('/api/tickets',guard('user-tickets',60,60000),(req,res)=>res.json({items:helpTickets.list(req.account.id)}));
+app.get('/api/tickets',guard('user-tickets',60,60000),(req,res)=>res.json({items:helpTickets.list(req.account.id),completed:helpTickets.completions(req.account.id)}));
 app.post('/api/tickets/open',guard('user-ticket-open',10,60000),(req,res)=>{if(req.account.access_plan==='admin')return res.status(403).json({error:'Use Control to manage tickets.'});const b=req.body||{},t=helpTickets.open(req.account.id,b.topic,b.text,b.requestId);notifyPaymentAdmins();res.json(t);});
 app.post('/api/tickets/state',guard('user-ticket-state',60,60000),(req,res)=>res.json(helpTickets.view(req.body?.id,req.account.id)));
 app.post('/api/tickets/send',guard('user-ticket-send',30,60000),(req,res)=>{const b=req.body||{},t=helpTickets.send(b.id,req.account.id,false,b.text,b.requestId);notifyHelp(t.id,req.account.id);if(!t.assigned)notifyPaymentAdmins();res.json(t);});
