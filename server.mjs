@@ -77,6 +77,8 @@ setInterval(()=>catalog.sweep(),3600000).unref();
 const keyCleanup=usedKeyCleanup(db,deleteAccount);
 const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN support_keys k ON k.account=a.id WHERE a.id=? AND a.access_plan='admin' AND a.access_revoked=0 AND (a.suspended=0 OR a.suspended_until<=?) AND k.expires>?").get(id,Date.now(),Date.now()));
 const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.adminAccount=id=>desktopChats.role(id)==='admin'?desktopChats.principal(id).admin:chats.profileRole(id)==='admin'?id:null;chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
+chats.groupRole=id=>isTicketAdmin(id)?'admin':sellers.role(id)==='verified-seller'?'verified-seller':null;
+chats.activeSeller=id=>sellers.isActive(id);
 const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id),name:id=>sellers.name(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
 const notifyHelp=(id,actor)=>push.notify(helpTickets.recipients(id).filter(x=>x!==actor));
 function supportRecord(admin, id) {
@@ -603,7 +605,7 @@ app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(complia
 app.use('/api',(req,res,next)=>{
   if(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
   const closingGroupInvites=req.path==='/group/invite'&&['status','close'].includes(req.body?.action);
-  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&!closingGroupInvites&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/description','/group/invite','/contacts/open','/invite','/tickets/open','/tickets/send'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
+  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&!closingGroupInvites&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/description','/group/settings','/group/invite','/group/shop/connect','/contacts/open','/invite','/tickets/open','/tickets/send'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
   if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
   if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
@@ -836,7 +838,7 @@ function stateData(a, paged) {
   return {
     now: Date.now(),
     termsVersion:TERMS_VERSION,termsAccepted:a.terms_version===TERMS_VERSION,
-    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, queuedTextSends:true, encryptedOnce:true, sellerListingsV2:true, shopReview:true, sellerListingPreview:true, groupTimers:true, groupDetails:true, reportFollowups:true, live: true },
+    capabilities: { encryptedDirect: chats.requireEncryptedDirect, encryptedProtocol: 2, encryptedExtras:true, offlinePrekeys:true, queuedSends:true, queuedTextSends:true, encryptedOnce:true, sellerListingsV2:true, shopReview:true, sellerListingPreview:true, groupTimers:true, groupDetails:true, groupSettings:true, reportFollowups:true, live: true },
     prekeyCount:prekeys.count(a.id),
     official:official.snapshot(a.id,{paged}),
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
@@ -1023,7 +1025,24 @@ app.post('/api/group/create', guard('group-create', 10, 60_000), (req, res) => {
   res.json({ id: chats.createGroup(req.account.id,req.body?.name,req.body?.description) });
 });
 app.post('/api/group/description',guard('group-description',20,60000),(req,res)=>res.json(chats.editGroupDescription(req.account.id,req.body?.id,req.body?.description)));
+app.post('/api/group/settings',guard('group-description',20,60000),(req,res)=>res.json(chats.updateGroupSettings(req.account.id,req.body?.id,req.body)));
 app.post('/api/group/timers',guard('group-timers',20,60000),(req,res)=>res.json(chats.groupTimers(req.account.id,req.body?.id,req.body)));
+
+app.get('/api/group/shop/:id',guard('group-shop',40,60000),(req,res)=>{
+  const user=req.account.id;
+  const room=chats.requireRoom(user,req.params.id), seller=chats.linkedGroupShop(room,user);
+  if(!seller)return res.status(404).json({error:'Group shop unavailable.'});
+  const contact=customerAccount(req.account)?contacts.between(user,seller):null;
+  const listings=contact?catalog.forContact(user,seller,contact.id):catalog.list(seller);
+  res.json({...listings,contactId:contact?.id||null,name:sellers.name(seller),verified:sellers.role(seller)==='verified-seller',own:user===seller});
+});
+app.post('/api/group/shop/connect',guard('group-shop-connect',10,60000),(req,res)=>{
+  const user=req.account.id;
+  const room=chats.requireRoom(user,req.body?.id), seller=chats.linkedGroupShop(room,user);
+  if(!seller||seller===user)return res.status(404).json({error:'Group shop unavailable.'});
+  const invite=sellers.ensureCode(seller,chats);
+  res.json(chats.requestConnection(user,invite.code,sellers.name(seller)||'Seller'));
+});
 
 app.post('/api/group/invite', guard('group-invite', 20, 60_000), (req, res) => {
   res.json(chats.groupInvite(req.account.id, req.body?.id, req.body?.action));

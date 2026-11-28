@@ -2832,3 +2832,7 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .group-description-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .group-description-input { width: 100%; resize: vertical; }
 .group-invite-panel { display: grid; gap: 10px; }
+.group-posting-notice { margin: 0; padding: 10px 16px; text-align: center; color: var(--muted); border-top: 1px solid var(--line); font-size: 13px; }
+.group-shop-setting { display: flex; align-items: center; gap: 9px; }
+.group-shop-setting input { accent-color: var(--accent); }
+.group-role-badge { display: inline-block; width: 1em; height: 1em; margin-inline-start: 5px; vertical-align: -0.12em; }
