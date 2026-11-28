@@ -31,7 +31,8 @@
     "release:play": "bash scripts/release-play.sh",
     "deploy:oracle": "bash scripts/deploy-oracle.sh",
     "mobile:update": "bash scripts/update-mobile.sh",
-    "publish:release": "bash scripts/publish-release.sh"
+    "publish:release": "bash scripts/publish-release.sh",
+    "keys": "node --env-file-if-exists=.env scripts/keys.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
