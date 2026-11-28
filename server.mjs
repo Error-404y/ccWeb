@@ -1,3 +1,4 @@
+import {adminAudit} from './lib/admin-audit.mjs';
 import express from 'express';
 import {desktopMessenger} from './lib/desktop-messenger.mjs';
 import {sellerStore} from './lib/sellers.mjs';
@@ -52,7 +53,7 @@ let liveTotal=0;
 const contacts = contactStore(db);
 chats.contacts = contacts;
 const unlocks = new Unlocks(), sendingResets = new Map();
-const controlSessions=createControlSessions(db);
+const controlSessions=createControlSessions(db),auditLedger=adminAudit(db);
 const sellers=sellerStore(db);chats.sellerInvites=sellers;chats.profileRole=id=>sellers.role(id);sellers.sync(chats);
 const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN support_keys k ON k.account=a.id WHERE a.id=? AND a.access_plan='admin' AND a.access_revoked=0 AND (a.suspended=0 OR a.suspended_until<=?) AND k.expires>?").get(id,Date.now(),Date.now()));
 const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
@@ -129,7 +130,7 @@ app.use('/api', (req, res, next) => {
   if (!rate('ip:' + req.ip, 600, 60_000)) return res.status(429).json({
     error: 'Try again shortly.'
   });
-  if (/^\/control(?:\/|$)/i.test(req.path)) {
+  if (/^\/control(?:\/|$)/i.test(req.path)&&!req.get('x-qzu-device')) {
     if(!desktopRequest(req))return res.status(403).json({error:'Control Center is available on Windows and Mac computers only.'});
     return next();
   }
@@ -231,20 +232,26 @@ const readControl=req=>req.headers.cookie?.split(';').map(x=>x.trim()).find(x=>x
 const controlCookieOptions={httpOnly:true,secure:production,sameSite:'strict',path:'/'};
 const controlRate=(req,res,next)=>rate('control:'+req.ip,120,60000)?next():res.status(429).json({error:'Try again shortly.'});
 app.post('/api/control/login',controlRate,(req,res)=>{
+ if(req.deviceId)return res.status(403).json({error:'Use your unlocked admin account.'});
  if(!rate('control-login:'+req.ip,5,60000))return res.status(429).json({error:'Try again shortly.'});
  const result=controlSessions.login(req.body?.key,req.body?.pin);
  res.cookie(controlCookie,result.token,{...controlCookieOptions,maxAge:8*3600000});res.json({ok:true});
 });
 app.use('/api/control',(req,res,next)=>{
- req.account=controlSessions.check(readControl(req));
- if(!req.account)return res.status(401).json({error:'Sign in with your admin key.'});
+ if(req.deviceId){
+  if(!req.account||req.account.access_plan!=='admin'||!isTicketAdmin(req.account.id)||!accessStatus(req.account).active)return res.status(403).json({error:'Admin account required.'});
+  if(!unlocks.check(req.account.id,req.get('x-qzu-unlock')))return res.status(423).json({error:'Locked.'});
+  if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION)return res.status(403).json({error:'Accept the current Terms of Service first.'});
+  if(/^\/(?:chats(?:\/|$)|logout$)/i.test(req.path))return res.status(403).json({error:'Use your native messenger.'});
+ }else{req.account=controlSessions.check(readControl(req));if(!req.account)return res.status(401).json({error:'Sign in with your admin key.'});}
  if(!rate('control-admin:'+req.account.id,120,60000))return res.status(429).json({error:'Try again shortly.'});
- next();
+ auditLedger.capture(req,res);next();
 });
 app.post('/api/control/logout',(req,res)=>{controlSessions.revoke(readControl(req));res.clearCookie(controlCookie,controlCookieOptions);res.json({ok:true});});
-app.get('/api/control/overview',(req,res)=>res.json({...controlOverview(db),paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length}));
-app.get('/api/control/monitoring',(req,res)=>res.json({...monitoring.snapshot(),version,environment:production?'production':'development',activeDesktopSessions:controlSessions.activeDesktopIds().length,liveRequests:liveTotal,paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length}));
-app.get('/api/control/inbox',(req,res)=>res.json({version,environment:production?'production':'development',paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length,userTickets:helpTickets.count(),adminId:req.account.id}));
+const supportInboxCount=id=>new Set([...chats.supportRequests(id,true),...chats.supportDeletions(id,true)].map(r=>r.id)).size;
+app.get('/api/control/overview',(req,res)=>res.json({...controlOverview(db),paymentTickets:tickets.counts().open,supportRequests:supportInboxCount(req.account.id)}));
+app.get('/api/control/monitoring',(req,res)=>res.json({...monitoring.snapshot(),version,environment:production?'production':'development',activeDesktopSessions:controlSessions.activeDesktopIds().length,liveRequests:liveTotal,paymentTickets:tickets.counts().open,supportRequests:supportInboxCount(req.account.id)}));
+app.get('/api/control/inbox',(req,res)=>res.json({version,environment:production?'production':'development',paymentTickets:tickets.counts().open,supportRequests:supportInboxCount(req.account.id),userTickets:helpTickets.count(),adminId:req.account.id}));
 app.get('/api/control/accounts',(req,res)=>res.json({items:controlAccounts(db,req.query.q||'',req.query.after||'')}));
 app.get('/api/control/keys',(req,res)=>res.json({items:listAccessKeys(db,req.query.q||'')}));
 app.post('/api/control/keys/generate',(req,res)=>res.json(generatePlanKeys(db,req.body?.plan,req.body?.count,req.account.id)));
@@ -263,13 +270,14 @@ app.post('/api/control/payment-tickets/reject',(req,res)=>{tickets.reject(req.bo
 app.post('/api/control/payment-tickets/close',(req,res)=>{tickets.close(req.body?.id,req.account.id);res.json(tickets.view(req.body?.id));});
 app.get('/api/control/support',(req,res)=>{
  const archived=req.query.archived==='1',id=req.account.id;
- res.json({requests:archived?[]:chats.supportRequests(id,true),rooms:archived?[]:chats.snapshot(id).filter(r=>r.support&&r.supportAgent&&r.supportStatus==='accepted').map(r=>({id:r.id,expires:r.expires,deletionRequested:r.deletionRequested,messages:r.messages.slice(-50).map(m=>({mine:m.mine,at:m.at,text:m.deleted?'Deleted message':m.once||m.burnSeconds?'Temporary message':m.kind==='text'?m.text:'Attachment',sender:m.sender}))})),finished:chats.finishedSupport(id,archived)});
+ res.json({requests:archived?[]:chats.supportRequests(id,true),deletions:archived?[]:chats.supportDeletions(id,true),rooms:archived?[]:chats.snapshot(id).filter(r=>r.support&&r.supportAgent&&r.supportStatus==='accepted').map(r=>({id:r.id,expires:r.expires,deletionRequested:r.deletionRequested,messages:r.messages.slice(-50).map(m=>({mine:m.mine,at:m.at,text:m.deleted?'Deleted message':m.once||m.burnSeconds?'Temporary message':m.kind==='text'?m.text:'Attachment',sender:m.sender}))})),finished:chats.finishedSupport(id,archived)});
 });
+app.post('/api/control/support/delete',(req,res)=>{const id=req.body?.id;if(req.body?.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});const room=chats.rooms.get(id),recipients=room?.users.filter(x=>x!==req.account.id)||[];const result=chats.approveSupportDeletion(req.account.id,id,true);push.notify(recipients);res.json(result);});
 app.post('/api/control/support/finish',(req,res)=>res.json(chats.finishSupport(req.account.id,req.body?.id,req.body?.action)));
 app.post('/api/control/archive',(req,res)=>{const b=req.body||{};if(b.category==='support')return res.json(chats.finishSupport(req.account.id,b.id,b.restore===true?'restore':'archive'));res.json(archiveControlRecord(db,b.category,b.id,req.account.id,b.restore===true));});
 app.post('/api/control/support/respond',(req,res)=>res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true)));
 app.post('/api/control/support/send',(req,res)=>{const room=chats.requireRoom(req.account.id,req.body?.id);if(room.supportAgent!==req.account.id||room.supportStatus!=='accepted'||typeof req.body?.text!=='string')return res.status(403).json({error:'Assigned support conversation required.'});const result=chats.send(req.account.id,room.id,req.body.text);push.notify(room.users.filter(id=>id!==req.account.id));res.json({ok:true});});
-app.get('/api/control/audit',(req,res)=>res.json({items:controlAudit(db)}));
+app.get('/api/control/audit',(req,res)=>res.json({items:auditLedger.list({q:req.query.q||'',before:req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before)}),legacy:controlAudit(db)}));
 app.get('/api/control/reports',(req,res)=>res.json({items:compliance.list(true,req.query.archived==='1')}));
 app.get('/api/control/reports/media/:id',(req,res)=>{const m=compliance.media(req.params.id);if(!m)return res.sendStatus(404);res.set('Cache-Control','no-store').type(m.mime).send(Buffer.from(m.body));});
 app.post('/api/control/reports/collaborate',(req,res)=>{const b=req.body||{},result=compliance.collaborate(b.id,req.account.id,b.status,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
@@ -282,8 +290,9 @@ app.post('/api/control/chats/reset',(req,res)=>{if(req.body?.confirmed!==true)re
 app.post('/api/control/chats/connect',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);sellers.sync(chats);chats.sweep();const code=String(req.body?.code||'').trim().toUpperCase(),invite=chats.codes.get(code);if(!invite||invite.group||!desktopChats.valid(invite.user))return res.status(404).json({error:'Direct connection code unavailable.'});res.json(chats.requestConnection(p.principal,code,req.body?.nickname));});
 app.post('/api/control/chats/respond',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{},request=chats.requests.get(b.id);if(request?.group)return res.status(403).json({error:'Direct chats only.'});res.json(chats.respondConnection(p.principal,b.id,b.accept===true,b.nickname));});
 app.post('/api/control/chats/contact',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);res.json({id:chats.openContact(p.principal,req.body?.id)});});
+app.post('/api/control/chats/delete',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(b.confirmed!==true)return res.status(400).json({error:'Confirmation required.'});const room=chats.requireRoom(p.principal,b.id);if(room.group||room.admin||room.support||!room.encryption)return res.status(403).json({error:'Private encrypted chat required.'});const recipients=room.users.filter(x=>x!==p.principal);chats.remove(p.principal,b.id,true);push.notify(recipients);res.json({ok:true});});
 app.post('/api/control/chats/key',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id);res.json(chats.publishRoomKey(p.principal,req.body?.id,p.device,req.body?.record));});
-app.post('/api/control/chats/confirm',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(typeof b.code!=='string')return res.status(400).json({error:'Safety code required.'});res.json(chats.confirmRoomKey(p.principal,b.id,b.code,false));});
+app.post('/api/control/chats/confirm',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(typeof b.code!=='string')return res.status(400).json({error:'Safety code required.'});res.json(chats.confirmRoomKey(p.principal,b.id,b.code,true));});
 app.post('/api/control/chats/send',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{},sent=chats.sendEncrypted(p.principal,b.id,b.cipher,'text',null,b.requestId??null);if(!sent?.duplicate)notifyRoom(p.principal,b.id);res.json(typeof sent==='string'?{id:sent}:sent);});
 app.post('/api/control/chats/media/send',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};if(!['image','audio'].includes(b.kind))return res.status(400).json({error:'Invalid attachment.'});const id=chats.sendEncrypted(p.principal,b.id,b.cipher,b.kind,null,null,b.once===true);notifyRoom(p.principal,b.id);res.json({id});});
 app.post('/api/control/chats/media',(req,res)=>{const p=desktopChats.requireIdentity(req.account.id),b=req.body||{};res.json(chats.getEncryptedMedia(p.principal,b.id,b.messageId));});
@@ -484,6 +493,7 @@ app.post('/api/support/open', guard('support-open', 10, 60000), (req,res) => {
   if(!agent||agent.id===req.account.id)return res.status(404).json({error:'Support unavailable.'});
   res.json({id:chats.openMobileSupport(req.account.id,agent.id)});
 });
+app.post('/api/support/delete',guard('support-delete',20,60000),(req,res)=>{if(req.account.access_plan!=='admin'||req.body?.confirmed!==true)return res.status(403).json({error:'Confirmed support admin required.'});const room=chats.rooms.get(req.body?.id),recipients=room?.users.filter(x=>x!==req.account.id)||[];const result=chats.approveSupportDeletion(req.account.id,req.body.id,true);auditLedger.record(req.account.id,'mobile','support/delete','support',req.body.id);push.notify(recipients);res.json(result);});
 app.post('/api/support/respond', guard('support-respond', 40, 60000), (req,res) => {
   if(req.account.access_plan!=='admin')return res.status(403).json({error:'Support admin required.'});
   res.json(chats.respondSupport(req.account.id,req.body?.id,req.body?.action,true));
@@ -573,6 +583,7 @@ function stateData(a) {
     seller:a.access_plan==='seller',sellerName:sellers.name(a.id),sellerVerified:sellers.role(a.id)==='verified-seller',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
+    supportDeletions:a.access_plan==='admin'?chats.supportDeletions(a.id,true):[],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
     rooms: chats.snapshot(a.id),
     contacts: contacts.list(a.id).map(c=>({...c,peerRole:chats.profileRole(contacts.peer(a.id,c.id)),peerName:chats.profileName(contacts.peer(a.id,c.id))})),
@@ -612,10 +623,10 @@ app.get('/api/state/live',guard('live',180,60000),(req,res,next)=>{
 });
 app.post('/api/official/publish',guard('official-publish',10,60000),(req,res)=>{
   const result=official.publish(req.body?.text,req.account.access_plan==='admin');
-  push.broadcast(req.account.id);
+  auditLedger.record(req.account.id,'mobile','announcements/publish','announcement',result.id);push.broadcast(req.account.id);
   res.json(result);
 });
-app.post('/api/official/delete',guard('official-delete',20,60000),(req,res)=>res.json(official.remove(req.body?.id,req.account.access_plan==='admin')));
+app.post('/api/official/delete',guard('official-delete',20,60000),(req,res)=>{const result=official.remove(req.body?.id,req.account.access_plan==='admin');auditLedger.record(req.account.id,'mobile','announcements/delete','announcement',req.body.id);res.json(result);});
 app.post('/api/official/read',guard('official-read',60,60000),(req,res)=>res.json(official.mark(req.account.id,req.body?.id)));
 app.get('/api/official/history',guard('official-history',30,60000),(req,res)=>res.json(official.history(Number(req.query.before))));
 app.post('/api/push/register',guard('push-register',10,60000),(req,res)=>{
@@ -739,7 +750,9 @@ app.post('/api/receipts', guard('receipts', 100, 60_000), (req, res) => {
 });
 
 app.post('/api/chat/delete', (req, res) => {
+  const room=chats.rooms.get(req.body?.id),alreadyRequested=room?.deletionRequested;
   const result=chats.remove(req.account.id, req.body?.id, req.account.access_plan==='admin');
+  if(result?.requested&&!alreadyRequested&&room?.supportAgent)push.notify([room.supportAgent]);
   res.json({ok:true,...result});
 });
 app.post('/api/pin/issue', guard('pin-issue', 5, 60_000), (req, res) => {
