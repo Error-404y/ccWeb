@@ -963,7 +963,7 @@ function renderChat() {
   renderEncryptionNotice(current);
   $('adminComposer').hidden = !readOnly;
   $('deleteChat').hidden = readOnly;
-  $('deleteChat').title = current?.mobileSupport && !current?.supportAgent ? 'Request deletion' : 'Delete chat';
+  $('deleteChat').title = (current?.mobileSupport && !current?.supportAgent)||(current?.peerRole==='admin'&&!state.supportAgent) ? 'Request deletion' : 'Delete chat';
   $('deleteChat').setAttribute('aria-label',$('deleteChat').title);
   $('attachmentMenu').hidden = Boolean(current?.support || ((current?.encryption || (native && directRoom(current))) && !encryptionReady(current)));
   const encryptionStatus = $('encryptionStatus');
@@ -2002,7 +2002,7 @@ $('deleteChat').addEventListener('click', () => {
   if (!room || room.readOnly) return;
   const leave = room.group && !room.canInvite;
   const requestDeletion = (room.mobileSupport && !room.supportAgent)||(room.peerRole==='admin'&&!state.supportAgent);
-  if (requestDeletion && room.deletionRequested) return info('Deletion requested','Support has received your request.');
+  if (requestDeletion && room.deletionRequested && !room.contact) return info('Deletion requested','Support has received your request.');
   const confirm = button(requestDeletion ? 'Request deletion' : leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
     confirm.disabled = true;
     try {
@@ -2574,7 +2574,7 @@ $('chatOptions').addEventListener('click', () => {
   if(room.support){show('Chat options',[button('Report support conversation',()=>showReport(room),'secondary-button'),button('Close',closeModal,'secondary-button')]);return;}
   if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
   if (!room.group) {
-    if(room.contact){controls.push(button(room.contact.personallyTrusted?'Remove trusted contact':'Add trusted contact',async()=>{try{await api('contacts/update',{id:room.contact.id,trusted:!room.contact.personallyTrusted});closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button trusted-action'));controls.push(button('Manage contact',()=>showContactManagement(room.contact),'secondary-button'));}
+    if(room.contact){controls.push(button(room.contact.personallyTrusted?'Remove trusted contact':'Add trusted contact',async()=>{try{await api('contacts/update',{id:room.contact.id,trusted:!room.contact.personallyTrusted});closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button trusted-action'));controls.push(button('Manage contact',()=>showContactManagement(room.contact),'secondary-button'));controls.push(button('Delete Contact',()=>showContactManagement(room.contact),'secondary-button danger-button'));}
     if (encryptionRequired(room) && directRoom(room)) controls.push(button('Verify encryption', () => showEncryption(room), 'secondary-button'));
     if (!room.extended) controls.push(button('Extend chat', () => showExtension(room), 'secondary-button'));
   }
@@ -3468,7 +3468,7 @@ function ticketNavigate(mode,id=null){ticketEpoch++;ticketMode=mode;ticketSelect
 function renderTicketList(items,completed=[]){
  if(ticketLast){try{const old=JSON.parse(ticketLast);if(Array.isArray(old)&&old.some(t=>completed.includes(t.id)&&!t.closed))showActivityBanner('Ticket completed');}catch{}}
  items=items.filter(t=>!t.closed);
- const root=$('userTicketContent');if(!state.supportAgent&&!items.length){renderNewUserTicket(true);return;}const key=JSON.stringify(items);if(ticketLast===key)return;ticketLast=key;root.replaceChildren();
+ const root=$('userTicketContent');if(!state.supportAgent&&!items.length){ticketLast='[]';renderNewUserTicket(true);return;}const key=JSON.stringify(items);if(ticketLast===key)return;ticketLast=key;root.replaceChildren();
  if(state.supportAgent){root.append(el('p','pay-note','Manage tickets in qzu. Control.'));return;}
  const list=el('div','user-ticket-list');for(const t of items){const row=button('',()=>ticketNavigate('chat',t.id),'user-ticket-row');row.append(svg('ticketIcon','user-ticket-icon'),el('span','user-ticket-title',t.topic+' · #'+t.id.slice(0,6)),el('small',t.closed?'ticket-solved':'ticket-open',t.closed?'Solved':t.assigned?'Open':'Pending'));list.append(row);}
  root.append(list);
