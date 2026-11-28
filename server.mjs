@@ -1,4 +1,6 @@
 import express from 'express';
+import {sellerStore} from './lib/sellers.mjs';
+import {userTickets} from './lib/user-tickets.mjs';
 import {createMonitoring} from './lib/monitoring.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
@@ -50,6 +52,10 @@ const contacts = contactStore(db);
 chats.contacts = contacts;
 const unlocks = new Unlocks(), sendingResets = new Map();
 const controlSessions=createControlSessions(db);
+const sellers=sellerStore(db);chats.sellerInvites=sellers;chats.profileRole=id=>sellers.role(id);sellers.sync(chats);
+const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN support_keys k ON k.account=a.id WHERE a.id=? AND a.access_plan='admin' AND a.access_revoked=0 AND (a.suspended=0 OR a.suspended_until<=?) AND k.expires>?").get(id,Date.now(),Date.now()));
+const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
+const notifyHelp=(id,actor)=>push.notify(helpTickets.recipients(id).filter(x=>x!==actor));
 const production = process.env.NODE_ENV === 'production';
 if (production && !process.env.PUBLIC_ORIGIN) throw new Error('Set PUBLIC_ORIGIN to your HTTPS origin.');
 const publicOrigin = process.env.PUBLIC_ORIGIN;
@@ -236,7 +242,7 @@ app.use('/api/control',(req,res,next)=>{
 app.post('/api/control/logout',(req,res)=>{controlSessions.revoke(readControl(req));res.clearCookie(controlCookie,controlCookieOptions);res.json({ok:true});});
 app.get('/api/control/overview',(req,res)=>res.json({...controlOverview(db),paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length}));
 app.get('/api/control/monitoring',(req,res)=>res.json({...monitoring.snapshot(),version,environment:production?'production':'development',activeDesktopSessions:controlSessions.activeDesktopIds().length,liveRequests:liveTotal,paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length}));
-app.get('/api/control/inbox',(req,res)=>res.json({version,environment:production?'production':'development',paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length,adminId:req.account.id}));
+app.get('/api/control/inbox',(req,res)=>res.json({version,environment:production?'production':'development',paymentTickets:tickets.counts().open,supportRequests:chats.supportRequests(req.account.id,true).length,userTickets:helpTickets.count(),adminId:req.account.id}));
 app.get('/api/control/accounts',(req,res)=>res.json({items:controlAccounts(db,req.query.q||'',req.query.after||'')}));
 app.get('/api/control/keys',(req,res)=>res.json({items:listAccessKeys(db,req.query.q||'')}));
 app.post('/api/control/keys/generate',(req,res)=>res.json(generatePlanKeys(db,req.body?.plan,req.body?.count,req.account.id)));
@@ -268,6 +274,16 @@ app.post('/api/control/reports/collaborate',(req,res)=>{const b=req.body||{},res
 app.post('/api/control/reports/resolve',(req,res)=>{const b=req.body||{},result=compliance.resolve(b.id,b.action,req.account.id,b.notes??'');if(result.warn){chats.sendAdmin(result.warn,'Moderation warning\\nYour account has received a warning. Please follow the Terms of Service.');push.notify([result.warn]);}if(result.target){chats.erase(result.target);push.remove(result.target);unlocks.revokeAll(result.target);}res.json({ok:true});});
 app.get('/api/control/feedback',(req,res)=>res.json({items:feedback.list(true,req.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(req.query.before),req.query.archived==='1')}));
 app.post('/api/control/feedback/status',(req,res)=>{const b=req.body||{},result=feedback.status(true,b.id,b.status,req.account.id,b.note??'');if(b.status==='help')push.notify(db.prepare("SELECT id FROM accounts WHERE access_plan='admin' AND pin_state!='retired' AND id<>?").all(req.account.id).map(a=>a.id));res.json(result);});
+app.get('/api/control/sellers',(req,res)=>res.json({items:sellers.list(chats)}));
+app.post('/api/control/sellers/generate',(req,res)=>res.json(sellers.generateKey(req.account.id)));
+app.post('/api/control/sellers/verify',(req,res)=>res.json(sellers.verify(req.body?.id,req.body?.verified,req.account.id)));
+app.get('/api/control/announcements',(req,res)=>res.json(req.query.before?official.history(Number(req.query.before)):official.snapshot(req.account.id)));
+app.post('/api/control/announcements/publish',(req,res)=>{const result=official.publish(req.body?.text,true);push.broadcast(req.account.id);res.json(result);});
+app.post('/api/control/announcements/delete',(req,res)=>res.json(official.remove(req.body?.id,true)));
+app.get('/api/control/tickets',(req,res)=>res.json({items:helpTickets.list(req.account.id,true,req.query.archived==='1')}));
+app.post('/api/control/tickets/state',(req,res)=>res.json(helpTickets.view(req.body?.id,req.account.id,true)));
+app.post('/api/control/tickets/send',(req,res)=>{const b=req.body||{},t=helpTickets.send(b.id,req.account.id,true,b.text,b.requestId);notifyHelp(t.id,req.account.id);res.json(t);});
+app.post('/api/control/tickets/action',(req,res)=>{const b=req.body||{},code=b.action==='share'?sellers.ensureCode(b.seller,chats)?.code:null,t=helpTickets.adminAction(b.id,req.account.id,b.action,b.seller,code);notifyHelp(t.id,req.account.id);res.json(t);});
 app.use('/api/control',(req,res)=>res.status(404).json({error:'Unknown control endpoint.'}));
 app.post('/api/access/recover',paymentRate('recover',5),(req,res)=>{
  if(!req.deviceId||req.account||req.body?.confirmed!==true)return res.status(403).json({error:'Unregistered mobile device and confirmation required.'});
@@ -359,7 +375,7 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
   res.json({ ok: true });
 });
 
-function deleteAccount(id){controlSessions.revokeAccount(id);
+function deleteAccount(id){controlSessions.revokeAccount(id);helpTickets.erase(id);sellers.erase(id,chats);
   chats.erase(id);prekeys.remove(id);compliance.purge(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
 }
 app.use('/api',(req,res,next)=>{
@@ -390,11 +406,15 @@ app.post(['/api/account/delete','/api/logout'],guard('delete-account',3,60000),(
 app.post('/api/terms/accept',guard('terms',10,60000),(req,res)=>res.json(compliance.accept(req.account.id,req.body?.version)));
 app.use('/api',(req,res,next)=>{
   if(req.account.suspended&&(!req.account.suspended_until||req.account.suspended_until>Date.now()))return res.status(403).json({error:'Account suspended.'});
-  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/invite','/contacts/open','/invite'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
+  if(req.account.restricted_until>Date.now()&&req.method==='POST'&&['/message','/encryption/message','/encryption/once/send','/message/edit','/message/react','/encryption/reaction','/connect','/connection/respond','/group/create','/group/invite','/contacts/open','/invite','/tickets/open','/tickets/send'].includes(req.path))return res.status(403).json({error:'Messaging is temporarily restricted.'});
   if(!accessStatus(req.account).active)return res.status(402).json({error:'qzu-Access renewal required.'});
   if(req.account.terms_required&&req.account.terms_version!==TERMS_VERSION&&req.method==='POST'&&!['/privacy/invisible','/push/remove','/chat/delete','/block','/contacts/remove'].includes(req.path))return res.status(403).json({error:'Accept the current Terms of Service first.'});
   next();
 });
+app.get('/api/tickets',guard('user-tickets',60,60000),(req,res)=>res.json({items:helpTickets.list(req.account.id)}));
+app.post('/api/tickets/open',guard('user-ticket-open',10,60000),(req,res)=>{if(req.account.access_plan==='admin')return res.status(403).json({error:'Use Control to manage tickets.'});const b=req.body||{},t=helpTickets.open(req.account.id,b.topic,b.text,b.requestId);notifyPaymentAdmins();res.json(t);});
+app.post('/api/tickets/state',guard('user-ticket-state',60,60000),(req,res)=>res.json(helpTickets.view(req.body?.id,req.account.id)));
+app.post('/api/tickets/send',guard('user-ticket-send',30,60000),(req,res)=>{const b=req.body||{},t=helpTickets.send(b.id,req.account.id,false,b.text,b.requestId);notifyHelp(t.id,req.account.id);if(!t.assigned)notifyPaymentAdmins();res.json(t);});
 app.post('/api/report',guard('report',5,60000),(req,res)=>{
   const room=chats.requireRoom(req.account.id,req.body?.id);
   const messageId=req.body?.messageId;
@@ -528,6 +548,7 @@ function stateData(a) {
     push:{available:push.enabled,platforms:push.platforms,registered:push.registered(a.id),diagnostic:push.diagnostic(a.id)},
     access: accessStatus(a),
     supportAgent: a.access_plan==='admin',
+    seller:a.access_plan==='seller',sellerVerified:sellers.role(a.id)==='verified-seller',
     supportAvailable: a.access_plan!=='admin' && Boolean(supportAccount()),
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
@@ -572,6 +593,7 @@ app.post('/api/official/publish',guard('official-publish',10,60000),(req,res)=>{
   push.broadcast(req.account.id);
   res.json(result);
 });
+app.post('/api/official/delete',guard('official-delete',20,60000),(req,res)=>res.json(official.remove(req.body?.id,req.account.access_plan==='admin')));
 app.post('/api/official/read',guard('official-read',60,60000),(req,res)=>res.json(official.mark(req.account.id,req.body?.id)));
 app.get('/api/official/history',guard('official-history',30,60000),(req,res)=>res.json(official.history(Number(req.query.before))));
 app.post('/api/push/register',guard('push-register',10,60000),(req,res)=>{
@@ -596,9 +618,9 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   if (!/^[A-Z0-9]{6}$/.test(code)) return res.status(400).json({
     error: 'Enter a 6-character code.'
   });
-  chats.sweep();
+  sellers.sync(chats);chats.sweep();
   const invite=chats.codes.get(code);
-  if(invite&&!invite.group&&invite.user!==req.account.id){
+  if(invite&&!invite.group&&!invite.seller&&invite.user!==req.account.id){
     const agents=activeSupportAccounts(),senderAdmin=agents.some(a=>a.id===req.account.id),targetAdmin=agents.some(a=>a.id===invite.user);
     if(targetAdmin&&!senderAdmin)return res.json({id:chats.openMobileSupport(req.account.id,invite.user)});
     if(senderAdmin&&!targetAdmin)return res.json({id:chats.openMobileSupport(invite.user,req.account.id,true)});
@@ -780,7 +802,7 @@ app.use(express.static(resolve(root, 'public'), {
   etag: false,
   lastModified: false
 }));
-app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
+app.get(['/', '/chat', '/connect', '/settings', '/settings/privacy', '/settings/notifications', '/settings/motion', '/settings/connections', '/settings/appearance', '/settings/account', '/settings/updates', '/settings/help', '/settings/support-requests', '/settings/admin-feedback', '/settings/about','/tickets'], (req, res) => res.sendFile(resolve(root, 'public/index.html')));
 app.use((req, res) => res.status(404).send('Not found'));
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
