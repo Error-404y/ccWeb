@@ -28,7 +28,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  root.classList.add('cc-root');root.replaceChildren();
  const groupFor=tab=>sections.find(([,tabs])=>tabs.includes(tab))?.[0];
  let revision=0,current=groupFor(initialTab)?initialTab:location.pathname==='/control/monitoring'?'Monitoring':'Overview';
- let query='',scope='all',cursor='',keyPages=[],auditType='',auditOutcome='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false,updateOverview=null;
+ let query='',scope='all',cursor='',keyPages=[],auditType='',auditOutcome='',objectURL=null,closed=false,archiveTab='Reports',listView=false,listSignature='',pollingInbox=false,updateOverview=null,concealKey=null;
  const header=el('header','','cc-header'),identity=el('div','','cc-identity'),brand=el('h1','qzu.'),server=el('p',location.origin,'cc-muted'),connection=el('span','Connecting…','cc-connection');
  brand.append(el('span',' Control','cc-accent'));identity.append(brand,server);
  const adminAvatar=el('span','','cc-chat-avatar cc-chat-admin-avatar');
@@ -64,7 +64,12 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  lookup.addEventListener('submit',e=>{e.preventDefault();const value=lookupField.value.trim();if(value)navigate('Accounts','all',value);});
  header.insertBefore(lookup,session);
  const alive=token=>!closed&&isActive()&&token===revision;
- function stop(){closed=true;revision++;clearInterval(inboxTimer);if(objectURL)URL.revokeObjectURL(objectURL);root.replaceChildren();}
+ function clearKeySecret(){concealKey?.();concealKey=null;}
+ const hideKeyWhenAway=()=>{if(document.hidden)concealKey?.();};
+ const hideKeyOnPageExit=()=>concealKey?.();
+ document.addEventListener('visibilitychange',hideKeyWhenAway);
+ window.addEventListener('pagehide',hideKeyOnPageExit);
+ function stop(){closed=true;revision++;clearInterval(inboxTimer);clearKeySecret();document.removeEventListener('visibilitychange',hideKeyWhenAway);window.removeEventListener('pagehide',hideKeyOnPageExit);if(objectURL)URL.revokeObjectURL(objectURL);root.replaceChildren();}
  function navigate(tab,nextScope='all',nextQuery=''){if(mobile&&tab==='Chats'&&mobileChat){stop();mobileChat();return;}current=tab;query=nextQuery;cursor='';keyPages=[];scope=nextScope;if(tab!=='Accounts')lookupField.value='';if(!mobile&&location.pathname==='/control/monitoring'&&tab!=='Monitoring')history.replaceState(null,'','/control');else if(!mobile&&tab==='Monitoring')history.replaceState(null,'','/control/monitoring');load();}
  function updateCount(tab,count){const n=tabs.get(tab).lastElementChild;n.textContent=count>0?String(count):'';n.hidden=!count;}
  function routeFor(view,archived=false){
@@ -125,7 +130,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
    await navigator.clipboard.writeText(keys.map(key=>key.key).join('\n'));
    toast(keys.length===1?'Key copied':'Keys copied','success');
   }),button('Done',()=>dialog.close(),'cc-secondary'));
-  dialog.append(heading,el('p','Save these activation secrets privately. This is their only display.','cc-muted'),list,actions);
+  dialog.append(heading,el('p','Share activation keys privately.','cc-muted'),list,actions);
   dialog.addEventListener('close',()=>dialog.remove(),{once:true});
   root.append(dialog);dialog.showModal();
  }
@@ -148,10 +153,12 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  function displayAction(event){
   const names={
    'reports/resolve':'Resolved report','reports/collaborate':'Updated report review','reports/follow-up':'Requested evidence from reporter',
+   'sellers/rename':'Changed seller display name','seller-rename':'Changed seller display name',
    'support/respond':'Responded to support request','support/finish':'Updated support status',
    'support/send':'Replied to support case','support/delete':'Approved deletion',
    'tickets/action':'Updated ticket','tickets/send':'Replied to ticket',
    'payment-tickets/release':'Released access key','payment-tickets/verify':'Checked payment',
+   'keys/reveal':'Revealed access key','keys/delete':'Deleted access key',
    'cases/claim':'Claimed case','cases/unassign':'Released assignment','cases/note':'Added an internal note',
    note:'Added an internal note','accounts/view':'Viewed account','reports/evidence-view':'Viewed reported chat','reports/evidence-attachment':'Viewed report attachment'
   };
@@ -180,6 +187,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
  function detailView(title,back=()=>load(),backLabel='Back'){
   listView=false;updateOverview=null;
   const token=++revision;
+  clearKeySecret();
   if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
   const head=el('div','','cc-detail-header'),name=el('h2',title);
   name.tabIndex=-1;
@@ -187,6 +195,41 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   main.replaceChildren(head);
   name.focus();
   return {token,name};
+ }
+ function editSellerName(seller,token){
+  const title='Change seller display name',dialog=el('dialog','','cc-modal');
+  const form=el('form','','cc-detail-primary'),field=input('Public display name');
+  const hint=el('p','Use at least 4 letters. This name appears on the seller profile and in chats.','cc-muted');
+  const issue=el('p','','cc-error'),actions=el('div','','cc-actions');
+  const save=el('button','Save name','cc-button'),cancel=button('Cancel',()=>dialog.close(),'cc-secondary');
+  dialog.setAttribute('aria-label',title);
+  hint.id='cc-seller-name-hint';field.setAttribute('aria-describedby',hint.id);
+  field.value=seller.name||'Seller';field.maxLength=40;field.required=true;
+  issue.hidden=true;issue.setAttribute('role','alert');
+  save.type='submit';
+  form.addEventListener('submit',async e=>{
+   e.preventDefault();
+   if(save.disabled||!alive(token))return;
+   const name=field.value;
+   save.disabled=cancel.disabled=field.disabled=true;
+   issue.hidden=true;
+   try{
+    await api('sellers/rename',{id:seller.account,name});
+    dialog.close();
+    toast('Seller display name updated','success');
+    if(alive(token))await load();
+   }catch(errorValue){
+    if(dialog.open){
+     issue.textContent=errorValue.message||'Unable to update the seller display name.';
+     issue.hidden=false;
+    }
+   }finally{save.disabled=cancel.disabled=field.disabled=false;}
+  });
+  actions.append(cancel,save);form.append(field,issue,actions);
+  dialog.append(el('h3',title),details([['Seller account',seller.account]]),hint,form);
+  dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+  dialog.addEventListener('cancel',e=>{if(save.disabled)e.preventDefault();});
+  root.append(dialog);dialog.showModal();field.select();
  }
  function splitDetail(content,sidebar){
   const layout=el('div','','cc-detail-layout'),primary=el('div','','cc-detail-primary');
@@ -628,37 +671,135 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   directory.append(el('h3','Account and payment totals'),groups);
   main.append(queue,directory);
  }
- function openKey(key){
+ function keyReveal(key,token,revealOnOpen){
+  const panel=card('Activation key');
+  if(!key.revealAvailable){
+   const message=key.generated?'Choose Replace unused key to create a new activation key you can reveal.':'The activation key is unavailable to reveal.';
+   panel.append(el('p',message,'cc-muted'));
+   return panel;
+  }
+  panel.classList.add('cc-key-reveal');
+  const code=el('code','','cc-secret');
+  code.id='cc-key-value';
+  code.setAttribute('aria-label','Activation key value');
+  code.hidden=true;
+  let revealRevision=0;
+  const reveal=action('Reveal key',async()=>{
+   const request=++revealRevision;
+   try{
+    const result=await api('keys/reveal',{id:key.id});
+    if(!alive(token)||document.hidden||request!==revealRevision)return;
+    code.textContent=result.key;
+    code.hidden=copy.hidden=hide.hidden=false;
+    reveal.hidden=true;
+    reveal.setAttribute('aria-expanded','true');
+    copy.focus();
+   }catch(e){
+    if(!alive(token))return;
+    if(e.status===404||e.status===409){void openKey(key.id,{notice:e.message||'Review the key’s current details.'});return;}
+    throw e;
+   }
+  },'cc-secondary');
+  reveal.setAttribute('aria-controls',code.id);
+  reveal.setAttribute('aria-expanded','false');
+  const copy=action('Copy key',async()=>{
+   if(code.hidden)return;
+   try{
+    await navigator.clipboard.writeText(code.textContent);
+    toast('Activation key copied','success');
+   }catch{
+    if(!alive(token)||code.hidden)return;
+    const selection=window.getSelection(),range=document.createRange();
+    range.selectNodeContents(code);
+    selection?.removeAllRanges();selection?.addRange(range);
+    toast('Select Copy to keep this activation key.','info');
+   }
+  },'cc-secondary');
+  function conceal(){
+   revealRevision++;
+   code.textContent='';
+   code.hidden=copy.hidden=hide.hidden=true;
+   reveal.hidden=false;
+   reveal.setAttribute('aria-expanded','false');
+  }
+  const hide=button('Hide key',()=>{conceal();reveal.focus();},'cc-secondary');
+  copy.hidden=hide.hidden=true;
+  concealKey=conceal;
+  const actions=el('div','','cc-actions');
+  actions.append(reveal,copy,hide);
+  panel.append(code,actions);
+  if(revealOnOpen&&!document.hidden)reveal.click();
+  return panel;
+ }
+ async function openKey(id,{notice='',revealOnOpen=false}={}){
   const back=()=>load();
   const {token}=detailView('Access key details',back,'Back to keys');
+  const message=el('p','Loading key details…','cc-muted');
+  message.setAttribute('role','status');
+  main.append(message);
+  let key;
+  try{
+   ({key}=await api('keys/'+encodeURIComponent(id)));
+  }catch(e){
+   if(!alive(token))return;
+   message.textContent=e.status===404?'This key is no longer in the inventory.':e.message||'Key details unavailable.';
+   if(e.status!==404)main.append(button('Retry',()=>openKey(id),'cc-secondary cc-fit'));
+   return;
+  }
+  if(!alive(token))return;
+  if(notice)message.textContent=notice;else message.remove();
   const state=keyState(key),account=key.accountId||key.account;
   const summary=card('Key record',[status(state),el('h4','Key ID'),recordId(key.id,'key ID'),details([
    ['Plan',planName(key.plan)],['Issued',date(key.created)],['Redeemed',date(key.redeemed)],
    ['Source',key.generated?'Administrator issued':'Payment or legacy'],['Key fingerprint',key.fingerprint]
   ],'cc-detail-facts')]);
   const linked=card('Linked account');
-  if(account)linked.append(recordId(account,'account ID'),button('Open account',()=>openAccount(account,()=>openKey(key)),'cc-secondary cc-compact-button cc-fit'));
+  if(account)linked.append(recordId(account,'account ID'),button('Open account',()=>openAccount(account,()=>openKey(id)),'cc-secondary cc-compact-button cc-fit'));
   else linked.append(el('p','No linked account.','cc-muted'));
   main.append(summary,linked);
+  const actions=el('div','','cc-actions');
+  if(state==='unused'&&key.state==='confirmed')main.append(keyReveal(key,token,revealOnOpen));
   if(state==='unused'&&key.generated&&key.state==='confirmed'){
-   const actions=el('div','','cc-actions');
    const replace=action('Replace unused key',async()=>{
+    concealKey?.();
     if(!await modalConfirm('Replace this key? Its current activation secret will stop working.')||!alive(token))return;
     const result=await api('keys/replace',{id:key.id});
     if(!alive(token))return;
-    openKey({...key,fingerprint:result.key.slice(-8)});
+    void openKey(id);
     secret('Replacement key',[result]);
    },'cc-secondary');
    const revoke=button('Revoke unused key',()=>{
+    concealKey?.();
     confirmReason('Revoke unused key','Revoking this key permanently disables activation.',async(reason,close)=>{
      await api('keys/revoke',{id:key.id,reason});
      close();toast('Key revoked','success');
-     if(alive(token))openKey({...key,state:'revoked'});
+     if(alive(token))void openKey(id);
     });
    },'cc-danger');
    actions.append(replace,revoke);
-   main.append(card('Manage key',[actions]));
   }
+  if(key.deletable&&key.deleteToken){
+   const label=key.deleteAccount?'Delete key and account':'Delete key';
+   const question=(key.deleteAccount
+    ?'Permanently delete this key and account '+key.deleteAccount+'? This also deletes the account’s active chats and contacts.'
+    :'Permanently delete this key from the inventory and disable activation?')+(key.retainsPayment?' The payment record is kept.':'');
+   actions.append(action(label,async()=>{
+    concealKey?.();
+    if(!await modalConfirm(question)||!alive(token))return;
+    try{
+     const result=await api('keys/delete',{id,confirmed:true,deleteToken:key.deleteToken});
+     if(!alive(token))return;
+     const success=result.deletedAccount?'Key and linked account deleted':'Key deleted';
+     toast(success+(result.retainedPayment?' · Payment record retained':''),'success');
+     cursor='';keyPages=[];await load();
+    }catch(e){
+     if(!alive(token))return;
+     if(e.status===403||e.status===404||e.status===409){void openKey(id,{notice:'The key or its linked account changed. Review the current details before deleting.'});return;}
+     throw e;
+    }
+   },'cc-danger'));
+  }
+  if(actions.childElementCount)main.append(card('Manage key',[actions]));
  }
  function purgeUsedKeys(token){
   const title='Remove used keys and linked accounts',phrase='REMOVE USED KEYS AND ACCOUNTS';
@@ -773,7 +914,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     const account=key.accountId||key.account;
     linked.append(account?button(account.slice(0,8),()=>openAccount(account),'cc-key-account cc-compact-button'):el('span','—','cc-muted'));
     if(account)linked.firstElementChild.setAttribute('aria-label','Open account '+account);
-    const view=button('View',()=>openKey(key),'cc-secondary cc-compact-button');
+    const view=button('View',()=>openKey(key.id,{revealOnOpen:true}),'cc-secondary cc-compact-button');
     view.setAttribute('aria-label','View key '+key.id);
     open.append(view);
     row.append(reference,state,el('td',planName(key.plan)),created,linked,open);
@@ -993,7 +1134,7 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
   async function poll(){if(!alive(token))return;try{if(!busy&&!document.hidden){await refresh();lastError='';}}catch(e){if(alive(token)&&lastError!==e.message){lastError=e.message;error(e);}}finally{if(alive(token))setTimeout(poll,4000);}}poll();
  }
  async function load(prefetched=null,focusQueue=false){
-  listView=false;updateOverview=null;const token=++revision;if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
+  listView=false;updateOverview=null;const token=++revision;clearKeySecret();if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}
   sectionPicker.value=groupFor(current);
   for(const [label,group] of groups)group.classList.toggle('current',label===sectionPicker.value);
   for(const [name,control] of tabs){
@@ -1032,7 +1173,24 @@ function mount(root,api,{mobile=false,isActive=()=>root.isConnected,onExit=()=>{
     listView=!archived;
    }else if(view==='Sellers'){
      const controls=el('div','','cc-actions');controls.append(action('Generate Seller key',async()=>{const result=await api('sellers/generate',{});if(!alive(token))return;const d=el('dialog','','cc-seller-dialog');d.append(el('h2','Seller key generated'),el('p','Save this one-time activation secret privately.','cc-muted'),el('code',result.key,'cc-secret'),action('Copy key',()=>navigator.clipboard.writeText(result.key)),button('Done',()=>{d.close();d.remove();},'cc-secondary'));main.append(d);d.addEventListener('close',()=>d.remove());d.showModal();}));main.append(controls);
-     for(const p of data.items){const n=card((p.name||'Seller')+' · '+p.account.slice(0,8),[status(p.active?'active':'revoked'),details([['Account',p.account],['Created',date(p.created)],['Current connection code',p.code],['Next rotation',date(p.rotates)],['Verification',p.verified?'Verified':'Not verified']])]);if(p.verified)n.append(el('span','Verified seller','cc-seller-mark'));if(p.code)n.append(action('Copy connection code',()=>navigator.clipboard.writeText(p.code),'cc-secondary'),action('Rotate connection code',async()=>{if(!await modalConfirm('Rotate this seller’s code? The old code stops working immediately.'))return;await api('sellers/rotate',{id:p.account});toast('Connection code rotated','success');if(alive(token))await load();},'cc-secondary'));n.append(action(p.revoked?'Restore seller access':'Suspend seller',async()=>{if(!await modalConfirm(p.revoked?'Restore seller access?':'Suspend this seller’s access?'))return;await api('sellers/access',{id:p.account,suspended:!p.revoked});toast('Seller access updated','success');if(alive(token))await load();},'cc-secondary'));n.append(action(p.verified?'Revoke verification':'Verify Seller',async()=>{await api('sellers/verify',{id:p.account,verified:!p.verified});if(alive(token))await load();},p.verified?'cc-danger':''));main.append(n);}
+     for(const p of data.items){
+      const n=card((p.name||'Seller')+' · '+p.account.slice(0,8),[status(p.active?'active':'revoked'),details([
+       ['Account',p.account],['Created',date(p.created)],['Current connection code',p.code],['Next rotation',date(p.rotates)],['Verification',p.verified?'Verified':'Not verified']
+      ])]);
+      if(p.verified)n.append(el('span','Verified seller','cc-seller-mark'));
+      n.append(button('Change display name',()=>editSellerName(p,token),'cc-secondary'));
+      if(p.code)n.append(action('Copy connection code',()=>navigator.clipboard.writeText(p.code),'cc-secondary'),action('Rotate connection code',async()=>{
+       if(!await modalConfirm('Rotate this seller’s code? The old code stops working immediately.'))return;
+       await api('sellers/rotate',{id:p.account});toast('Connection code rotated','success');if(alive(token))await load();
+      },'cc-secondary'));
+      n.append(action(p.revoked?'Restore seller access':'Suspend seller',async()=>{
+       if(!await modalConfirm(p.revoked?'Restore seller access?':'Suspend this seller’s access?'))return;
+       await api('sellers/access',{id:p.account,suspended:!p.revoked});toast('Seller access updated','success');if(alive(token))await load();
+      },'cc-secondary'),action(p.verified?'Revoke verification':'Verify Seller',async()=>{
+       await api('sellers/verify',{id:p.account,verified:!p.verified});if(alive(token))await load();
+      },p.verified?'cc-danger':''));
+      main.append(n);
+     }
     listView=true;
    }else if(view==='Monitoring'){renderMonitoring(data,token);}else if(view==='Overview'){
     renderOverview(data);

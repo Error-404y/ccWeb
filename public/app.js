@@ -1173,6 +1173,7 @@ function showOwnSellerProfile() {
   const field = el('input','nickname-input');
   field.value = state.sellerName || 'Seller';
   field.maxLength = 40;
+  field.setAttribute('aria-describedby','sellerDisplayNameRule');
   const save = button('Save', async () => {
     save.disabled = true;
     try {
@@ -1188,7 +1189,9 @@ function showOwnSellerProfile() {
   const status = el('span','seller-catalog-status',state.sellerVerified ? 'Verified seller' : 'Unverified seller');
   const actions = el('div','seller-catalog-actions');
   actions.append(save,button('Manage listings', () => showSellerCatalog(), 'secondary-button'));
-  show('Seller profile',[status,sellerField('Display name',field),actions]);
+  const nameRule = el('p','seller-catalog-message','Use at least 4 letters in your public display name.');
+  nameRule.id = 'sellerDisplayNameRule';
+  show('Seller profile',[status,sellerField('Display name',field),nameRule,actions]);
 }
 
 function editSellerListing(item) {

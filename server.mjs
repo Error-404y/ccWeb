@@ -332,6 +332,16 @@ app.get('/api/control/accounts/:id',(req,res)=>res.json(workspace.account(req.ac
 app.get('/api/control/cases/:type/:id',(req,res)=>res.json(workspace.view(req.account.id,req.params.type,req.params.id)));
 app.post('/api/control/cases/:type/:id',(req,res)=>res.json(workspace.act(req.account.id,controlSource(req),req.params.type,req.params.id,req.body||{})));
 app.get('/api/control/keys',(req,res)=>res.json(accessKeyInventory(db,req.query.q??'',{scope:req.query.scope,after:req.query.after})));
+app.get('/api/control/keys/:id',(req,res)=>res.json({key:keyCleanup.detail(req.params.id)}));
+app.post('/api/control/keys/reveal',(req,res)=>{
+  const id=req.body?.id;
+  let key;
+  try {key=keyCleanup.reveal(id);}
+  catch(error){auditLedger.record(req.account.id,controlSource(req),'keys/reveal','key',id,null,null,'rejected');throw error;}
+  auditLedger.record(req.account.id,controlSource(req),'keys/reveal','key',id);
+  res.json({key});
+});
+app.post('/api/control/keys/delete',(req,res)=>res.json(keyCleanup.removeKey(req.body?.id,req.body?.confirmed,req.body?.deleteToken)));
 app.post('/api/control/keys/purge-used/preview',(req,res)=>res.json(keyCleanup.preview()));
 app.post('/api/control/keys/purge-used',(req,res)=>res.json(keyCleanup.purge(req.body?.confirmation,req.body?.previewToken)));
 app.post('/api/control/keys/generate',(req,res)=>res.json(generatePlanKeys(db,req.body?.plan,req.body?.count,req.account.id)));
@@ -416,6 +426,7 @@ app.post('/api/control/sellers/generate',(req,res)=>res.json(sellers.generateKey
 app.post('/api/control/sellers/rotate',(req,res)=>res.json(sellers.rotate(req.body?.id,chats,req.account.id)));
 app.post('/api/control/sellers/access',(req,res)=>{const b=req.body||{};if(!sellers.isSeller(b.id)||typeof b.suspended!=='boolean')return res.status(404).json({error:'Seller unavailable.'});const result=accountAction(db,b.id,req.account.id,b.suspended?'revoke':'restore','Seller access management');if(b.suspended){unlocks.revokeAll(b.id);push.remove(b.id);chats.hidePresence(b.id);}sellers.sync(chats);res.json(result);});
 app.post('/api/control/sellers/verify',(req,res)=>res.json(sellers.verify(req.body?.id,req.body?.verified,req.account.id)));
+app.post('/api/control/sellers/rename',(req,res)=>res.json(sellers.renameAsAdmin(req.body?.id,req.body?.name,req.account.id)));
 app.get('/api/control/announcements',(req,res)=>res.json(req.query.before===undefined?official.recent():official.history(Number(req.query.before),{paged:true})));
 app.post('/api/control/announcements/publish',(req,res)=>{const result=official.publish(req.body?.text,true);push.broadcast(req.account.id);res.json(result);});
 app.post('/api/control/announcements/delete',(req,res)=>res.json(official.remove(req.body?.id,true)));
@@ -518,8 +529,8 @@ app.post('/api/login/emergency', guard('pin-use', 10, 15 * 60_000), (req, res) =
   res.json({ ok: true });
 });
 
-function deleteAccount(id){controlSessions.revokeAccount(id);workspace.eraseAccount(id);helpTickets.erase(id);sellers.erase(id,chats);desktopChats.erase(id);
-  chats.erase(id);prekeys.remove(id);compliance.purge(id);registeredDevices.erase(id);catalog.erase(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
+function deleteAccount(id,afterErase){controlSessions.revokeAccount(id);workspace.eraseAccount(id);helpTickets.erase(id);sellers.erase(id,chats);desktopChats.erase(id);
+  chats.erase(id);prekeys.remove(id);compliance.purge(id,afterErase);registeredDevices.erase(id);catalog.erase(id);official.erase(id);push.remove(id);unlocks.revokeAll(id);chats.hidePresence(id);
 }
 app.use('/api',(req,res,next)=>{
   if(!unlocks.check(req.account.id,req.get('x-qzu-unlock')))return res.status(423).json({error:'Locked.'});
@@ -723,8 +734,8 @@ function androidUpdateLink() {
 }
 app.get('/api/version', (req, res) => res.json({
   latest: version,
-  notes: 'Ask sellers about listings, follow the reports you submit, and see when a message is waiting to send.',
-  changes: ['Seller listing inquiries through chat','Private drafts and pickup or delivery options','One-time stock alerts and report follow-ups','Clearer outgoing message status and retry'],
+  notes: 'Control can now reveal unused keys, remove individual keys and linked customer accounts, and change seller display names.',
+  changes: ['View unused access keys in Control','Delete an individual key and its linked customer account','Set public seller display names with at least four letters'],
   downloads: { ios: updateLink(process.env.QZU_IOS_UPDATE_URL), android: androidUpdateLink() }
 }));
 app.post('/api/support/lifetime', guard('support-lifetime', 15, 60000), (req,res) => {

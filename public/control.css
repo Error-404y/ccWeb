@@ -789,6 +789,12 @@
  gap:4px;
 }
 
+.cc-key-reveal .cc-secret:not([hidden]) {
+ display:block;
+ overflow-wrap:anywhere;
+ user-select:all;
+}
+
 .cc-purge-body code {
  overflow-wrap:anywhere;
  color:#ffc1c5;

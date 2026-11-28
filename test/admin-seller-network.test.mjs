@@ -98,6 +98,11 @@ test('seller directory reveals only public profile fields; rotating codes invali
  const db=setup();try{
  const s=sellerStore(db),chats=new Chats();chats.sellerInvites=s;
  const a=redeemAccess(db,s.generateKey('admin').key,start,'seller-one').id,b=redeemAccess(db,s.generateKey('admin').key,start,'seller-two').id;
+ db.prepare('UPDATE seller_profiles SET name=? WHERE account=?').run('Old',b);
+ assert.equal(s.name(b),'Old');
+ assert.throws(()=>s.rename(b,'A1.B2.C3'),{status:400});
+ assert.throws(()=>s.renameAsAdmin(b,'x'.repeat(41),'admin'),{status:400});
+ assert.deepEqual(s.renameAsAdmin(b,'Éé名字','admin'),{ok:true,name:'Éé名字'});
  s.rename(b,'Example seller');s.verify(b,true,'admin');assert.throws(()=>s.rename(b,'qzu-Support'));assert.throws(()=>s.directory('stranger'));
  assert.deepEqual(s.directory(a),[{id:b,name:'Example seller',verified:true}]);
  const old=s.ensureCode(b,chats);const next=s.rotate(b,chats,'admin');assert.notEqual(next.code,old.code);assert.ok(!chats.codes.has(old.code));assert.ok(s.reserved(old.code));assert.throws(()=>chats.requestConnection(a,old.code));
