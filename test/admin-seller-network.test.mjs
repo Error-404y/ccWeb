@@ -12,8 +12,9 @@ import {desktopMessenger} from '../lib/desktop-messenger.mjs';
 import {Chats} from '../lib/chats.mjs';
 import {contactStore} from '../lib/contacts.mjs';
 import {officialStore} from '../lib/official.mjs';
+import {complianceStore} from '../lib/compliance.mjs';
 const start=Date.UTC(2026,10,28);
-function setup(){const db=openAccounts(':memory:');initDevices(db);initAccess(db);return db;}
+function setup(){const db=openAccounts(':memory:');initDevices(db);initAccess(db);complianceStore(db);return db;}
 function signer(){const pair=generateKeyPairSync('ec',{namedCurve:'prime256v1'});const j=pair.publicKey.export({format:'jwk'});const pub=Buffer.concat([Buffer.from([4]),Buffer.from(j.x,'base64url'),Buffer.from(j.y,'base64url')]).toString('base64');return {pub,device:createHash('sha256').update(Buffer.from(pub,'base64')).digest('hex'),record(room,key=pub){return {identity:pub,key,signature:sign('sha256',Buffer.from(JSON.stringify(['qzu-room-key-v1',room,key])),pair.privateKey).toString('base64')};}};}
 test('seller activation is mobile-only, single-use, permanent and separate from admin keys',()=>{
  const db=setup();try{
