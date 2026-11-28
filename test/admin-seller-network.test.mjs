@@ -150,7 +150,7 @@ test('accepted and pending legacy deletion requests appear only in assigned admi
  let c=new Chats(()=>start);c.attachSupportStore(db);
  const accepted=c.openMobileSupport('customer','admin',true),pending=c.openMobileSupport('other','admin');
  c.remove('customer',accepted);c.remove('customer',accepted);c.remove('other',pending);
- assert.equal(c.supportRequests('admin',true).length,1);
+ assert.equal(c.supportRequests('admin',true).length,0); // Deletion requests must not appear as new connection requests.
  assert.deepEqual(new Set(c.supportDeletions('admin',true).map(x=>x.id)),new Set([accepted,pending]));
  assert.equal(c.supportDeletions('another-admin',true).length,0);assert.throws(()=>c.supportDeletions('admin'));
  assert.throws(()=>c.approveSupportDeletion('another-admin',accepted,true));assert.throws(()=>c.approveSupportDeletion('admin',accepted,false));
@@ -248,4 +248,35 @@ test('ticket creation defaults to centered form and desktop supports distinct co
  assert.ok(css.includes('.user-ticket-content>.user-ticket-form{margin-block:auto'));
  assert.ok(desktop.includes("api('chats/contact/delete',{id,confirmed:true})"));
  assert.doesNotThrow(()=>new Function(desktop));
+});
+
+test('support opening reuses an existing encrypted contact across admin principals and never creates a legacy case',()=>{
+ const db=setup();try{const c=new Chats(()=>start);c.contacts=contactStore(db,()=>start);c.profileRole=id=>['admin','desktop','other-admin'].includes(id)?'admin':null;c.adminAccount=id=>id==='desktop'?'admin':c.profileRole(id)==='admin'?id:null;
+ const contact=c.contacts.add('customer','desktop','qzu-Support','Customer'),room=c.openContact('customer',contact);
+ assert.equal(c.openMobileSupport('customer','admin'),room);
+ assert.equal(c.supportRequests('admin',true).length,0);
+ const code=c.ensureInvite('customer').code;
+ assert.throws(()=>c.requestConnection('admin',code),/already connected/);
+ const other=c.requestConnection('other-admin',code);assert.ok(other.id);
+ assert.equal(c.snapshot('customer').find(r=>r.id===room).peerAdmin,'admin');
+ assert.equal(c.snapshot('customer').find(r=>r.id===other.id).peerAdmin,'other-admin');
+ c.remove('desktop',room,true);assert.equal(c.supportRequests('admin',true).length,0);
+ const reopened=c.openMobileSupport('customer','admin');assert.notEqual(reopened,room);assert.equal(c.rooms.get(reopened).support,undefined);
+ }finally{db.close();}
+});
+test('legacy deletion never reopens a solved case and contact deletion clears only linked admin conversations',()=>{
+ const db=setup();try{const c=new Chats(()=>start);c.contacts=contactStore(db,()=>start);c.attachSupportStore(db);c.profileRole=id=>['admin','desktop','other-admin'].includes(id)?'admin':null;c.adminAccount=id=>id==='desktop'?'admin':c.profileRole(id)==='admin'?id:null;
+ const legacy=c.openMobileSupport('customer','admin',true);c.send('admin',legacy,'old message');c.finishSupport('admin',legacy,'solve');
+ c.remove('customer',legacy);assert.equal(c.rooms.get(legacy).supportStatus,'solved');assert.equal(c.supportRequests('admin',true).length,0);
+ c.requestSupportContactDeletion('customer',legacy);assert.equal(c.supportDeletions('admin',true)[0].kind,'contact');
+ const contact=c.contacts.add('customer','desktop','qzu-Support','Customer'),direct=c.openContact('customer',contact);
+ const otherContact=c.contacts.add('customer','other-admin','qzu-Support','Customer'),other=c.openContact('customer',otherContact);
+ assert.throws(()=>c.deleteSupportContact('other-admin',legacy,true));
+ c.approveSupportDeletion('admin',legacy,true);assert.equal(c.rooms.has(legacy),false);assert.equal(c.rooms.has(direct),false);assert.equal(c.rooms.has(other),true);assert.equal(c.contacts.list('customer').length,1);
+ }finally{db.close();}
+});
+test('support inbox has separate detail navigation and admin logo is used in mobile and desktop chats',()=>{
+ const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),control=readFileSync(new URL('../public/control.js',import.meta.url),'utf8'),desktop=readFileSync(new URL('../public/desktop-messenger.js',import.meta.url),'utf8');
+ assert.ok(app.includes("adminGroups=new Map()"));assert.ok(app.includes("Other conversation history"));assert.ok(app.includes("current?.peerRole==='admin'||current?.support&&!current?.supportAgent ? '#supportAvatar'"));
+ assert.ok(control.includes("Back to inbox"));assert.ok(control.includes("support/delete-contact"));assert.ok(desktop.includes("cc-chat-admin-avatar"));assert.doesNotThrow(()=>new Function(control));assert.doesNotThrow(()=>new Function(desktop));
 });

@@ -866,7 +866,7 @@ function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m
 function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+(state.official?.unread?1:0);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
-  $('supportOpen').hidden=!state.supportAvailable || state.rooms.some(room=>room.mobileSupport&&!room.supportAgent&&room.expires>serverNow());
+  $('supportOpen').hidden=!state.supportAvailable || state.rooms.some(room=>(room.peerRole==='admin'||room.mobileSupport&&!room.supportAgent)&&room.expires>serverNow())||(state.contacts||[]).some(c=>c.peerRole==='admin'&&c.deleteAt>serverNow());
   const now = serverNow(), rooms = state.rooms.filter(r => r.expires > now);
   if (selected !== officialChannel && !rooms.some(r => r.id === selected)) {
     if (selected !== null) {
@@ -888,10 +888,13 @@ function renderChat() {
   $('qzuInfoChannel').hidden = !infoOpen;
   renderOfficial(infoOpen);
   $('chatPage').classList.toggle('thread-open', Boolean((current || infoOpen) && mobileOpen));
-  const total = (state.contacts || []).filter(contact=>contact.deleteAt>now).length + rooms.filter(room=>!room.contact).length;
-  $('chatCount').textContent = total ? String(total): '';
   const savedContacts = (state.contacts || []).filter(contact => contact.deleteAt > now);
-  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole,c.peerName]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.peerName, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
+  // Keep old histories available, but group only devices belonging to the same verified admin account.
+  const adminGroups=new Map();for(const r of rooms){if(r.peerRole==='admin'&&r.peerAdmin){const group=adminGroups.get(r.peerAdmin)||[];group.push(r);adminGroups.set(r.peerAdmin,group);}}
+  const visibleRooms=rooms.filter(r=>!r.peerAdmin||r.peerRole!=='admin'||(adminGroups.get(r.peerAdmin).find(x=>x.encryption&&!x.support)||adminGroups.get(r.peerAdmin)[0])===r);
+  const visibleSaved=savedContacts.filter(c=>!rooms.some(r=>r.contact?.id===c.id)&&!(c.peerRole==='admin'&&c.peerAdmin&&(adminGroups.has(c.peerAdmin)||savedContacts.find(x=>x.peerAdmin===c.peerAdmin)?.id!==c.id)));
+  const total=visibleRooms.length+visibleSaved.length;$('chatCount').textContent=total?String(total):'';
+  const key = JSON.stringify([Boolean(state.now),privacyMode, savedContacts.map(c=>[c.id,c.nickname,c.warning,c.trusted,c.favorite,c.muted,c.peerRole,c.peerName,c.peerAdmin]), rooms.map(r => [r.id, r.contact?.nickname, r.contact?.warning, r.contact?.trusted, r.contact?.favorite, r.contact?.muted, r.peerRole, r.peerName, r.peerAdmin, r.encryption?.peer?.identity, r.contact?.peerIdentity, r.memberCount, r.activeCount, r.messages.at(-1)?.id, r.messages.at(-1)?.text, r.messages.at(-1)?.opened, r.messages.at(-1)?.deleted, r.deletionRequested, unreadCount(r), r.id === selected])]);
   if (key !== contactKey) {
     contactKey = key;
     const list = $('contacts'), top = list.scrollTop;
@@ -905,8 +908,9 @@ function renderChat() {
       box.append(a);
       list.append(box);
     }
-    for (const r of rooms) {
-      const last = r.messages.at(-1);
+    for (const r of visibleRooms) {
+      const histories=r.peerAdmin?adminGroups.get(r.peerAdmin)||[r]:[r];const alternateContacts=r.peerAdmin?savedContacts.filter(c=>c.peerAdmin===r.peerAdmin&&!rooms.some(x=>x.contact?.id===c.id)):[];
+      const last = histories.flatMap(x=>x.messages).sort((a,b)=>b.at-a.at)[0];
       const classes = 'contact' + (r.admin ? ' admin-contact' : '') + (r.id === selected ? ' active' : '');
       const b = el('button', classes);
       b.type = 'button';
@@ -925,12 +929,13 @@ function renderChat() {
       const preview = r.deletionRequested ? 'Deletion requested' : identityChanged(r) ? 'Contact identity changed' : r.contact?.warning ? 'Contact deletion incoming' : last ? (privacyMode || r.contact?.muted ? 'Message hidden' : previewText(last)) : r.group ? r.memberCount + ' members' : 'New chat';
       if (!r.admin && r.activeCount) name.append(el('span', 'presence-dot'));
       content.append(name, el('span', 'contact-preview' + (r.contact?.warning || identityChanged(r) ? ' contact-warning' : ''), preview));
-      b.append(svg(r.support && !r.supportAgent ? 'avatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
-      const count=unreadCount(r);if(count){const badge=el('span','unread-badge',count>99?'99+':String(count));badge.setAttribute('aria-label',count+' unread messages');b.append(badge);}
+      b.append(svg(r.peerRole==='admin'||r.support&&!r.supportAgent ? 'supportAvatar' : r.readOnly ? 'adminAvatar' : r.group ? 'groupAvatar' : 'avatar', 'avatar'), content, el('span', 'contact-time', fmtTime(last?.at || r.created)));
+      const count=histories.reduce((n,x)=>n+unreadCount(x),0);if(count){const badge=el('span','unread-badge',count>99?'99+':String(count));badge.setAttribute('aria-label',count+' unread messages');b.append(badge);}
       b.addEventListener('click', () => selectRoom(r.id));
+      if(histories.length>1||alternateContacts.length){const history=button('Other conversation history',()=>show('Support conversation history',[...histories.map(x=>button((x.encryption?'Encrypted chat':'Previous support chat')+' · '+fmtTime(x.messages.at(-1)?.at||x.created),()=>{closeModal();selectRoom(x.id);},'secondary-button')),...alternateContacts.map(c=>button('Open saved encrypted contact',async()=>{try{const result=await api('contacts/open',{id:c.id});closeModal();await refresh();selectRoom(result.id);}catch(e){modalError(e);}},'secondary-button')),button('Close',closeModal,'secondary-button')]),'support-history-link');history.setAttribute('aria-label','Open separate support conversation history');list.append(b,history);continue;}
       list.append(b);
     }
-    for (const contact of savedContacts.filter(c=>!rooms.some(r=>r.contact?.id===c.id))) {
+    for (const contact of visibleSaved) {
       const row = el('button','contact saved-contact');
       row.type='button';
       const content=el('div','contact-body');
@@ -938,7 +943,7 @@ function renderChat() {
       addContactMarks(name,contact);if(contact.peerRole==='admin'||contact.peerRole==='verified-seller'){const badge=svg(contact.peerRole==='admin'?'adminBadge':'sellerBadge','admin-badge');badge.setAttribute('aria-label',contact.peerRole==='admin'?'Verified Admin':'Verified Seller');badge.removeAttribute('aria-hidden');name.append(badge);}
       row.dataset.contactPriority=String(contact.favorite?1:0);
       content.append(name,el('span','contact-preview'+(contact.warning?' contact-warning':''),contact.warning?'Contact deletion incoming':'Start a new chat'));
-      row.append(svg('avatar','avatar'),content,svg('chevron','official-chevron'));
+      row.append(svg(contact.peerRole==='admin'?'supportAvatar':'avatar','avatar'),content,svg('chevron','official-chevron'));
       row.addEventListener('click',async()=>{
         row.disabled=true;
         try {
@@ -971,7 +976,7 @@ function renderChat() {
   encryptionStatus.hidden = !showDirectSecurity;
   encryptionStatus.textContent = !showDirectSecurity ? '' : encryptionReady(current) ? '🔒 Encrypted' : current.encryptionStatus === 'lost' || current.encryptionStatus === 'error' ? 'Key unavailable' : 'Connecting securely';
   $('threadBadge').toggleAttribute('hidden',!(current?.peerRole==='admin'||current?.peerRole==='verified-seller'||(isAdmin&&!current?.supportAgent)));$('threadBadge').querySelector('use').setAttribute('href',current?.peerRole==='verified-seller'?'#sellerBadge':'#adminBadge');$('threadBadge').setAttribute('aria-label',current?.peerRole==='verified-seller'?'Verified Seller':'Verified Admin');
-  $('threadAvatar').setAttribute('href', current?.support && !current?.supportAgent ? '#avatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
+  $('threadAvatar').setAttribute('href', current?.peerRole==='admin'||current?.support&&!current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
   $('chatOptions').hidden = true;
   $('profileAvatar').disabled=!current||readOnly;$('profileName').disabled=!current||readOnly;updateNavigation();
@@ -1792,7 +1797,9 @@ async function confirmSupport() {
     show('Support inbox', controls);
     return;
   }
-  if (!state.supportAvailable) return info('Support','Support is currently unavailable. Please try again later.');
+  const existing=state.rooms.find(r=>r.peerRole==='admin'&&r.expires>serverNow());if(existing){closeModal();navigate('/chat');selectRoom(existing.id);return;}
+  const saved=(state.contacts||[]).find(c=>c.peerRole==='admin'&&c.deleteAt>serverNow());
+  if (!state.supportAvailable&&!saved) return info('Support','Support is currently unavailable. Please try again later.');
   const epoch=authEpoch;
   $('writeSupport').disabled=true;
   $('supportOpen').disabled=true;
@@ -1823,7 +1830,7 @@ function renderOfficial(open){
     for(const post of postsToShow){
       const article=el('article','official-post');
       const head=el('div','official-post-title');
-      head.append(el('strong','','qzu-Support'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));if(state.supportAgent)head.append(button('⋯',()=>show('Announcement',[button('Delete for everyone',async()=>{try{await api('official/delete',{id:post.id});officialHistory=officialHistory.filter(p=>p.id!==post.id);closeModal();await refresh();}catch(e){showError(e);}},'danger-button primary-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
+      head.append(svg('supportAvatar','ticket-admin-avatar'),el('strong','','qzu-Support'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));if(state.supportAgent)head.append(button('⋯',()=>show('Announcement',[button('Delete for everyone',async()=>{try{await api('official/delete',{id:post.id});officialHistory=officialHistory.filter(p=>p.id!==post.id);closeModal();await refresh();}catch(e){showError(e);}},'danger-button primary-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
       article.append(head,el('p','official-text',post.text));posts.append(article);
     }
   }
@@ -2002,8 +2009,8 @@ $('deleteChat').addEventListener('click', () => {
   if (!room || room.readOnly) return;
   const leave = room.group && !room.canInvite;
   const requestDeletion = (room.mobileSupport && !room.supportAgent)||(room.peerRole==='admin'&&!state.supportAgent);
-  if (requestDeletion && room.deletionRequested && !room.contact) return info('Deletion requested','Support has received your request.');
-  const confirm = button(requestDeletion ? 'Request deletion' : leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
+  
+  const confirm = button(requestDeletion ? (room.deletionRequested?'Deletion already requested':'Request deletion') : leave ? 'Leave group' : room.group ? 'Delete for everyone' : 'Delete for both', async() => {
     confirm.disabled = true;
     try {
       const result=await api('chat/delete', {id});
@@ -2016,7 +2023,7 @@ $('deleteChat').addEventListener('click', () => {
       modalError(e);
     }
   }, 'primary-button danger-button');
-  show(requestDeletion ? 'Request deletion?' : leave ? 'Leave group?' : 'Delete chat?', [el('p', '', requestDeletion ? 'Ask support to delete this conversation for both participants.' : leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, ...(room.contact?[button('Delete Contact',()=>showContactManagement(room.contact),'secondary-button')]:[]), button('Cancel', closeModal, 'secondary-button')]);
+  show(requestDeletion ? 'Request deletion?' : leave ? 'Leave group?' : 'Delete chat?', [el('p', '', requestDeletion ? 'Ask support to delete this conversation for both participants.' : leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, ...(room.contact?[button('Delete Contact',()=>showContactManagement(room.contact),'secondary-button')]:room.mobileSupport?[button('Delete Contact',()=>show('Delete contact?',[el('p','',room.supportAgent?'Delete the Support contact and all associated chats for both sides.':'Request removal of the Support contact and associated chats.'),button(room.supportAgent?'Delete Contact':'Request deletion',async()=>{try{const result=await api('support/contact/delete',{id,confirmed:true});closeModal();await refresh();if(result.requested)info('Deletion requested','Support has received your contact deletion request.');}catch(e){modalError(e);}},'primary-button danger-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button')]:[]), button('Cancel', closeModal, 'secondary-button')]);
 });
 try {
   privacyMode = localStorage.getItem('qzu-privacy') === '1';
@@ -2569,7 +2576,7 @@ $('chatOptions').addEventListener('click', () => {
     return;
   }
   if (room.admin&&!room.support) return;
-  const profileMark=svg(room.group?'groupAvatar':'avatar','profile-transition-mark');
+  const profileMark=svg(room.peerRole==='admin'?'supportAvatar':room.group?'groupAvatar':'avatar','profile-transition-mark');
   const controls = [profileMark,el('h3','profile-heading',nameFor(room))];
   if(room.support){show('Chat options',[button('Report support conversation',()=>showReport(room),'secondary-button'),button('Close',closeModal,'secondary-button')]);return;}
   if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
@@ -3487,7 +3494,7 @@ function renderUserTicket(t,epoch,auth){
  const composer=el('form','user-ticket-compose');send=el('button','primary-button user-ticket-send','Send');composer.append(field,send);root.append(head,feed,notice,composer);
  composer.onsubmit=async e=>{e.preventDefault();const text=field.value.trim();if(!text||ticketBusy)return;ticketBusy=true;send.disabled=true;if(!ticketPending||ticketPending.text!==text)ticketPending={text,requestId:crypto.randomUUID()};try{const data=await api('tickets/send',{id:t.id,...ticketPending},true);if(ticketAlive(epoch,auth)){if(field.value.trim()===text){field.value='';ticketDraft='';}ticketPending=null;renderUserTicket(data,epoch,auth);feed.scrollTop=feed.scrollHeight;}}catch(e){if(ticketAlive(epoch,auth))notice.textContent=errorMessage(e);}finally{if(ticketAlive(epoch,auth)){ticketBusy=false;send.disabled=field.disabled;}}};
  }
- const key=JSON.stringify(t.messages);if(ticketLast!==key){ticketLast=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','pay-ticket-bubble '+(m.mine?'mine':'other'));if(!m.mine){const name=el('span','user-ticket-name',m.role==='admin'?'qzu-Support':m.role==='seller'||m.role==='verified-seller'?(m.name||'Seller'):m.role==='system'?'Ticket':'Customer');if(m.role==='admin'||m.role==='verified-seller')name.append(svg(m.role==='admin'?'adminBadge':'sellerBadge','admin-badge'));b.append(name);}b.append(el('p','',m.text),el('small','pay-ticket-time',fmtTime(m.at)));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
+ const key=JSON.stringify(t.messages);if(ticketLast!==key){ticketLast=key;const bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;feed.replaceChildren();for(const m of t.messages){const b=el('div','pay-ticket-bubble '+(m.mine?'mine':'other'));if(!m.mine){const name=el('span','user-ticket-name',m.role==='admin'?'qzu-Support':m.role==='seller'||m.role==='verified-seller'?(m.name||'Seller'):m.role==='system'?'Ticket':'Customer');if(m.role==='admin')name.prepend(svg('supportAvatar','ticket-admin-avatar'));if(m.role==='admin'||m.role==='verified-seller')name.append(svg(m.role==='admin'?'adminBadge':'sellerBadge','admin-badge'));b.append(name);}b.append(el('p','',m.text),el('small','pay-ticket-time',fmtTime(m.at)));feed.append(b);}if(bottom)feed.scrollTop=feed.scrollHeight;}
  field.disabled=Boolean(t.closed);send.disabled=field.disabled||ticketBusy;notice.textContent=t.closed?'Solved · Ticket closed':t.assigned?'Open':'Waiting for Support';root.querySelector('.user-ticket-compose').hidden=Boolean(t.closed);
 }
 async function refreshUserTickets(){
