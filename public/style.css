@@ -2553,3 +2553,5 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .thread-name-line{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%}.thread-name-line .profile-name{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.thread-name-line #threadBadge:not([hidden]){display:block;width:15px;height:15px;min-width:15px;flex:0 0 15px;visibility:visible;opacity:1}.thread-name-line #threadBadge[hidden]{display:none!important}
 
 #ticketsPage .user-ticket-content:has(>.user-ticket-form){justify-content:flex-start}.user-ticket-content>.user-ticket-form{margin-block:auto;flex-shrink:0;width:100%;gap:14px;padding-block:16px}.user-ticket-form .user-ticket-hero{margin-bottom:8px}.user-ticket-form .pay-note:empty{display:none}
+
+.support-history-link{display:block;margin:0 12px 8px auto;padding:5px 10px;background:transparent;border:0;color:var(--muted);font-size:12px;text-align:right}.support-history-link:hover{color:var(--accent)}
