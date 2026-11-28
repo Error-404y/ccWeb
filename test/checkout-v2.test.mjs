@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {openAccounts} from '../lib/accounts.mjs';
-import {initAccess,createInvoice,invoiceRow,invoiceStatus,submitPayment} from '../lib/access.mjs';
-import {initPayments,createCryptoInvoice,existingCryptoInvoice,inspectTransaction,COINS} from '../lib/crypto-payments.mjs';
+import {openAccounts,createAccount} from '../lib/accounts.mjs';
+import {initAccess,createInvoice,invoiceRow,invoiceStatus,submitPayment,PAYMENT_SUBMISSION_GRACE,generatePlanKeys,redeemAccess,applyRenewal} from '../lib/access.mjs';
+import {initPayments,createCryptoInvoice,existingCryptoInvoice,inspectTransaction,COINS,quotePrice} from '../lib/crypto-payments.mjs';
+import {initPaymentTickets,paymentTickets} from '../lib/payment-tickets.mjs';
 
 const now=Date.UTC(2026,10,28);
 const key=n=>'QZO-'+n.repeat(48);
@@ -46,6 +47,67 @@ test('transaction submission retries are idempotent and cannot replace matched p
  assert.throws(()=>submitPayment(db,order.orderKey,'b'.repeat(64),now+6000));
  assert.equal(invoiceStatus(db,order.orderKey,now+6000).confirmations,2);
  }finally{db.close();}
+});
+test('a stale unmatched renewal can be retried or reviewed without preventing a new quote', t => {
+ const db = setup();
+ t.after(() => db.close());
+ initPaymentTickets(db);
+ const account = createAccount(db).id;
+ const original = createCryptoInvoice(db, 'month', 'LTC', 100, account, now);
+ const txid = 'a'.repeat(64);
+ submitPayment(db, original.orderKey, txid, now);
+ let time = now + PAYMENT_SUBMISSION_GRACE - 1;
+ const tickets = paymentTickets(db, () => time);
+ const ticket = tickets.open(original.id);
+ assert.throws(() => createCryptoInvoice(db, 'month', 'LTC', 100, account, time), {status:409});
+ assert.equal(tickets.view(ticket.id).needsReview, false);
+
+ time += 60_000;
+ assert.equal(tickets.view(ticket.id).needsReview, true);
+ assert.equal(tickets.list()[0].needsReview, true);
+ assert.equal(tickets.counts().needsReview, 1);
+ const replacement = createCryptoInvoice(db, 'month', 'LTC', 100, account, time);
+ assert.notEqual(replacement.id, original.id);
+ assert.equal(invoiceStatus(db, original.orderKey, time).txid, txid);
+ assert.equal(submitPayment(db, original.orderKey, txid, time).submitted, now);
+
+ const corrected = submitPayment(db, original.orderKey, 'b'.repeat(64), time);
+ assert.equal(corrected.submitted, time);
+ assert.equal(corrected.needsReview, false);
+ db.prepare('UPDATE access_invoices SET confirmations=1,submitted=? WHERE id=?').run(now,original.id);
+ assert.throws(() => createCryptoInvoice(db, 'month', 'LTC', 100, account, time), {status:409});
+ assert.throws(() => submitPayment(db, original.orderKey, 'c'.repeat(64), time), {status:409});
+});
+test('unrelated stale price data does not prevent a fresh quote and cache honors source age', async () => {
+ let requestCount = 0;
+ const fetcher = async () => {
+  requestCount++;
+  return {
+   ok: true,
+   json: async () => ({
+    bitcoin: {usd:100000,last_updated_at:now/1000-290},
+    litecoin: {usd:100,last_updated_at:now/1000},
+    solana: {usd:150,last_updated_at:now/1000-360}
+   })
+  };
+ };
+ assert.equal(await quotePrice('BTC',fetcher,now),100000);
+ assert.equal(await quotePrice('LTC',fetcher,now+1000),100);
+ assert.equal(requestCount,1);
+ await assert.rejects(quotePrice('SOL',fetcher,now+1000),{status:503});
+ await assert.rejects(quotePrice('BTC',fetcher,now+11_000),{status:503});
+ assert.equal(requestCount,3);
+});
+test('renewal retries never apply a signup key to the same account or extend access twice', t => {
+ const db = setup();
+ t.after(() => db.close());
+ const {keys:[signup, renewal]} = generatePlanKeys(db,'1M',2);
+ const account = redeemAccess(db,signup.key,now);
+ assert.throws(() => applyRenewal(db,signup.key,account.id,now));
+ const original = applyRenewal(db,renewal.key,account.id,now);
+ assert.deepEqual(applyRenewal(db,renewal.key,account.id,now+1000),{...original,alreadyApplied:true});
+ assert.throws(() => applyRenewal(db,renewal.key,createAccount(db).id,now+1000));
+ assert.throws(() => applyRenewal(db,renewal.key,account.id,original.paidUntil));
 });
 test('late block inclusion keeps original amount; insufficient or wrong amounts cannot activate',()=>{
  const db=setup();try{

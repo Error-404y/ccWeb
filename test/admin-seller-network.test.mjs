@@ -78,7 +78,7 @@ test('new desktop routes sit behind admin auth; mobile ticket UI is integrated',
  const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8'),app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
  const gate=server.indexOf("app.use('/api/control',(req,res,next)=>");
  for(const path of ['/api/control/sellers','/api/control/chats','/api/control/tickets','/api/control/announcements'])assert.ok(server.indexOf("app.get('"+path+"'")>gate);
- assert.ok(html.includes('data-tab="tickets"'));assert.ok(app.includes('QZU-SELLER-'));assert.ok(app.includes('const postsToShow=feed.posts;'));assert.ok(!app.includes('officialHistory'));;
+ assert.ok(html.includes('data-tab="tickets"'));assert.ok(app.includes('QZU-SELLER-'));assert.ok(app.includes('visibleReadCursor'));assert.ok(app.includes("official/history?officialPage=1"));
 });
 
 test('multiple sellers, transfer, immediate removal and permanent archive',()=>{
@@ -190,9 +190,52 @@ test('ticket creator and actual message actor are visible to admins, not custome
  }finally{db.close();}
 });
 
+test('ticket queue lets an eligible admin reclaim a ticket while preserving the transcript and audit trail',()=>{
+ const db=setup();
+ try{
+  const admins=new Set(['first','second']);
+  const tickets=userTickets(db,{isAdmin:id=>admins.has(id)});
+  const {id}=tickets.open('customer','Account issue','Please help',randomUUID());
+  tickets.adminAction(id,'first','accept');
+  assert.deepEqual(tickets.workload('first'),{userTickets:1,claimableTickets:0,assignedTickets:1});
+  assert.throws(()=>tickets.adminAction(id,'second','accept'),{status:409});
+  admins.delete('first');
+  assert.deepEqual(tickets.workload('second'),{userTickets:1,claimableTickets:1,assignedTickets:0});
+  assert.equal(tickets.list('second',true,false,'claim')[0].id,id);
+  assert.equal(tickets.view(id,'customer').assigned,false);
+  const claimed=tickets.adminAction(id,'second','accept');
+  assert.equal(claimed.admin,'second');
+  assert.deepEqual(claimed.messages.map(message=>message.text),['Please help']);
+  assert.equal(tickets.list('second',true,false,'mine')[0].id,id);
+  assert.equal(db.prepare("SELECT account FROM access_audit WHERE action='user-ticket-reclaim'").get().account,'first');
+ }finally{db.close();}
+});
+
+test('closed ticket transcripts expire at seven days, leaving archive metadata',()=>{
+ const db=setup();
+ try{
+  let now=start;
+  const tickets=userTickets(db,{now:()=>now,isAdmin:id=>id==='admin',isSeller:id=>id==='seller'});
+  const {id}=tickets.open('customer','Other','Test transcript',randomUUID());
+  tickets.adminAction(id,'admin','accept');
+  tickets.adminAction(id,'admin','assign','seller');
+  tickets.adminAction(id,'admin','close');
+  now+=7*86400000-1;
+  tickets.sweep();
+  assert.equal(tickets.view(id,'admin',true).messages.length,2);
+  now++;
+  assert.equal(tickets.view(id,'admin',true).transcriptExpired,true);
+  assert.deepEqual(tickets.view(id,'admin',true).messages,[]);
+  tickets.sweep();
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM user_ticket_messages WHERE ticket=?').get(id).n,0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM user_ticket_sellers WHERE ticket=?').get(id).n,0);
+  assert.equal(tickets.list('admin',true,true)[0].id,id);
+ }finally{db.close();}
+});
+
 test('mobile chat header includes the authoritative admin and seller verification badge alongside the name',()=>{
  const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8'),app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),css=readFileSync(new URL('../public/style.css',import.meta.url),'utf8');
- assert.match(html,/<div class="thread-name-line"><button id="profileName"[^>]*><span id="threadName">Chat<\/span><\/button><svg id="threadBadge"[^>]*hidden>/);
+ assert.match(html,/<div class="thread-name-line"><span class="profile-name" id="threadName">Chat<\/span><svg id="threadBadge"[^>]*hidden>/);
  assert.equal((html.match(/id="threadBadge"/g)||[]).length,1);
  assert.ok(app.includes("$('threadBadge').toggleAttribute('hidden',!(current?.peerRole==='admin'||current?.peerRole==='verified-seller'"));assert.ok(!app.includes("$('threadBadge').hidden ="));
  assert.ok(css.includes('#threadBadge:not([hidden])'));assert.ok(css.includes('#threadBadge[hidden]'));

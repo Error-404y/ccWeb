@@ -29,7 +29,7 @@ test('unused replacement invalidates old secret; renewal preserves the account',
  const old=findAccount(db,a.token).paid_until;
  assert.equal(applyRenewal(db,renewal.key,a.id,200).paidUntil,addMonths(old,1));
  assert.equal(findAccount(db,a.token).id,a.id);
- assert.throws(()=>applyRenewal(db,renewal.key,a.id,200));
+ assert.deepEqual(applyRenewal(db,renewal.key,a.id,200),{paidUntil:addMonths(old,1),alreadyApplied:true});
  const [unused]=generatePlanKeys(db,'LT').keys;revokeAccessKey(db,unused.id,'admin','lost');assert.throws(()=>redeemAccess(db,unused.key,100,'unused'));
  db.close();
 });

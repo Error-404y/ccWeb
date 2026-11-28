@@ -56,23 +56,20 @@ test('logout releases only its slot and revokes old device, token and PIN',()=>{
   }finally{db.close();}
 });
 
-test('startup never requests PIN before session response and visual readiness',async()=>{
+test('startup ends the animation and shows the PIN as soon as the session arrives',async()=>{
   const start=app.indexOf('async function getSession()');
   const end=app.indexOf('\nfunction lock(',start);
   assert.ok(start>=0&&end>start);
   const events=[];
-  let session,ready;
+  let session;
   const sessionPromise=new Promise(resolve=>{session=resolve;});
-  const readyPromise=new Promise(resolve=>{ready=resolve;});
-  const ctx={authBusy:false,document:{hidden:false},unlockToken:null,authEpoch:0,sessionReady:false,needsSetup:false,isPublicCheckout:()=>false,api:()=>sessionPromise,finishBoot:()=>readyPromise,showLogin:()=>events.push('PIN')};
+  const ctx={authBusy:false,document:{hidden:false},unlockToken:null,authEpoch:0,sessionReady:false,needsSetup:false,isPublicCheckout:()=>false,api:()=>sessionPromise,finishBoot:()=>events.push('ready'),showLogin:()=>events.push('PIN')};
   const task=runInNewContext(app.slice(start,end)+'\ngetSession()',ctx);
   await Promise.resolve();
   assert.deepEqual(events,[]);
   session({needsSetup:false});
-  await Promise.resolve();await Promise.resolve();
-  assert.deepEqual(events,[]);
-  ready();await task;
-  assert.deepEqual(events,['PIN']);
+  await task;
+  assert.deepEqual(events,['ready','PIN']);
 });
 
 test('voice gestures distinguish a deliberate left or up swipe from normal hold',()=>{

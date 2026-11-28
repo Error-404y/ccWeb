@@ -2562,3 +2562,10 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .official-unread{width:auto;height:22px;min-width:22px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;background:#d82235;color:#fff;font-size:12px;font-weight:750;border-radius:999px;box-shadow:none}.official-unread[hidden]{display:none!important}
 .access-settings-summary{color:var(--muted);font-size:12px;white-space:nowrap;flex:0 0 auto}.access-summary-panel{display:grid;gap:7px;padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--sub)}.access-summary-caption{font-size:12px;color:var(--muted);margin-top:8px}.access-summary-caption:first-child{margin-top:0}.access-summary-plan{font-size:26px;font-weight:750;letter-spacing:-.5px}.access-summary-value{font-size:21px;color:var(--accent)}.access-summary-status{font-size:14px;font-weight:650;color:var(--muted)}.access-summary-status[data-state=Active]{color:#49bb86}.access-summary-status[data-state=Expired],.access-summary-status[data-state=Inactive]{color:var(--danger)}
 @media(max-width:700px){#chatPage.thread-open #thread{touch-action:pan-y;overscroll-behavior-x:contain}}.native-app #chatPage.thread-open #thread{touch-action:pan-y;overscroll-behavior-x:contain}
+
+.official-page-link { display: block; margin: 12px auto 20px; }
+.official-page-link[hidden] { display: none; }
+.official-channel-content { overflow-anchor: none; }
+#officialPageError { max-width: 540px; margin: 0 auto; color: var(--danger); }
+.thread-title .profile-name { cursor: default; font-size: 16px; font-weight: 650; }
+#bootSplash.boot-ready { animation: bootExit .18s ease both; pointer-events: none; }

@@ -1,6 +1,6 @@
 {
   "name": "qzu-messenger",
-  "version": "0.17.6",
+  "version": "0.17.7",
   "private": true,
   "type": "module",
   "engines": {
@@ -32,7 +32,8 @@
     "deploy:oracle": "bash scripts/deploy-oracle.sh",
     "mobile:update": "bash scripts/update-mobile.sh",
     "publish:release": "bash scripts/publish-release.sh",
-    "keys": "node --env-file-if-exists=.env scripts/keys.mjs"
+    "keys": "node --env-file-if-exists=.env scripts/keys.mjs",
+    "test:browser": "node scripts/browser-smoke.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
@@ -45,6 +46,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^8.0.0",
-    "@capacitor/push-notifications": "^8.0.0"
+    "@capacitor/push-notifications": "^8.0.0",
+    "playwright-core": "1.65.1"
   }
 }

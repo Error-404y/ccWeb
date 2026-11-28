@@ -13,7 +13,19 @@
     const hours=Math.floor(ms/3600000),days=Math.floor(hours/24),rest=hours%24;
     return {plan,remaining:hours===0?'Less than 1 hour':(days?days+' day'+(days===1?'':'s')+(rest?', ':''):'')+(rest?rest+' hour'+(rest===1?'':'s'):''),status:'Active',timed};
   }
-  function unreadCount(feed){return (feed?.posts||[]).filter(p=>p.id>(feed.seen||0)).length;}
+  function unreadCount(feed){
+    if (Number.isSafeInteger(feed?.unreadCount) && feed.unreadCount >= 0) return feed.unreadCount;
+    return (feed?.posts || []).filter(post => post.id > (feed.seen || 0)).length;
+  }
+  function visibleReadCursor(posts, seen, visible) {
+    let next = seen;
+    for (const post of posts) {
+      if (post.id <= seen) continue;
+      if (!visible(post)) break;
+      next = post.id;
+    }
+    return next;
+  }
   function attachEdgeBack(surface,{current,close,edge=26}){
     let gesture=null,suppress=false;
     const clear=()=>{const id=gesture?.id;gesture=null;if(id!==undefined&&surface.hasPointerCapture?.(id))try{surface.releasePointerCapture(id);}catch{}};
@@ -45,5 +57,5 @@
     surface.addEventListener('click',e=>{if(suppress&&e.detail!==0){suppress=false;e.preventDefault();e.stopPropagation();}},true);
     return clear;
   }
-  window.QzuSimplicity=Object.freeze({accessSummary,unreadCount,attachEdgeBack});
+  window.QzuSimplicity=Object.freeze({accessSummary,unreadCount,visibleReadCursor,attachEdgeBack});
 })();

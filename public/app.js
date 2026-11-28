@@ -4,7 +4,7 @@ const native = window.Capacitor?.isNativePlatform?.() === true;
 if (native) document.documentElement.classList.add('native-app');
 const apiOrigin = native ? window.QZU_API_ORIGIN : location.origin;
 const devicePlugin = native ? window.Capacitor.registerPlugin('QzuDevice') : null;
-const installedVersion = window.QZU_APP_VERSION || '0.17.2';
+const installedVersion = window.QZU_APP_VERSION || '';
 const playBuild=native&&window.QZU_DISTRIBUTION==='google-play';
 let termsPending=false,suspendedAccount=false;
 const roomKeyJobs = new Map();
@@ -12,7 +12,7 @@ const roomKeys = new Map();
 let nextUpdateCheck = 0, pendingUpdate = null, updateChecking = false;
 const updateReminders = new Map();
 let ticketEpoch=0,ticketSelected=null,ticketMode='list',ticketBusy=false,ticketPolling=false,ticketLast='',ticketDraft='',ticketPending=null;
-let officialReadJob=null,officialRenderKey='',liveRevision='',manualRefreshes=0,pushRegistration=null,pushEpoch=-1;
+let liveRevision='',manualRefreshes=0,pushRegistration=null,pushEpoch=-1;
 
 async function transport(path, options = {}) {
   if (!native) return fetch(path, options);
@@ -73,7 +73,6 @@ let selected = null;
 let burnSeconds = 0;
 let mobileOpen = false;
 let sequence = 0;
-let started = false;
 let renderedRoom = null;
 let renderedMessages = [];
 let contactKey = '';
@@ -90,9 +89,7 @@ let authEpoch = 0;
 let authBusy = false;
 let sessionReady = false;
 let needsSetup = false;
-let lockPromptId = 0;
 let qrPending = '';
-let loopStarted = false;
 let pendingInvite = '';
 let sendingMessage = false;
 let accessDue = false;
@@ -303,6 +300,8 @@ async function api(path, data, quiet = false) {
   }
   if (token) headers['X-QZU-Unlock'] = token;
   let res;
+  const slowRequest = path === 'push/test' || path.startsWith('access/')
+    || path === 'control/payment-tickets/verify' || path === 'control/payments/verify';
   try {
     res = await transport('/api/' + path, {
       method: write ? 'POST': 'GET',
@@ -310,7 +309,7 @@ async function api(path, data, quiet = false) {
       body: write ? JSON.stringify(data): undefined,
       cache: 'no-store',
       credentials: 'same-origin',
-      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(path==='push/test'||path.startsWith('access/')?25000:8000) : undefined
+      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(slowRequest ? 25000 : 8000) : undefined
     });
   }
   catch (error) {
@@ -328,7 +327,7 @@ async function api(path, data, quiet = false) {
   if (res.status === 402 && !authRoute) {
     accessDue = true;
     updatePages();
-    showRenewal();
+    if (modal.dataset.checkout !== 'renewal') showRenewal();
     throw new Error('qzu-Access renewal required.');
   }
   if (res.status === 423 && !authRoute) {
@@ -624,7 +623,7 @@ async function getSession() {
   const epoch = authEpoch;
   try {
     const result = await api('session', {});
-    await finishBoot();
+    finishBoot();
     if (epoch !== authEpoch || document.hidden) return;
     if (result.accessRequired) {
       sessionReady = false;
@@ -638,7 +637,7 @@ async function getSession() {
     showLogin();
   }
   catch (e) {
-    await finishBoot();
+    finishBoot();
     if (epoch === authEpoch && !document.hidden) show('qzu.', [el('p', '', errorMessage(e)), button('Retry', () => {
       getSession();
     })], true);
@@ -691,7 +690,7 @@ function lock(reopen = true) {
   $('extensionNotice').hidden = true;
   $('supportOpen').hidden = true;
   $('qzuInfoChannel').hidden = true;
-  $('officialUnread').hidden=true;$('officialPosts').replaceChildren();$('officialMessage').value='';$('officialSend').disabled=true;$('officialComposer').hidden=true;officialRenderKey='';liveRevision='';pushRegistration=null;pushEpoch=-1;
+  $('officialUnread').hidden=true;$('officialPosts').replaceChildren();$('officialMessage').value='';$('officialSend').disabled=true;$('officialComposer').hidden=true;resetOfficialView();liveRevision='';pushRegistration=null;pushEpoch=-1;
   $('qzuInfoOpen').classList.remove('active');
   $('qzuInfoOpen').setAttribute('aria-pressed', 'false');
   $('groupInvite').hidden = true;
@@ -788,17 +787,8 @@ if (native) {
     const target = event.target instanceof Element ? event.target.closest('button, a') : null;
     if (target && document.activeElement === target && event.detail > 0) target.blur();
   });
-  for (const event of ['gesturestart', 'gesturechange', 'gestureend']) {
-    document.addEventListener(event, e => e.preventDefault(), { passive: false });
-  }
-  document.addEventListener('touchstart', e => {
-    if (e.touches.length > 1) e.preventDefault();
-  }, { passive: false });
-  document.addEventListener('touchmove', e => {
-    if (e.touches.length > 1) e.preventDefault();
-  }, { passive: false });
   window.addEventListener('scroll', () => {
-    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+    if ((window.visualViewport?.scale || 1) === 1 && (window.scrollX || window.scrollY)) window.scrollTo(0, 0);
   }, { passive: true });
 }
 
@@ -866,7 +856,9 @@ function unreadCount(room){return room.messages.filter(m=>!m.mine&&!m.deleted&&m
 function updateNavigation(){const nav=$('bottomNav');const enabled=Boolean(unlockToken&&!accessDue&&!termsPending&&!suspendedAccount&&!(page==='chat'&&mobileOpen&&mobile.matches));nav.hidden=!enabled; $('app').classList.toggle('with-nav',enabled);for(const link of nav.querySelectorAll('[data-tab]')){const active=link.dataset.tab===page;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}const n=state.rooms.filter(r=>r.expires>serverNow()).reduce((sum,r)=>sum+unreadCount(r),0)+QzuSimplicity.unreadCount(state.official);$('navUnread').hidden=!n;$('navUnread').textContent=n>99?'99+':String(n);if(unlockToken&&state.now&&!termsPending&&!suspendedAccount&&!accessDue)syncBadge(n);}
 function renderChat() {
   if (page !== 'chat' || !unlockToken) return;
-  $('supportOpen').hidden=!state.supportAvailable || state.rooms.some(room=>(room.peerRole==='admin'||room.mobileSupport&&!room.supportAgent)&&room.expires>serverNow())||(state.contacts||[]).some(c=>c.peerRole==='admin'&&c.deleteAt>serverNow());
+  $('supportOpen').hidden = !state.now || state.supportAgent
+    || state.rooms.some(room => (room.peerRole === 'admin' || room.mobileSupport && !room.supportAgent) && room.expires > serverNow())
+    || (state.contacts || []).some(contact => contact.peerRole === 'admin' && contact.deleteAt > serverNow());
   const now = serverNow(), rooms = state.rooms.filter(r => r.expires > now);
   if (selected !== officialChannel && !rooms.some(r => r.id === selected)) {
     if (selected !== null) {
@@ -967,9 +959,6 @@ function renderChat() {
   if(!current||readOnly||current.support||!unlockToken)closeInlineAttachments();
   renderEncryptionNotice(current);
   $('adminComposer').hidden = !readOnly;
-  $('deleteChat').hidden = readOnly;
-  $('deleteChat').title = (current?.mobileSupport && !current?.supportAgent)||(current?.peerRole==='admin'&&!state.supportAgent) ? 'Request deletion' : 'Delete chat';
-  $('deleteChat').setAttribute('aria-label',$('deleteChat').title);
   $('attachmentMenu').hidden = Boolean(current?.support || ((current?.encryption || (native && directRoom(current))) && !encryptionReady(current)));
   const encryptionStatus = $('encryptionStatus');
   const showDirectSecurity = encryptionRequired(current) && directRoom(current);
@@ -978,8 +967,9 @@ function renderChat() {
   $('threadBadge').toggleAttribute('hidden',!(current?.peerRole==='admin'||current?.peerRole==='verified-seller'||(isAdmin&&!current?.supportAgent)));$('threadBadge').querySelector('use').setAttribute('href',current?.peerRole==='verified-seller'?'#sellerBadge':'#adminBadge');$('threadBadge').setAttribute('aria-label',current?.peerRole==='verified-seller'?'Verified Seller':'Verified Admin');
   $('threadAvatar').setAttribute('href', current?.peerRole==='admin'||current?.support&&!current?.supportAgent ? '#supportAvatar' : readOnly ? '#adminAvatar' : current?.group ? '#groupAvatar' : '#avatar');
   $('groupInvite').hidden = !current?.canInvite;
-  $('chatOptions').hidden = true;
-  $('profileAvatar').disabled=!current||readOnly;$('profileName').disabled=!current||readOnly;updateNavigation();
+  $('chatOptions').hidden = !current || readOnly;
+  $('profileAvatar').disabled = !current;
+  updateNavigation();
   $('presenceLabel').hidden = !current || isAdmin;
   $('presenceLabel').textContent = current?.group ? (current.activeCount || 0) + ' active' : current?.activeCount ? 'Active' : 'Offline';
   $('presenceLabel').classList.toggle('online', Boolean(current?.activeCount));
@@ -1334,19 +1324,24 @@ function renderConnect() {
 }
 
 $('sellerProfileSettings').addEventListener('click',()=>{if(!state.seller)return;const field=el('input','nickname-input');field.value=state.sellerName||'Seller';field.maxLength=40;field.setAttribute('aria-label','Seller display name');const save=button('Save',async()=>{save.disabled=true;try{await api('sellers/profile',{name:field.value.trim()});closeModal();await refresh();}catch(e){modalError(e);save.disabled=false;}});show('Seller profile',[el('p','',state.sellerVerified?'Verified seller':'Unverified seller'),field,save,button('Close',closeModal,'secondary-button')]);});
-$('adminControlCenter').addEventListener('click',()=>{
- if(!native||!unlockToken||!state.supportAgent||!window.QzuControl)return;
+function openControlCenter(initialTab) {
+ if(!unlockToken||!state.supportAgent)return;
+ if(!native){location.assign('/control');return;}
+ if(!window.QzuControl){info('Control Center','The admin console is unavailable.');return;}
  const epoch=authEpoch,root=el('div','cc-native-panel');
  show('Control Center',[root]);let panel;
  const active=()=>root.isConnected&&modal.open&&epoch===authEpoch&&Boolean(unlockToken)&&state.supportAgent;
  const observer=new MutationObserver(()=>{if(!active()){observer.disconnect();panel?.close();}});
- panel=window.QzuControl.mount(root,(path,data)=>{if(!active())throw Error('Locked.');return api('control/'+path,data,true);},{mobile:true,isActive:active,onExit:closeModal,mobileChat:()=>{closeModal();navigate('/chat');},media:async id=>{if(!active())throw Error('Locked.');const response=await transport('/api/control/reports/media/'+encodeURIComponent(id),{headers:{'X-QZU-Unlock':unlockToken},cache:'no-store'});if(!response.ok||!active())throw Error('Evidence unavailable.');return response.blob();}});
+ panel=window.QzuControl.mount(root,(path,data)=>{if(!active())throw Error('Locked.');return api('control/'+path,data,true);},{mobile:true,initialTab,isActive:active,onExit:closeModal,mobileChat:()=>{closeModal();navigate('/chat');},media:async id=>{if(!active())throw Error('Locked.');const response=await transport('/api/control/reports/media/'+encodeURIComponent(id),{headers:{'X-QZU-Unlock':unlockToken},cache:'no-store'});if(!response.ok||!active())throw Error('Evidence unavailable.');return response.blob();}});
  observer.observe(body,{childList:true,subtree:true});modal.addEventListener('close',()=>{observer.disconnect();panel?.close();},{once:true});
-});
+}
+$('adminControlCenter').addEventListener('click',()=>openControlCenter());
 function renderSettings() {
   if (page !== 'settings') return;
   const requested = location.pathname.split('/')[2] || 'main';
-  const category = ['support-requests','admin-feedback'].includes(requested) && !state.supportAgent ? 'main' : requested;
+  const category = requested === 'motion' ? 'appearance'
+    : requested === 'updates' || ['support-requests','admin-feedback'].includes(requested) && !state.supportAgent ? 'main'
+    : requested;
   for (const panel of document.querySelectorAll('[data-settings-category]')) {const hidden=panel.dataset.settingsCategory!==category;const entering=panel.hidden&&!hidden;panel.hidden=hidden;if(entering)motion(panel,'motion-settings');}
   $('settingsBack').href = category === 'main' ? '/chat' : '/settings';
   $('resetPin').disabled = !state.pinState || Boolean(state.resetDelivered) || ['new', 'approved'].includes(state.pinState);
@@ -1357,6 +1352,7 @@ function renderSettings() {
   $('privateNotifications').checked=!pushOptedOut();
   $('privateNotifications').disabled=!unlockToken||Boolean(pushRemovalJob||pushRegisterJob);
   $('pushStatus').textContent=pushOptedOut()?'Message notifications are off.':state.push?.registered?'Message notifications are enabled.':native&&window.Capacitor.getPlatform()==='ios'?'In-app alerts enabled. Remote delivery depends on Apple push configuration.':'Allow notifications in your device settings if prompted.';
+  $('writeSupport').hidden = Boolean(state.supportAgent);
   $('writeSupport').disabled = !unlockToken;
   updateAccessDisplay();
   $('supportRequestsLink').hidden = !state.supportAgent;
@@ -1603,12 +1599,12 @@ $('encryptionStatus').addEventListener('click', () => {
   if (encryptionRequired(room) && directRoom(room)) showEncryption(room);
 });
 
-async function refresh(live=false) {
+async function refresh(live=false, {restoreAccess = false} = {}) {
   if(live&&manualRefreshes)return;
   if(!live)manualRefreshes++;
   try{
   const ticket = ++sequence;
-  const data = await api(live&&liveRevision?'state/live?since='+liveRevision:'state');
+  const data = await api(live&&liveRevision?'state/live?officialPage=1&since='+liveRevision:'state?officialPage=1');
   if (ticket !== sequence || document.hidden || !unlockToken) return;
   online = true;reconnectDelay=500;updateConnection();
   offset = data.now - Date.now();
@@ -1616,6 +1612,7 @@ async function refresh(live=false) {
   if(data.unchanged){liveRevision=data.revision;void flushOutbox();if(state.rooms.some(r=>directRoom(r)&&r.encryption&&r.encryptionStatus==='error')&&Date.now()>=nextCryptoRetry){liveRevision='';nextCryptoRetry=Date.now()+5000;}purgeExpired();maybePromptUpdate();void acknowledgeMessages();restorePushRegistration();replenishPrekeys(state);return;}
   await prepareEncryptedRooms(data,ticket);
   if (ticket !== sequence || document.hidden || !unlockToken) return;
+  if (restoreAccess && data.access?.active !== true) throw Error('Access is still inactive.');
   scrubRemovedRooms(state.rooms,data.rooms);
   const previouslyKnown=new Set(state.rooms.flatMap(r=>r.messages.map(m=>m.id)));const newActivity=Boolean(state.now)&&data.rooms.some(r=>!r.contact?.muted&&(r.id!==selected||!canReadCurrent())&&r.messages.some(m=>m.unread&&!previouslyKnown.has(m.id)));state = data;reconcileOutbox();
   if(newActivity&&!document.hidden)showActivityBanner();
@@ -1634,11 +1631,18 @@ async function refresh(live=false) {
       mobileOpen = true;
     }
   }
+  if (restoreAccess) {
+    accessDue = false;
+    modalLocked = false;
+    closeModal();
+    updatePages();
+  }
   render();
   purgeExpired();
   acknowledgeMessages();
   maybePromptUpdate();
   restorePushRegistration();replenishPrekeys(state);void flushOutbox();
+  return data;
   }finally{if(!live)manualRefreshes--;}
 }
 
@@ -1694,7 +1698,6 @@ function showDeleteAccount(){
 function showDeletionCode(){
   show('External deletion code',[el('p','','Generate a private code to delete your account later from the public website. A new code invalidates any previous code.'),button('Generate code',async()=>{try{const result=await api('account/deletion-code',{});const code=el('p','fingerprint-code',result.code);show('Save your deletion code',[el('p','','Anyone with this code can permanently delete your account. Keep it private.'),code,button('Copy code',async()=>{try{await navigator.clipboard.writeText(result.code);}catch{dialogError(Error('Select and copy the code manually.'));}},'secondary-button'),button('Deletion website',()=>openLegal('/delete-account'),'secondary-button'),button('Done',()=>{if(suspendedAccount)showRestrictedAccount('Account suspended','Your account access has been restricted.');else if(termsPending)showTermsGate(1);else if(accessDue)showRenewal();else closeModal();},'secondary-button')]);}catch(error){dialogError(error);}}),button('Cancel',()=>{if(suspendedAccount)showRestrictedAccount('Account suspended','Your account access has been restricted.');else if(accessDue)showRenewal();else closeModal();},'secondary-button')]);
 }
-$('logout').addEventListener('click',showDeleteAccount);
 $('deleteAccount').addEventListener('click',showDeleteAccount);
 $('termsPolicy').addEventListener('click',()=>openLegal('/terms'));
 $('changeLogin').addEventListener('click', () => {
@@ -1812,37 +1815,191 @@ async function confirmSupport() {
   }catch(error){if(epoch===authEpoch)showError(error);}
   finally {if(epoch===authEpoch){$('writeSupport').disabled=false;$('supportOpen').disabled=false;}}
 }
-$('supportOpen').addEventListener('click',confirmSupport);
-$('writeSupport').addEventListener('click',confirmSupport);
-function renderOfficialUnread(feed){const n=QzuSimplicity.unreadCount(feed),badge=$('officialUnread');badge.hidden=!n;badge.textContent=n>99?'99+':String(n);badge.setAttribute('aria-label',n+' unread announcements');}
-function renderOfficial(open){
-  const feed=state.official||{posts:[],latest:0,seen:0,unread:false};
+function showSupportChoices() {
+  if (!unlockToken || accessDue || state.supportAgent) return;
+  const controls = [];
+  if (state.supportAvailable || state.rooms.some(room => room.peerRole === 'admin' || room.mobileSupport)
+    || (state.contacts || []).some(contact => contact.peerRole === 'admin' && contact.deleteAt > serverNow())) {
+    controls.push(button('Support chat', confirmSupport));
+  }
+  controls.push(button('Open tickets', () => {
+    closeModal();
+    navigate('/tickets');
+  }, controls.length ? 'secondary-button' : 'primary-button'));
+  show('Contact support', controls);
+}
+$('supportOpen').addEventListener('click', showSupportChoices);
+$('writeSupport').addEventListener('click', showSupportChoices);
+const officialView = $('officialPosts').parentElement;
+let officialPage = null;
+let officialReadJob = null;
+let officialReadFrame = 0;
+
+function resetOfficialView() {
+  officialPage = null;
+  officialReadJob = null;
+  cancelAnimationFrame(officialReadFrame);
+  officialReadFrame = 0;
+  $('officialEarlier').hidden = true;
+  $('officialLater').hidden = true;
+  $('officialPageError').textContent = '';
+  $('officialPosts').replaceChildren();
+}
+
+function renderOfficialUnread(feed) {
+  const n = QzuSimplicity.unreadCount(feed), badge = $('officialUnread');
+  badge.hidden = !n;
+  badge.textContent = n > 99 ? '99+' : String(n);
+  badge.setAttribute('aria-label', n + ' unread announcements');
+}
+
+function queueOfficialRead() {
+  if (!officialPage || officialReadFrame || officialReadJob || selected !== officialChannel || !canReadCurrent() || modal.open || !unlockToken) return;
+  officialReadFrame = requestAnimationFrame(() => {
+    officialReadFrame = 0;
+    if (selected !== officialChannel || !canReadCurrent() || modal.open || !unlockToken) return;
+    const feed = state.official;
+    if (!QzuSimplicity.unreadCount(feed) || !officialPage?.posts.length) return;
+    const bounds = officialView.getBoundingClientRect();
+    if (bounds.height <= 0) return;
+    const next = QzuSimplicity.visibleReadCursor(officialPage.posts, feed.seen, post => {
+      const rect = $('announcement-' + post.id)?.getBoundingClientRect();
+      if (!rect || !rect.height) return false;
+      const visibleHeight = Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top);
+      return visibleHeight >= Math.min(rect.height, bounds.height) / 2;
+    });
+    if (next <= feed.seen) return;
+    const epoch = authEpoch;
+    const posts = officialPage.posts;
+    const job = api('official/read', {id:next}, true).then(() => {
+      if (epoch !== authEpoch || !state.official || next <= state.official.seen) return;
+      const current = state.official;
+      const read = posts.filter(post => post.id > current.seen && post.id <= next).length;
+      const remaining = Math.max(0, QzuSimplicity.unreadCount(current) - read);
+      state.official = {...current, seen:next, unread:Boolean(remaining), unreadCount:remaining};
+      renderOfficialUnread(state.official);
+      updateNavigation();
+    }).catch(() => {}).finally(() => {
+      if (officialReadJob === job) officialReadJob = null;
+    });
+    officialReadJob = job;
+  });
+}
+
+function paintOfficialPage(feed, jumpToUnread = false) {
+  const container = $('officialPosts');
+  const earlier = $('officialEarlier'), later = $('officialLater');
+  const top = officialView.getBoundingClientRect().top;
+  const anchor = [...container.children].find(article => article.getBoundingClientRect().bottom > top);
+  const anchorTop = anchor?.getBoundingClientRect().top;
+  const fragment = document.createDocumentFragment();
+  for (const post of officialPage.posts) {
+    const existing = $('announcement-' + post.id);
+    if (existing) {
+      fragment.append(existing);
+      continue;
+    }
+    const article = el('article', 'official-post');
+    article.id = 'announcement-' + post.id;
+    const heading = el('div', 'official-post-title');
+    const stamp = new Date(post.at);
+    const time = el('time', 'official-date', stamp.toLocaleString());
+    time.dateTime = stamp.toISOString();
+    heading.append(svg('supportAvatar', 'ticket-admin-avatar'), el('strong', '', 'qzu-Support'), svg('adminBadge', 'admin-badge'), time);
+    if (state.supportAgent) {
+      const options = button('⋯', () => show('Announcement', [
+        button('Delete for everyone', async () => {
+          try { await api('official/delete', {id:post.id}); closeModal(); await refresh(); }
+          catch (error) { showError(error); }
+        }, 'danger-button primary-button'),
+        button('Cancel', closeModal, 'secondary-button')
+      ]), 'secondary-button');
+      options.setAttribute('aria-label', 'Announcement options');
+      heading.append(options);
+    }
+    article.append(heading, el('p', 'official-text', post.text));
+    fragment.append(article);
+  }
+  container.replaceChildren(fragment);
+  earlier.hidden = !officialPage.hasOlder;
+  later.hidden = !officialPage.posts.length || officialPage.posts.at(-1).id >= feed.latest;
+  if (jumpToUnread) {
+    requestAnimationFrame(() => {
+      if (selected !== officialChannel || !officialPage) return;
+      const unread = officialPage.posts.find(post => post.id > feed.seen);
+      const target = unread ? $('announcement-' + unread.id) : $('officialPosts').lastElementChild;
+      if (target) officialView.scrollTop += target.getBoundingClientRect().top - officialView.getBoundingClientRect().top - 12;
+      queueOfficialRead();
+    });
+  } else if (anchor && container.contains(anchor)) {
+    officialView.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+  }
+}
+
+async function loadOfficialPage(direction) {
+  const current = officialPage;
+  const cursor = direction === 'before' ? current?.posts[0]?.id : current?.posts.at(-1)?.id;
+  if (!cursor || current.loading) return;
+  const control = direction === 'before' ? $('officialEarlier') : $('officialLater');
+  current.loading = true;
+  control.disabled = true;
+  $('officialPageError').textContent = '';
+  try {
+    const data = await api('official/history?officialPage=1&' + direction + '=' + cursor, undefined, true);
+    if (officialPage !== current || selected !== officialChannel) return;
+    if (data.deletedRevision !== current.deletedRevision) {
+      await refresh();
+      return;
+    }
+    const posts = new Map(current.posts.map(post => [post.id, post]));
+    for (const post of data.posts) posts.set(post.id, post);
+    current.posts = [...posts.values()].sort((a, b) => a.id - b.id);
+    if (direction === 'before') current.hasOlder = data.hasOlder ?? data.posts.length > 0;
+    paintOfficialPage(state.official);
+    queueOfficialRead();
+  } catch (error) {
+    if (officialPage === current) $('officialPageError').textContent = errorMessage(error);
+  } finally {
+    current.loading = false;
+    control.disabled = false;
+  }
+}
+
+function renderOfficial(open) {
+  const feed = state.official || {posts:[], latest:0, seen:0, unread:false};
   renderOfficialUnread(feed);
   $('officialComposer').hidden=!state.supportAgent;
   $('officialReadOnly').hidden=Boolean(state.supportAgent);
-  if(!open)return;
-  const postsToShow=feed.posts;
-  const key=JSON.stringify(postsToShow);
-  if(key!==officialRenderKey){
-    officialRenderKey=key;
-    const posts=$('officialPosts');posts.replaceChildren();
-    for(const post of postsToShow){
-      const article=el('article','official-post');
-      const head=el('div','official-post-title');
-      head.append(svg('supportAvatar','ticket-admin-avatar'),el('strong','','qzu-Support'),svg('adminBadge','admin-badge'),el('time','official-date',new Date(post.at).toLocaleString()));if(state.supportAgent)head.append(button('⋯',()=>show('Announcement',[button('Delete for everyone',async()=>{try{await api('official/delete',{id:post.id});closeModal();await refresh();}catch(e){showError(e);}},'danger-button primary-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button'));
-      article.append(head,el('p','official-text',post.text));posts.append(article);
+  if (!open) {
+    if (officialPage) resetOfficialView();
+    return;
+  }
+  if (!officialPage || officialPage.deletedRevision !== feed.deletedRevision) {
+    officialPage = {deletedRevision:feed.deletedRevision, posts:feed.posts, hasOlder:Boolean(feed.hasOlder), loading:false};
+    paintOfficialPage(feed, true);
+    return;
+  }
+  const loaded = new Map(officialPage.posts.map(post => [post.id, post]));
+  if (feed.posts.some(post => !loaded.has(post.id))) {
+    const overlaps = feed.posts.some(post => loaded.has(post.id));
+    if (overlaps || !loaded.size || !feed.hasOlder) {
+      for (const post of feed.posts) loaded.set(post.id, post);
+      officialPage.posts = [...loaded.values()].sort((a, b) => a.id - b.id);
+      paintOfficialPage(feed);
+    } else {
+      officialPage.posts = feed.posts;
+      officialPage.hasOlder = Boolean(feed.hasOlder);
+      paintOfficialPage(feed, true);
     }
+  } else {
+    $('officialLater').hidden = !loaded.size || officialPage.posts.at(-1).id >= feed.latest;
   }
-  if(QzuSimplicity.unreadCount(feed)&&canReadCurrent()&&!modal.open&&!officialReadJob){
-    const epoch=authEpoch,latest=feed.latest;
-    officialReadJob=api('official/read',{id:latest},true).then(()=>{
-      if(epoch!==authEpoch||!state.official)return;
-      state.official.seen=Math.max(state.official.seen,latest);
-      state.official.unread=state.official.latest>state.official.seen;
-      state.official.unreadCount=QzuSimplicity.unreadCount(state.official);renderOfficialUnread(state.official);updateNavigation();
-    }).catch(()=>{}).finally(()=>{officialReadJob=null;});
-  }
+  queueOfficialRead();
 }
+officialView.addEventListener('scroll', queueOfficialRead, {passive:true});
+$('officialEarlier').addEventListener('click', () => loadOfficialPage('before'));
+$('officialLater').addEventListener('click', () => loadOfficialPage('after'));
+
 $('officialMessage').addEventListener('input',()=>{$('officialSend').disabled=!$('officialMessage').value.trim();});
 $('officialComposer').addEventListener('submit',event=>{
   event.preventDefault();
@@ -1884,7 +2041,6 @@ function renderEncryptionNotice(room) {
   const required = encryptionRequired(room) && !encryptionReady(room);
   notice.hidden = !required;
   if (!required) return;
-  const local = roomKeys.get(room.id);
   $('encryptionNoticeText').textContent = ['lost', 'error'].includes(room.encryptionStatus) ? 'Encryption key unavailable. Tap for help.'
     : room.encryptionStatus === 'unavailable' ? 'Encryption unavailable. Tap for details.'
     : 'Connecting securely…';
@@ -1995,11 +2151,9 @@ $('composer').addEventListener('submit', event => {
   sendMessage();
 });
 
-$('deleteChat').addEventListener('click', () => {
-  const id = selected;
-  if (!id) return;
-  const room = state.rooms.find(room => room.id === id);
+function confirmDeleteChat(room) {
   if (!room || room.readOnly) return;
+  const id = room.id;
   const leave = room.group && !room.canInvite;
   const requestDeletion = (room.mobileSupport && !room.supportAgent)||(room.peerRole==='admin'&&!state.supportAgent);
   
@@ -2016,8 +2170,29 @@ $('deleteChat').addEventListener('click', () => {
       modalError(e);
     }
   }, 'primary-button danger-button');
-  show(requestDeletion ? 'Request deletion?' : leave ? 'Leave group?' : 'Delete chat?', [el('p', '', requestDeletion ? 'Ask support to delete this conversation for both participants.' : leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'), confirm, ...(room.contact?[button('Delete Contact',()=>showContactManagement(room.contact),'secondary-button')]:room.mobileSupport?[button('Delete Contact',()=>show('Delete contact?',[el('p','',room.supportAgent?'Delete the Support contact and all associated chats for both sides.':'Request removal of the Support contact and associated chats.'),button(room.supportAgent?'Delete Contact':'Request deletion',async()=>{try{const result=await api('support/contact/delete',{id,confirmed:true});closeModal();await refresh();if(result.requested)info('Deletion requested','Support has received your contact deletion request.');}catch(e){modalError(e);}},'primary-button danger-button'),button('Cancel',closeModal,'secondary-button')]),'secondary-button')]:[]), button('Cancel', closeModal, 'secondary-button')]);
-});
+  show(requestDeletion ? 'Request deletion?' : leave ? 'Leave group?' : 'Delete chat?', [
+    el('p', '', requestDeletion ? 'Ask Support to delete this conversation for both participants.' : leave ? 'You will leave this group. Other members keep the conversation.' : room.group ? 'This removes the conversation for all group members.' : 'This removes the conversation for both participants.'),
+    confirm, button('Cancel', closeModal, 'secondary-button')
+  ]);
+}
+
+function confirmSupportContactDeletion(room) {
+  const label = room.supportAgent ? 'Delete support contact' : 'Request contact deletion';
+  const confirm = button(label, async () => {
+    confirm.disabled = true;
+    try {
+      const result = await api('support/contact/delete', {id:room.id, confirmed:true});
+      closeModal();
+      await refresh();
+      if (result.requested) info('Deletion requested', 'Support has received your contact deletion request.');
+    } catch (error) { modalError(error); }
+    finally { confirm.disabled = false; }
+  }, 'primary-button danger-button');
+  show(label + '?', [
+    el('p', '', room.supportAgent ? 'Remove the support contact and associated chats for both participants.' : 'Ask Support to remove the support contact and associated chats.'),
+    confirm, button('Cancel', closeModal, 'secondary-button')
+  ]);
+}
 try {
   privacyMode = localStorage.getItem('qzu-privacy') === '1';
 } catch {}
@@ -2378,9 +2553,15 @@ async function loop() {
 }
 updatePages();
 const boot=$('bootSplash');
-const bootMinimum=bootPending?new Promise(resolve=>{document.documentElement.classList.add('booting');boot.classList.add('boot-running');setTimeout(resolve,1150);}):Promise.resolve();
-async function finishBoot(){if(!bootPending)return;await bootMinimum;if(!bootPending)return;bootPending=false;boot.classList.add('boot-ready');await new Promise(resolve=>setTimeout(resolve,240));boot.remove();document.documentElement.classList.remove('booting');}
-if(!bootPending)boot.remove();getSession();
+function finishBoot() {
+  if (!bootPending) return;
+  bootPending = false;
+  boot.classList.add('boot-ready');
+  setTimeout(() => boot.remove(), 180);
+}
+if (bootPending) boot.classList.add('boot-running');
+else boot.remove();
+getSession();
 loop();
 
 
@@ -2550,14 +2731,15 @@ $('extensionNotice').addEventListener('click', () => {
   const room = state.rooms.find(item => item.id === selected);
   if (room?.extension) showExtension(room);
 });
-async function showFingerprint(room) {
-  try {
-    const result = await api('chat/fingerprint', { id: room.id });
-    if (selected !== room.id) return;
-    show('Device fingerprints', [el('p', '', 'Compare the entire code with your contact through a separate trusted channel.'), el('div', 'fingerprint-code', result.code.match(/.{1,4}/g).join(' ')), el('p', '', 'Based on server-registered device keys.'), button('Close', closeModal)]);
-  } catch (error) { showError(error); }
-}
-for(const id of ['profileAvatar','profileName'])$(id).addEventListener('click',()=>$('chatOptions').click());
+$('profileAvatar').addEventListener('click', () => {
+  const room = state.rooms.find(item => item.id === selected);
+  if (!room) return;
+  if (room.contact) { showContactManagement(room.contact); return; }
+  const title = nameFor(room);
+  const details = room.group ? [el('p', '', room.memberCount + ' members'), ...room.members.map(name => el('p', '', name))]
+    : [el('p', '', room.support ? 'Support conversation' : room.readOnly ? 'Read-only announcements' : 'Temporary conversation')];
+  show(title, [...details, button('Close', closeModal, 'secondary-button')]);
+});
 $('chatOptions').addEventListener('click', () => {
   const room = state.rooms.find(room => room.id === selected);
   if (!room) return;
@@ -2565,17 +2747,22 @@ $('chatOptions').addEventListener('click', () => {
     const control=(label,mode)=>button(label,async()=>{
       try {await api('support/lifetime',{id:room.id,mode});closeModal();await refresh();}catch(error){modalError(error);}
     },'secondary-button');
-    show('Support admin controls',[el('p','',room.deletionRequested?'The user has requested deletion.':'Manage retention for both participants.'),el('p','','Timers delete the conversation for both sides. +30 minutes adds to the existing timer, or starts a 30-minute timer if none is active.'),control('10 minutes from now','10m'),control('+30 minutes','30m'),control('24 hours from now','24h'),control('48 hours from now','48h'),control('Keep until deleted','keep'),button('Delete for both',()=>{$('deleteChat').click();},'primary-button danger-button'),button('Close',closeModal,'secondary-button')]);
+    show('Support admin controls',[el('p','',room.deletionRequested?'The user has requested deletion.':'Manage retention for both participants.'),el('p','','Timers delete the conversation for both sides. +30 minutes adds to the existing timer, or starts a 30-minute timer if none is active.'),control('10 minutes from now','10m'),control('+30 minutes','30m'),control('24 hours from now','24h'),control('48 hours from now','48h'),control('Keep until deleted','keep'),button('Delete chat',()=>confirmDeleteChat(room),'secondary-button danger-button'),button('Delete support contact',()=>confirmSupportContactDeletion(room),'secondary-button danger-button'),button('Close',closeModal,'secondary-button')]);
     return;
   }
   if (room.admin&&!room.support) return;
-  const profileMark=svg(room.peerRole==='admin'?'supportAvatar':room.group?'groupAvatar':'avatar','profile-transition-mark');
-  const controls = [profileMark,el('h3','profile-heading',nameFor(room))];
-  if(room.support){show('Chat options',[button('Report support conversation',()=>showReport(room),'secondary-button'),button('Close',closeModal,'secondary-button')]);return;}
+  const controls = [];
+  const removeLabel = room.mobileSupport || room.peerRole === 'admin' && !state.supportAgent ? 'Request chat deletion'
+    : room.group && !room.canInvite ? 'Leave group' : 'Delete chat';
+  if (room.support) {
+    controls.push(button('Report support conversation', () => showReport(room), 'secondary-button'),
+      button(removeLabel, () => confirmDeleteChat(room), 'secondary-button danger-button'));
+    if (room.mobileSupport) controls.push(button('Request contact deletion', () => confirmSupportContactDeletion(room), 'secondary-button danger-button'));
+    show('Chat options', [...controls, button('Close', closeModal, 'secondary-button')]);
+    return;
+  }
   if(room.group){for(const member of room.members||[])controls.push(button('Report '+member,()=>showReport(room,{member}),'secondary-button'));}else controls.push(button('Report contact',()=>showReport(room),'secondary-button'));
   if (!room.group) {
-    if(room.contact){controls.push(button(room.contact.personallyTrusted?'Remove trusted contact':'Add trusted contact',async()=>{try{await api('contacts/update',{id:room.contact.id,trusted:!room.contact.personallyTrusted});closeModal();await refresh();}catch(error){modalError(error);}},'secondary-button trusted-action'));controls.push(button('Manage contact',()=>showContactManagement(room.contact),'secondary-button'));controls.push(button('Delete Contact',()=>showContactManagement(room.contact),'secondary-button danger-button'));}
-    if (encryptionRequired(room) && directRoom(room)) controls.push(button('Verify encryption', () => showEncryption(room), 'secondary-button'));
     if (!room.extended) controls.push(button('Extend chat', () => showExtension(room), 'secondary-button'));
   }
   const confirm = member => {
@@ -2594,10 +2781,9 @@ $('chatOptions').addEventListener('click', () => {
   if (room.group) {
     for (const member of room.members || []) controls.push(button('Block ' + member, () => confirm(member), 'secondary-button'));
   } else if(room.peerRole!=='admin')controls.push(button('Block contact', () => confirm(null), 'secondary-button danger-button'));
-  controls.push(button('Close', closeModal, 'secondary-button'));
-  const origin=$('profileAvatar').getBoundingClientRect();
-  show('Contact information', controls);
-  if(motionAllowed()&&profileMark.animate){const target=profileMark.getBoundingClientRect();if(target.width&&origin.width)profileMark.animate([{transform:'translate('+((origin.left+origin.width/2)-(target.left+target.width/2))+'px,'+((origin.top+origin.height/2)-(target.top+target.height/2))+'px) scale('+origin.width/target.width+')',opacity:.6},{transform:'none',opacity:1}],{duration:260,easing:'cubic-bezier(.2,.8,.2,1)'});}
+  controls.push(button(removeLabel, () => confirmDeleteChat(room), 'secondary-button danger-button'),
+    button('Close', closeModal, 'secondary-button'));
+  show('Chat options', controls);
 });
 
 $('blockedContacts').addEventListener('click', async () => {
@@ -3058,9 +3244,12 @@ $('updateCenter').addEventListener('click', async () => {
   if(playBuild){info('Update center','Installed: '+installedVersion+'. Updates are delivered by Google Play.');return;}
   try {
     const release = await api('version');
-    if (newerVersion(release.latest)) { pendingUpdate = release; showUpdatePrompt(release); return; }
+    if (native && newerVersion(release.latest)) { pendingUpdate = release; showUpdatePrompt(release); return; }
     const changes=el('ul','update-changes');for(const change of release.changes||[release.notes])if(change)changes.append(el('li','',change));
-    show('Update center', [el('strong', '', 'You are up to date'), el('p', '', 'Installed: ' + installedVersion + ' · Server release: ' + release.latest),changes, button('Close', closeModal)]);
+    const description = native
+      ? 'Installed: ' + (installedVersion || 'Unknown') + ' · Server release: ' + release.latest
+      : 'Web release ' + release.latest;
+    show('Update center', [el('p', '', description),changes, button('Close', closeModal)]);
   } catch (error) { showError(error); }
 });
 let pushPlugin=null,pushListenersReady=false,pushRetryAt=0,pushRegisterJob=null,pushRemovalJob=null;
@@ -3239,8 +3428,74 @@ function showAccountRecovery(){
  const submit=button('Recover account',async()=>{if(!check.checked)return;submit.disabled=true;try{const result=await api('access/recover',{code:code.value.trim().toUpperCase(),pin:pin.value,confirmed:true});if(!result.ok)throw Error('Recovery unavailable.');code.value='';pin.value='';forgetInvoice(false);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=false;showLogin();}catch(e){dialogError(e);submit.disabled=false;}});
  showCheckout('Recover account',[el('p','','Enter the recovery code saved on your old device and your existing login PIN.'),code,pin,label,submit,button('Back',showAccess,'secondary-button')]);
 }
+function showAccessKeyOptions() {
+  showCheckout('qzu-Access', [
+    el('p', '', 'Enter your existing access key to continue.'),
+    button('Redeem Key', () => showKeyEntry(false)),
+    button('Recover account', showAccountRecovery, 'secondary-button'),
+    ...legalButtons()
+  ]);
+}
+
+function showKeyEntry(renewal, handleKey = null) {
+  const input = el('input', 'access-key-input');
+  const label = renewal ? 'Renewal key' : playBuild ? 'Access key' : 'Access key or order reference';
+  input.placeholder = label;
+  input.setAttribute('aria-label', label);
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.maxLength = renewal ? 52 : 59;
+  const submit = button('Continue', async () => {
+    const epoch = checkoutEpoch;
+    const value = input.value.trim().toUpperCase();
+    submit.disabled = true;
+    try {
+      if (handleKey && await handleKey(value)) return;
+      if (!/^(QZU-[A-F0-9]{48}|QZU-ADMIN-[A-F0-9]{48}|QZU-SELLER-[A-F0-9]{48}|QZU-REVIEW-[A-F0-9]{40})$/.test(value)) throw Error('Enter a valid access key.');
+      if (epoch !== checkoutEpoch) return;
+      const result = await api('session', {accessKey:value});
+      if (epoch !== checkoutEpoch) return;
+      if (result.accessRequired || typeof result.needsSetup !== 'boolean') throw Error('Key activation unavailable.');
+      input.value = '';
+      forgetInvoice(false);
+      delete modal.dataset.checkout;
+      stopCheckout();
+      sessionReady = true;
+      needsSetup = result.needsSetup;
+      showLogin();
+    } catch (error) {
+      if (epoch === checkoutEpoch) dialogError(error);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  showCheckout(label, [input, submit, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
+}
+
+async function finishRenewal(orderKey) {
+  const data = await refresh(false, {restoreAccess:true});
+  if (!data?.access?.active) throw Error('Unable to confirm renewed access. Try again.');
+  if (orderKey) completeInvoice(true, orderKey);
+  else forgetInvoice(true);
+}
+
+function continueRedeemedOrder(renewal, secret) {
+  return button('Continue', async () => {
+    if (renewal) {
+      try { await finishRenewal(secret); }
+      catch (error) { dialogError(error); }
+      return;
+    }
+    completeInvoice(false, secret);
+    delete modal.dataset.checkout;
+    stopCheckout();
+    modalLocked = false;
+    await getSession();
+  });
+}
+
 function showAccess(){
- if(playBuild){showCheckout('qzu-Access',[el('p','','Enter your existing access key to continue.'),button('Redeem Key', () => showKeyEntry(false)),button('Recover account',showAccountRecovery,'secondary-button'),...legalButtons()]);return;}
+ if(playBuild){showAccessKeyOptions();return;}
  const saved=savedInvoice(false);if(saved){showInvoice(saved,null,false);return;}showPlanCheckout(false);
 }
 function checkoutHeading(step,title,description=''){
@@ -3279,7 +3534,7 @@ function showPlanCheckout(renewal){
   purchase.disabled=busy||!available.has(coin);purchase.textContent=busy?'Preparing…':'Continue · $'+checkoutPrice(plan)+'  →';
  }
  const footer=el('div','pay-minilinks');
- footer.append(button(renewal?'Renewal key':'Redeem key',()=>showKeyEntry(renewal),'pay-link'));
+ footer.append(button(renewal?'Renewal key':'Redeem key',()=>showDirectKeyEntry(renewal),'pay-link'));
  if(!renewal)footer.append(button('Recover account',showAccountRecovery,'pay-link'));
  if(saved.orders.some(o=>!['redeemed','archived'].includes(o.stage)))footer.append(button('Saved orders',()=>showSavedOrders(renewal),'pay-link'));
  if(renewal)footer.append(button(accessDue?'Lock':'Close',()=>{modalLocked=false;if(accessDue){delete modal.dataset.checkout;checkoutReturn=null;lock();}else closeModal();},'pay-link'),button('Delete account',showDeleteAccount,'pay-link'));
@@ -3288,29 +3543,22 @@ function showPlanCheckout(renewal){
  api('access/methods',undefined,true).then(data=>{if(!body.contains(shell))return;available=new Set(data.coins.filter(c=>c.available).map(c=>c.coin));if(!available.has(coin)&&available.size)coin=[...available][0];notice.textContent=available.size?'':'Payments temporarily unavailable.';renderChoice();}).catch(()=>{if(body.contains(shell))notice.textContent='Connection unavailable.';});
 }
 
-function showKeyEntry(renewal) {
-  const input = el('input', 'access-key-input');
-  input.placeholder = 'Use Access-Key';
-  input.setAttribute('aria-label', 'Use Access-Key');
-  input.autocomplete = 'off';
-  input.spellcheck = false;
-  input.maxLength = renewal ? 52 : 59;
-  const submit = button('Continue', async () => {
-    const value = input.value.trim().toUpperCase();
-    if(renewal&&/^QZU-[A-F0-9]{48}$/.test(value)){submit.disabled=true;try{await api('access/renew',{key:value});forgetInvoice(true);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}catch(e){dialogError(e);submit.disabled=false;}return;}
-    if(!renewal&&(/^QZU-ADMIN-[A-F0-9]{48}$/.test(value)||/^QZU-SELLER-[A-F0-9]{48}$/.test(value)||/^QZU-REVIEW-[A-F0-9]{40}$/.test(value)||(playBuild&&/^QZU-[A-F0-9]{48}$/.test(value)))){
-      submit.disabled=true;
-      try{
-        const result=await api('session',{accessKey:value});
-        if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Key activation unavailable.');
-        input.value='';forgetInvoice(false);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();
-      }catch(error){dialogError(error);submit.disabled=false;}
-      return;
-    }
-    if (playBuild || !/^QZ[UO]-[A-F0-9]{48}$/.test(value)) return dialogError(new Error('Enter a valid key.'));
-    try{rememberInvoice(value, renewal);showInvoice(value, null, renewal);}catch(e){dialogError(e);}
+function showDirectKeyEntry(renewal) {
+  if (!renewal) {
+    showKeyEntry(false, async value => {
+      if (!/^QZO-[A-F0-9]{48}$/.test(value)) return false;
+      rememberInvoice(value, false);
+      showInvoice(value, null, false);
+      return true;
+    });
+    return;
+  }
+  showKeyEntry(true, async value => {
+    if (!/^QZU-[A-F0-9]{48}$/.test(value)) throw Error('Enter a valid renewal key.');
+    await api('access/renew', {key:value});
+    await finishRenewal();
+    return true;
   });
-  showCheckout('Use Access-Key', [input, submit, button('Back', renewal ? showRenewal : showAccess, 'secondary-button')], renewal);
 }
 
 function showRenewal(){
@@ -3339,12 +3587,12 @@ function showInvoice(secret,initial,renewal){
   current=invoice;serverOffset=invoice.now-Date.now();
   const approved=invoice.state==='confirmed'&&!invoice.redeemed&&invoice.activationKey;
   persist({stage:invoice.redeemed?'redeemed':'order',plan:invoice.plan,coin:invoice.coin,usd:invoice.usd,legacy:!invoice.coin,serverState:invoice.state,priceLabel:invoice.usd?'$'+invoice.usd:'€'+invoice.euro});
-  const fp=JSON.stringify([invoice.state,invoice.redeemed,invoice.activationKey,invoice.ticketReleased,invoice.confirmations,invoice.txid,invoice.amount,Boolean(invoice.qr)]);
+  const fp=JSON.stringify([invoice.state,invoice.redeemed,invoice.activationKey,invoice.ticketReleased,invoice.confirmations,invoice.needsReview,invoice.txid,invoice.amount,Boolean(invoice.qr)]);
   if(fp===lastFingerprint){updateTimer();return;}lastFingerprint=fp;details.replaceChildren();controls.replaceChildren();
   const legacy=!invoice.coin&&secret.startsWith('QZO-'),expired=invoice.state==='expired';
-  setHeading(approved||invoice.redeemed?2:1,approved?'Payment verified':invoice.redeemed?'Access activated':legacy?'Previous legacy order':invoice.state==='submitted'?'Verifying payment':expired?'Payment window ended':'Complete your payment',approved?'Your access is ready to activate.':legacy?'Previous EUR order.':'');
+  setHeading(approved||invoice.redeemed?2:1,approved?'Payment verified':invoice.redeemed?'Access activated':legacy?'Previous legacy order':invoice.needsReview?'Support review needed':invoice.state==='submitted'?'Verifying payment':expired?'Payment window ended':'Complete your payment',approved?'Your access is ready to activate.':legacy?'Previous EUR order.':'');
   status.className='pay-status '+(approved||invoice.redeemed?'success':invoice.state==='submitted'?'waiting':expired||legacy?'warning':'');
-  status.replaceChildren(el('span','pay-status-dot'),el('strong','',invoice.redeemed?'Activated':approved?(invoice.coin?'Confirmed on blockchain':secret.startsWith('QZO-')?'Payment approved':'Access key verified'):invoice.state==='submitted'?'Waiting for confirmations':expired?'Quote expired':invoice.state==='rejected'?'Payment rejected':invoice.state==='pending'?'Awaiting payment':invoice.state));
+  status.replaceChildren(el('span','pay-status-dot'),el('strong','',invoice.redeemed?'Activated':approved?(invoice.coin?'Confirmed on blockchain':secret.startsWith('QZO-')?'Payment approved':'Access key verified'):invoice.needsReview?'Automatic checking ended':invoice.state==='submitted'?'Waiting for confirmations':expired?'Quote expired':invoice.state==='rejected'?'Payment rejected':invoice.state==='pending'?'Awaiting payment':invoice.state));
   const order=el('div','pay-order-summary');order.append(el('div','',checkoutName(invoice.plan)),el('strong','',invoice.usd?'$'+invoice.usd:legacy?'€'+invoice.euro:'Access key'));details.append(order);
   if(invoice.ticketRequired&&!invoice.redeemed&&invoice.state==='confirmed'&&!invoice.activationKey){
    details.append(el('div','pay-success-mark','✓'),el('p','pay-note','Payment verified. Open your ticket for key delivery.'));
@@ -3352,10 +3600,10 @@ function showInvoice(secret,initial,renewal){
   }else if(approved){
    const keyBox=el('div','pay-success-box');keyBox.append(el('div','pay-success-mark','✓'),el('h3','','Your activation key'),el('p','access-address',invoice.activationKey),copy('Copy key',invoice.activationKey));details.append(keyBox);
    const activate=button(renewal?'Apply access':'Activate account',async()=>{if(busy)return;setBusy(true);activate.disabled=true;try{
-    if(renewal){await api('access/renew',{key:invoice.activationKey});completeInvoice(true,secret);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}
+    if(renewal){await api('access/renew',{key:invoice.activationKey});await finishRenewal(secret);}
     else{const result=await api('session',{accessKey:invoice.activationKey});if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Activation unavailable.');completeInvoice(false,secret);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();}
    }catch(e){if(active())errorLine.textContent=errorMessage(e);}finally{setBusy(false);activate.disabled=false;}},'primary-button pay-primary');controls.append(activate);if(invoice.coin&&record?.ticketStatus==='completed')controls.append(button('Open new ticket',()=>showPaymentTicket(secret,renewal,true),'pay-link'));
-  }else if(invoice.redeemed){completeInvoice(renewal,secret);controls.append(button('Continue',()=>{delete modal.dataset.checkout;stopCheckout();modalLocked=false;if(renewal){closeModal();refresh().catch(()=>{});}else getSession();}));}
+  }else if(invoice.redeemed){controls.append(continueRedeemedOrder(renewal,secret));}
   else if(['pending','submitted','expired'].includes(invoice.state)&&secret.startsWith('QZO-')){
    if(legacy){details.append(el('p','pay-warning','Do not send a new payment to this old order. If already paid, submit its original transaction ID for review. Create a new USD order from All plans.'));}
    else if(invoice.state==='pending'){
@@ -3363,7 +3611,8 @@ function showInvoice(secret,initial,renewal){
     if(invoice.qr){const qr=el('div','pay-qr-frame'),image=el('img');image.src=invoice.qr;image.alt='QR code for the exact payment amount';qr.append(image);details.append(qr);}
     const addr=el('div','pay-address');addr.append(el('small','','RECEIVING ADDRESS · '+invoice.coin),el('p','access-address',invoice.address),copy('Copy address',invoice.address));details.append(addr,el('p','pay-warning','Send only '+invoice.coin+' on its native network. Fees are separate.'));
    }else if(expired){details.append(el('p','pay-warning','Do not send a new payment. If you already paid, submit your transaction ID. Delayed blockchain inclusion may be reviewed for up to 24 hours after the quote expired.'));}
-   if(invoice.state==='submitted'){
+   if(invoice.needsReview){details.append(el('p','pay-warning','Contact Support in your payment ticket to review this payment. If you already paid, do not send a second payment.'));}
+   else if(invoice.state==='submitted'){
     const count=invoice.confirmations||0,required=invoice.requiredConfirmations||0,progress=el('div','pay-confirmation');
     progress.append(el('strong','',legacy?'Manual review':count+' / '+required+' confirmations'),el('p','pay-note','You can close the app. Do not pay twice.'));
     if(required){const track=el('div','pay-progress');for(let i=0;i<required;i++)track.append(el('span',i<count?'':'',i<count?'filled':''));progress.append(track);}details.append(progress);
@@ -3412,15 +3661,16 @@ function showPaymentTicket(secret,renewal,fresh=false){
  const closedPanel=el('div','pay-ticket-closed');closedPanel.hidden=true;closedPanel.append(el('p','','You can’t write here.'),button('Close Ticket',backToPayment,'primary-button'));composer.append(attach,field,send,file);root.append(head,list,notice,composer,closedPanel);
  showCheckout('Payment Ticket',[root],renewal);
  const epoch=checkoutEpoch,active=()=>epoch===checkoutEpoch&&body.contains(root);
- let current=null,last='',polling=false,busy=false,opened=false,mutation=0,pending=null;let ticketId=checkoutOrder(renewal,secret)?.ticketId||null;let wantFresh=Boolean(checkoutOrder(renewal,secret)?.ticketFresh);
+ let current=null,last='',polling=false,busy=false,mutation=0,pending=null;let ticketId=checkoutOrder(renewal,secret)?.ticketId||null;let wantFresh=Boolean(checkoutOrder(renewal,secret)?.ticketFresh);
  function setBusy(v){busy=v;if(v)mutation++;attach.disabled=v;send.disabled=v;}
  async function request(path,data={}){return api('access/ticket/'+path,{key:secret,ticketId,...data},true);}
  function render(t){
   if(!active())return;current=t;ticketId=t.id;wantFresh=false;try{updateCheckoutOrder(renewal,secret,{ticketId:t.id,ticketFresh:false,ticketStatus:t.status});}catch{}
-  const key=JSON.stringify([t.messages.map(m=>m.id),t.state,t.txid,t.confirmations,t.released,t.closed,t.activationKey,t.redeemed,t.status,t.reason]);if(key===last)return;last=key;
+  const key=JSON.stringify([t.messages.map(m=>m.id),t.state,t.txid,t.confirmations,t.needsReview,t.released,t.closed,t.activationKey,t.redeemed,t.status,t.reason]);if(key===last)return;last=key;
   const pinned=list.scrollHeight-list.scrollTop-list.clientHeight<85,top=list.scrollTop;
-  const info=el('div','pay-ticket-system');info.append(el('strong','',checkoutName(t.plan)+' · $'+t.usd+' · '+t.coin),el('small','',t.status==='rejected'?'Ticket rejected':t.status==='completed'?'Ticket completed':t.status==='review'?'Under review':t.state==='confirmed'?'Payment verified':t.txid?'Verification pending':'Send your transaction ID and proof.'));list.replaceChildren(info);if(t.reason)list.append(el('p','pay-ticket-system pay-ticket-rejected',t.reason));
-  if(!t.messages.length&&!t.closed)list.append(el('div','pay-ticket-bubble other','Welcome! Please send your transaction ID and a payment screenshot if needed.'));
+  const info=el('div','pay-ticket-system');info.append(el('strong','',checkoutName(t.plan)+' · $'+t.usd+' · '+t.coin),el('small','',t.status==='rejected'?'Ticket rejected':t.status==='completed'?'Ticket completed':t.status==='review'?'Under review':t.state==='confirmed'?'Payment verified':t.needsReview?'Support review needed':t.txid?'Verification pending':'Send your transaction ID and proof.'));list.replaceChildren(info);if(t.reason)list.append(el('p','pay-ticket-system pay-ticket-rejected',t.reason));
+  if(t.needsReview&&!t.closed)list.append(el('p','pay-ticket-system','Automatic checking has ended. Correct the transaction ID if you entered it incorrectly, or message Support here. If you already paid, do not send a second payment.'));
+  if(!t.messages.length&&!t.closed&&!t.needsReview)list.append(el('div','pay-ticket-bubble other','Send your transaction ID and add a screenshot if Support requests proof.'));
   for(const m of t.messages){
    const b=el('div','pay-ticket-bubble '+(m.actor==='customer'?'mine':'other'));
    if(m.actor!=='customer')b.append(el('small','pay-ticket-agent','qzu-Support'));
@@ -3433,10 +3683,10 @@ function showPaymentTicket(secret,renewal,fresh=false){
   }else if(t.txid&&!t.closed&&t.state==='submitted'&&!t.confirmations){list.append(button('Change transaction ID',()=>{if(list.querySelector('.pay-ticket-correct'))return;const form=el('form','pay-ticket-system pay-ticket-correct'),input=el('input','access-key-input');input.value=t.txid;input.maxLength=88;input.setAttribute('aria-label','Correct transaction ID');const submit=el('button','primary-button','Update');form.append(input,submit);form.addEventListener('submit',async e=>{e.preventDefault();if(busy)return;setBusy(true);try{render(await request('transaction',{txid:input.value.trim()}));form.remove();}catch(e){notice.textContent=errorMessage(e);}finally{setBusy(false);}});list.append(form);input.focus();},'pay-link'));}
   if(t.activationKey&&!t.redeemed){
    const b=el('div','pay-ticket-bubble other');b.append(el('small','pay-ticket-agent','qzu-Support'),el('p','','Payment verified. Your key is ready.'),el('p','access-address',t.activationKey),button('Copy key',()=>navigator.clipboard.writeText(t.activationKey).catch(()=>{}),'pay-proof-link'));
-   const activate=button(renewal?'Apply access':'Activate account',async()=>{if(busy)return;setBusy(true);activate.disabled=true;try{if(renewal){await api('access/renew',{key:t.activationKey});completeInvoice(true,secret);accessDue=false;modalLocked=false;closeModal();updatePages();await refresh();}else{const result=await api('session',{accessKey:t.activationKey});if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Activation unavailable.');completeInvoice(false,secret);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();}}catch(e){if(active())notice.textContent=errorMessage(e);}finally{setBusy(false);activate.disabled=false;}},'primary-button');b.append(activate);list.append(b);
+   const activate=button(renewal?'Apply access':'Activate account',async()=>{if(busy)return;setBusy(true);activate.disabled=true;try{if(renewal){await api('access/renew',{key:t.activationKey});await finishRenewal(secret);}else{const result=await api('session',{accessKey:t.activationKey});if(result.accessRequired||typeof result.needsSetup!=='boolean')throw Error('Activation unavailable.');completeInvoice(false,secret);delete modal.dataset.checkout;stopCheckout();sessionReady=true;needsSetup=result.needsSetup;showLogin();}}catch(e){if(active())notice.textContent=errorMessage(e);}finally{setBusy(false);activate.disabled=false;}},'primary-button');b.append(activate);list.append(b);
   }
   composer.hidden=t.closed||t.redeemed;closedPanel.hidden=!t.closed;closedPanel.classList.toggle('rejected',t.status==='rejected');
-  if(t.redeemed){completeInvoice(renewal,secret);list.append(button('Continue',()=>{delete modal.dataset.checkout;stopCheckout();modalLocked=false;if(renewal){closeModal();refresh().catch(()=>{});}else getSession();}));}
+  if(t.redeemed)list.append(continueRedeemedOrder(renewal,secret));
   requestAnimationFrame(()=>{if(active())list.scrollTop=pinned?list.scrollHeight:top;});
  }
  async function sendText(proof=null){
@@ -3447,7 +3697,7 @@ function showPaymentTicket(secret,renewal,fresh=false){
  }
  file.addEventListener('change',async()=>{const selected=file.files?.[0];file.value='';if(!selected||busy)return;setBusy(true);try{const cleaned=await QzuMetadata.cleanImage(selected);const bytes=new Uint8Array(await cleaned.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192));if(!active())return;setBusy(false);await sendText(btoa(binary));}catch(e){if(active())notice.textContent=errorMessage(e);}finally{setBusy(false);}});
  field.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendText();}});
- async function tick(){if(!active()||polling||document.hidden)return;clearTimeout(accessTimer);polling=true;try{if(!busy){const observed=mutation,t=await request(ticketId?'state':'open',ticketId?{}:{fresh:wantFresh});if(active()&&observed===mutation&&!busy){opened=true;render(t);notice.textContent='';}}}catch(e){if(active())notice.textContent=errorMessage(e)+' · Tap to retry.';}finally{polling=false;if(active()&&!current?.closed)accessTimer=setTimeout(tick,5000);}}
+ async function tick(){if(!active()||polling||document.hidden)return;clearTimeout(accessTimer);polling=true;try{if(!busy){const observed=mutation,t=await request(ticketId?'state':'open',ticketId?{}:{fresh:wantFresh});if(active()&&observed===mutation&&!busy){render(t);notice.textContent='';}}}catch(e){if(active())notice.textContent=errorMessage(e)+' · Tap to retry.';}finally{polling=false;if(active()&&!current?.closed)accessTimer=setTimeout(tick,5000);}}
  notice.addEventListener('click',tick);resumeCheckout=tick;tick();
 }
 
@@ -3471,7 +3721,7 @@ function renderTicketList(items,completed=[]){
  if(ticketLast){try{const old=JSON.parse(ticketLast);if(Array.isArray(old)&&old.some(t=>completed.includes(t.id)&&!t.closed))showActivityBanner('Ticket completed');}catch{}}
  items=items.filter(t=>!t.closed);
  const root=$('userTicketContent');if(!state.supportAgent&&!items.length){ticketLast='[]';renderNewUserTicket(true);return;}const key=JSON.stringify(items);if(ticketLast===key)return;ticketLast=key;root.replaceChildren();
- if(state.supportAgent){root.append(el('p','pay-note','Manage tickets in qzu. Control.'));return;}
+ if(state.supportAgent){root.append(button('Open ticket queue',()=>openControlCenter('Tickets')));return;}
  const list=el('div','user-ticket-list');for(const t of items){const row=button('',()=>ticketNavigate('chat',t.id),'user-ticket-row');row.append(svg('ticketIcon','user-ticket-icon'),el('span','user-ticket-title',t.topic+' · #'+t.id.slice(0,6)),el('small',t.closed?'ticket-solved':'ticket-open',t.closed?'Solved':t.assigned?'Open':'Pending'));list.append(row);}
  root.append(list);
  if(!items.some(t=>t.mine==='customer'&&!t.closed))root.append(button('New Ticket',()=>ticketNavigate('new'),'primary-button user-ticket-new'));
@@ -3485,7 +3735,7 @@ function renderNewUserTicket(isDefault=false){
 function renderUserTicket(t,epoch,auth){
  if(t.closed){showActivityBanner('Ticket completed');ticketNavigate('list');return;}
  const root=$('userTicketContent');let feed=root.querySelector('.user-ticket-feed'),field=root.querySelector('textarea'),send=root.querySelector('.user-ticket-send'),notice=root.querySelector('.user-ticket-notice');
- if(!feed){root.replaceChildren();const head=el('div','user-ticket-head');head.append(button('‹',()=>ticketNavigate('list'),'secondary-button'),el('strong','',t.topic+' · #'+t.id.slice(0,6)));feed=el('div','user-ticket-feed');field=el('textarea','edit-input');field.placeholder='Message…';field.maxLength=2000;field.value=ticketDraft;field.oninput=()=>ticketDraft=field.value;notice=el('p','pay-note user-ticket-notice');
+ if(!feed){root.replaceChildren();const head=el('div','user-ticket-head');const back=button('‹',()=>ticketNavigate('list'),'secondary-button');back.setAttribute('aria-label','Back to tickets');head.append(back,el('strong','',t.topic+' · #'+t.id.slice(0,6)));feed=el('div','user-ticket-feed');field=el('textarea','edit-input');field.placeholder='Message…';field.maxLength=2000;field.value=ticketDraft;field.oninput=()=>ticketDraft=field.value;notice=el('p','pay-note user-ticket-notice');
  const composer=el('form','user-ticket-compose');send=el('button','primary-button user-ticket-send','Send');composer.append(field,send);root.append(head,feed,notice,composer);
  composer.onsubmit=async e=>{e.preventDefault();const text=field.value.trim();if(!text||ticketBusy)return;ticketBusy=true;send.disabled=true;if(!ticketPending||ticketPending.text!==text)ticketPending={text,requestId:crypto.randomUUID()};try{const data=await api('tickets/send',{id:t.id,...ticketPending},true);if(ticketAlive(epoch,auth)){if(field.value.trim()===text){field.value='';ticketDraft='';}ticketPending=null;renderUserTicket(data,epoch,auth);feed.scrollTop=feed.scrollHeight;}}catch(e){if(ticketAlive(epoch,auth))notice.textContent=errorMessage(e);}finally{if(ticketAlive(epoch,auth)){ticketBusy=false;send.disabled=field.disabled;}}};
  }

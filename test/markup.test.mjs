@@ -19,13 +19,14 @@ test('send arrow identifies the button, not the SVG symbol', () => {
 
 test('key redemption uses neutral wording without exposing admin key types', () => {
   assert.ok(app.includes("button('Redeem Key', () => showKeyEntry(false)"));
-  assert.ok(app.includes("input.placeholder = 'Use Access-Key'"));
-  assert.ok(app.includes("showCheckout('Use Access-Key'"));
+  assert.ok(app.includes("playBuild ? 'Access key' : 'Access key or order reference'"));
   assert.ok(!app.includes('Access or admin key'));
 });
 
-test('Help provides concise notes and an actionable support inbox', () => {
-  assert.match(html, /<ul class="support-help-notes">\s*<li>Contact Support for assistance\.<\/li>\s*<li>Support manages chat retention and deletion\.<\/li>\s*<\/ul>/);
+test('Help offers support chat and tickets and explains chat restarts', () => {
+  assert.match(html, /<li>Temporary chats end when the server restarts\.<\/li>/);
+  assert.ok(app.includes("button('Support chat', confirmSupport)"));
+  assert.ok(app.includes("button('Open tickets'"));
   assert.ok(app.includes("supportRequestsLink').hidden = !state.supportAgent"));
   assert.match(html, /id="supportRequestsLink"[^>]*hidden/);
   assert.ok(app.includes("api('support/respond',{id:request.id,action})"));
@@ -54,7 +55,7 @@ test('bottom navigation and profile controls exist',()=>{assert.match(html,/id="
 
 test('media shortcuts and text-free launch screen are wired',()=>{assert.match(html,/id="cameraShortcut"/);assert.match(html,/id="voiceShortcut"/);assert.ok(app.includes("$('cameraShortcut').addEventListener"));assert.ok(app.includes("voiceControl.addEventListener('pointerdown'"));assert.doesNotMatch(html,/SYSTEM BOOT|Approved design direction|COMMUNICATION \/ REDEFINED/);});
 
-test('startup defers authentication and background lock is optional',()=>{assert.match(html,/id="backgroundPin"/);assert.ok(app.includes('await finishBoot();'));assert.ok(app.includes('setTimeout(resolve,1150)'));assert.ok(app.includes("if (bootPending || document.hidden || unlockToken || !sessionReady) return;"));assert.ok(app.includes("api('login/background-lock'"));assert.ok(app.includes("room.encryption.offline||room.encryption.peerConfirmed"));});
+test('startup transitions when the session arrives and background lock is optional',()=>{assert.match(html,/id="backgroundPin"/);assert.ok(app.includes('finishBoot();'));assert.ok(!app.includes('setTimeout(resolve,1150)'));assert.ok(app.includes("if (bootPending || document.hidden || unlockToken || !sessionReady) return;"));assert.ok(app.includes("api('login/background-lock'"));assert.ok(app.includes("room.encryption.offline||room.encryption.peerConfirmed"));});
 
 test('notification settings provide a single opt-out switch without the test popup',()=>{assert.match(html,/id="privateNotifications" type="checkbox"/);assert.ok(app.includes("$('privateNotifications').addEventListener('change'"));assert.ok(!app.includes('Native notification test timed out'));assert.ok(!app.includes("button('Test local notification'"));assert.ok(app.includes("localStorage.setItem('qzu-push-opt-out','1')"));});
 
