@@ -2412,7 +2412,13 @@ html.booting dialog{visibility:hidden}
 
 .connection-strip{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--sub);color:var(--muted);font-size:12px;padding:0 12px;flex:none}.connection-strip:has(>[hidden]+[hidden]){display:none}.connection-strip #connectionState:not([hidden]){padding:8px 0}.connection-strip .secondary-button{font-size:11px;padding:5px 8px;min-height:0}
 
-.pending-row .pending-status{font-size:10px;color:inherit;opacity:.78}.pending-row .bubble{opacity:.9}
+.pending-row .message-footer{flex-wrap:wrap;gap:5px}
+.pending-status{font-size:11px;color:inherit;opacity:.9}
+.pending-row[data-outgoing-state=failed] .pending-status{font-weight:700}
+.pending-error{max-width:35ch;margin:4px 0 0;font-size:11px;line-height:1.35;overflow-wrap:anywhere}
+.outgoing-list{display:grid;gap:8px}
+.outgoing-list-item time{color:var(--muted);font-size:12px}
+.outgoing-actions{display:flex;flex-wrap:wrap;gap:8px}
 
 .once-content{white-space:pre-wrap;overflow-wrap:anywhere;user-select:none;-webkit-user-select:none}
 
@@ -2521,6 +2527,49 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .report-transcript .snapshot-mine{align-self:flex-end;background:var(--active)}
 .report-transcript .snapshot-other{align-self:flex-start;background:var(--sub)}
 .report-transcript .reported{outline:1px solid var(--accent)}
+.my-report-panel,.my-reports-list,.my-report-followups,.my-report-thread,.my-report-form {
+  display:grid;
+  gap:10px;
+  min-width:0;
+}
+.my-report-heading,.my-report-row,.my-report-step {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.my-report-row,.my-report-thread {
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  background:var(--surface);
+}
+.my-report-row {
+  width:100%;
+  text-align:left;
+  color:var(--ink);
+  cursor:pointer;
+}
+.my-report-row:hover { background:var(--hover); }
+.my-report-row-info { display:grid; gap:4px; }
+.my-report-row-info small,.my-report-thread small,.my-report-step :is(time,span) { color:var(--muted); }
+.my-report-state { color:var(--accent); font-size:.82rem; font-weight:700; text-align:right; }
+.my-report-timeline {
+  display:grid;
+  list-style:none;
+  margin:0;
+  padding:0;
+}
+.my-report-step { padding:10px 0; border-bottom:1px solid var(--line); }
+.my-report-step[aria-current=step] { color:var(--accent); }
+.my-report-step:not(.complete) strong { color:var(--muted); }
+.my-report-step :is(time,span) { font-size:.82rem; text-align:right; }
+.my-report-thread p { white-space:pre-wrap; overflow-wrap:anywhere; margin:0; }
+.my-report-reply,.my-report-form { padding-top:10px; border-top:1px solid var(--line); }
+.my-report-reply > small { display:block; margin:4px 0; }
+.my-report-form label { display:grid; gap:6px; }
+.my-report-form textarea { width:100%; resize:vertical; }
+.my-report-form-status { color:var(--muted); }
 
 #bootSplash{position:fixed;inset:0;z-index:10000;background:#050505;overflow:hidden;pointer-events:none;display:none}
 #bootSplash.boot-running{display:block;animation:none;pointer-events:auto}
@@ -2642,14 +2691,17 @@ dialog.attachment-sheet:not(.pin-screen){border-radius:24px 24px 0 0;margin:auto
 .new-messages svg { width: 15px; height: 15px; transform: rotate(90deg); }
 .expiry:hover { background: var(--hover); color: var(--ink); }
 .pending-retry {
-  min-height: 28px;
+  min-height: 30px;
   padding: 2px 7px;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  color: var(--danger);
+  color: var(--ink);
+  background: var(--sub);
   font-size: 12px;
   font-weight: 650;
 }
 .pending-retry:hover { background: var(--hover); }
+.pending-retry:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .composer-dock {
   display: grid;
   gap: 5px;

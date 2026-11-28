@@ -270,6 +270,22 @@
  white-space:pre-wrap;
  overflow-wrap:anywhere;
 }
+.cc-report-correspondence,.cc-report-follow-up,.cc-report-reply,.cc-report-follow-up-label {
+  display:grid;
+  gap:.45rem;
+}
+.cc-report-follow-up {
+  padding:.8rem;
+  border:1px solid var(--cc-line,#343743);
+  border-radius:.7rem;
+}
+.cc-report-reply {
+  border-top:1px solid var(--cc-line,#343743);
+  padding-top:.65rem;
+}
+.cc-report-follow-up-label {
+  margin-top:.55rem;
+}
 
 .cc-record-id {
  display:flex;

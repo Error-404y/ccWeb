@@ -63,7 +63,7 @@ test('motion update respects reduced motion and exposes outgoing queue and real 
  const css=readFileSync(new URL('../public/style.css',import.meta.url),'utf8');
  assert.match(html,/id="inviteProgress"/);assert.match(html,/id="connectionState"/);assert.match(html,/id="manageOutbox"/);
  assert.match(css,/ignitionGlow/);assert.match(css,/prefers-reduced-motion:reduce/);assert.ok(app.includes("motion(row,'motion-message')"));
- assert.ok(app.includes('outbox.set(requestId,{room:id,payload,binding:'));assert.ok(app.includes('outbox.clear()'));
+ assert.ok(app.includes('outbox.set(requestId,{room:id,payload:'));assert.ok(app.includes('outbox.clear()'));
  assert.ok(app.includes("window.addEventListener('offline', () => {\n  markDisconnected();"));
 });
 test('Android notification setup prompts once by default and respects opt-out',()=>{

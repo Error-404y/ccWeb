@@ -244,7 +244,9 @@
             <div class="settings-row"><svg><use href="#clock"/></svg><span>Chat lifetime</span><strong>24 hours</strong></div>
           </div>
           <div class="panel settings-panel" data-settings-category="notifications" hidden><h1>Notifications</h1>            <div class="settings-row"><svg><use href="#lock"/></svg><span>Message notifications</span><label class="privacy-switch"><input id="privateNotifications" type="checkbox" aria-label="Message notifications" checked><span></span></label></div>
-<p id="pushStatus" class="background-pin-note" role="status">Notification delivery also depends on your device permissions.</p></div>
+<p id="pushStatus" class="background-pin-note" role="status">Notification delivery also depends on your device permissions.</p>
+            <button class="settings-row" id="sellerStockAlerts" type="button" hidden><svg aria-hidden="true"><use href="#clock"/></svg><span>Seller stock alerts</span><svg aria-hidden="true" class="chevron"><use href="#chevron"/></svg></button>
+          </div>
           <div class="panel settings-panel" data-settings-category="connections" hidden><h1>Connections</h1>            <button class="settings-row" id="manageContacts"><svg><use href="#avatar"/></svg><span>Manage contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
             <button class="settings-row" id="blockedContacts"><svg><use href="#lock"/></svg><span>Blocked contacts</span><svg class="chevron"><use href="#chevron"/></svg></button>
 </div>
@@ -260,6 +262,7 @@
           <div class="panel settings-panel" data-settings-category="help" hidden>
             <h1>Help</h1>
             <button class="settings-row" id="writeSupport" type="button"><svg><use href="#chat"/></svg><span>Contact support</span><svg class="chevron"><use href="#chevron"/></svg></button>
+            <button class="settings-row" id="myReports" type="button" hidden><svg aria-hidden="true"><use href="#info"/></svg><span>My reports</span><strong id="myReportPending"></strong><svg aria-hidden="true" class="chevron"><use href="#chevron"/></svg></button>
             <a class="settings-row settings-category-link" id="supportRequestsLink" href="/settings/support-requests" hidden><svg><use href="#chat"/></svg><span>Inbox (Requests)</span><strong id="supportRequestCount"></strong><svg class="chevron"><use href="#chevron"/></svg></a>
             <ul class="support-help-notes">
               <li>Temporary chats end when the server restarts.</li>

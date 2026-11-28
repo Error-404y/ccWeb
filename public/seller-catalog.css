@@ -45,6 +45,11 @@ dialog:has(.seller-catalog, .seller-catalog-form) {
   gap: 8px;
 }
 
+.seller-catalog-subtitle {
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
 .seller-catalog-table {
   width: 100%;
   border: 1px solid var(--line);
@@ -110,6 +115,54 @@ dialog:has(.seller-catalog, .seller-catalog-form) {
 
 .seller-catalog-edit:hover {
   background: var(--hover);
+}
+
+.seller-listing-name {
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.seller-listing-method,
+.seller-listing-alert-status,
+.seller-stock-details small {
+  display: block;
+  margin-block-start: 3px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.seller-listing-alert-status:empty {
+  display: none;
+}
+
+.seller-stock-list {
+  display: grid;
+  gap: 8px;
+}
+
+.seller-stock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.seller-stock-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.seller-stock-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .seller-catalog-empty,

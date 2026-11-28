@@ -10,10 +10,10 @@ const fd=openSync(target,'wx',0o600);closeSync(fd);
 const excluded=new Set([
   'mobile_support_rooms','push_devices','device_profiles','encryption_prekeys','contact_deletions',
   'feedback_inbox','feedback_events',
-  'abuse_reports','report_media','report_collaboration','moderation_actions',
+  'abuse_reports','report_media','report_collaboration','report_followups','moderation_actions',
   'payment_cases','payment_case_messages','payment_tickets','payment_ticket_messages',
   'user_tickets','user_ticket_messages','user_ticket_sellers','user_ticket_reads',
-  'admin_case_claims','admin_case_notes'
+  'admin_case_claims','admin_case_notes','seller_stock_alerts','seller_catalog_drafts'
 ]);
 const quote=name=>'"'+name.replaceAll('"','""')+'"';
 let input,output;

@@ -32,6 +32,29 @@ test('chat lifetime fixed, messages authorized, same conversation deleted for bo
   assert.throws(() => s.send('a', id, 'late'));
 });
 
+test('ordinary text retries preserve order, sender scope and deleted messages', () => {
+  let now=0;
+  const chats=new Chats(()=>now);
+  const id=chats.connectPair('a','b');
+  const options={requestId:'e50dd2a2-d5b6-43a2-94fa-dd2cf90c8834'};
+  const first=chats.send('a',id,'First',null,options);
+  assert.equal(first.duplicate,false);
+  assert.deepEqual(chats.send('a',id,'First',null,options),{id:first.id,duplicate:true});
+  assert.throws(()=>chats.send('a',id,'Different',null,options),{status:409});
+  assert.throws(()=>chats.send('outsider',id,'First',null,options));
+  assert.throws(()=>chats.send('a',id,'Once',null,{...options,once:true}),{status:400});
+  assert.throws(()=>chats.send('a',id,'Timed',null,{...options,burnSeconds:5}),{status:400});
+  assert.equal(chats.send('b',id,'Separate request',null,options).duplicate,false);
+  assert.deepEqual(chats.snapshot('a')[0].messages.map(message=>message.requestId),[options.requestId,undefined]);
+  assert.deepEqual(chats.snapshot('b')[0].messages.map(message=>message.text),['First','Separate request']);
+  chats.unsend('a',id,first.id);
+  assert.equal(chats.getMessage('a',id,first.id).message.requestHash,undefined);
+  assert.deepEqual(chats.send('a',id,'First',null,options),{id:first.id,duplicate:true});
+  assert.equal(chats.snapshot('a')[0].messages[0].deleted,true);
+  now=CHAT_TTL;
+  assert.throws(()=>chats.send('a',id,'First',null,options));
+});
+
 test('emergency removes only involved rooms and own invite', () => {
   const s = new Chats();
   const a = s.newCode('a'), b = s.newCode('b');

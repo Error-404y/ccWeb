@@ -127,36 +127,105 @@ function routeName(path) {
 }
 
 const drafts=new Map(), scrollMemory=new Map(), outbox=new Map();
-let flushingOutbox=false, nextOutboxAttempt=0, reconnectDelay=500;
-function updateConnection(){const node=$('connectionState');const queued=[...outbox.values()].filter(x=>x.room===selected&&!x.accepted),failed=queued.filter(x=>x.failed),syncing=[...outbox.values()].some(x=>x.room===selected&&x.accepted);node.hidden=online&&!queued.length&&!syncing;node.textContent=(!online?'Reconnecting securely…':'')+(queued.length?((!online?' · ':'')+queued.length+' encrypted '+(queued.length===1?'message':'messages')+' waiting'+(failed.length?' · '+failed.length+' failed':'')):syncing?(online?'Syncing messages…':' · Syncing messages…'):'');$('manageOutbox').hidden=!queued.length;}
+let flushingOutbox=false, outboxAgain=false, outboxTimer=0, reconnectDelay=500;
+function outgoingState(item) {
+  if (item.accepted) return 'sent';
+  if (item.failed) return 'failed';
+  if (item.sending) return 'sending';
+  return !online || navigator.onLine === false || item.waitingForConnection ? 'waiting' : 'queued';
+}
+const outgoingLabels = {sent:'Sent',failed:'Failed',sending:'Sending',waiting:'Waiting for connection',queued:'Queued'};
+function updatePendingRow(row,item) {
+  const status = outgoingState(item);
+  const reason = status==='failed' ? item.error : '';
+  row.querySelector('.pending-retry').hidden=status!=='failed'||!item.retryable;
+  if (row.dataset.outgoingState===status && row.dataset.outgoingError===reason) return;
+  row.dataset.outgoingState=status;
+  row.dataset.outgoingError=reason;
+  row.querySelector('.pending-status').textContent=outgoingLabels[status];
+  const detail=row.querySelector('.pending-error');
+  detail.textContent=reason;
+  detail.hidden=!reason;
+}
+function updateConnection() {
+  const node=$('connectionState'), counts=new Map();
+  let retryable=0, pending=0;
+  for(const [key,item] of outbox){
+    if(item.room!==selected)continue;
+    const status=outgoingState(item);
+    counts.set(status,(counts.get(status)||0)+1);
+    const row=$('pending-'+key);
+    if(row)updatePendingRow(row,item);
+    if(!item.accepted)pending++;
+    if(item.failed&&item.retryable)retryable++;
+  }
+  const summary=['waiting','sending','failed','queued'].flatMap(status=>{
+    const count=counts.get(status);
+    return count ? [outgoingLabels[status]+(count>1?' ('+count+')':'')] : [];
+  });
+  if(!summary.length&&(!online||navigator.onLine===false))summary.push('Waiting for connection');
+  const label=summary.join(' · ');
+  node.hidden=!label;
+  if(node.textContent!==label)node.textContent=label;
+  const manage=$('manageOutbox');
+  manage.hidden=!pending;
+  const title=retryable?'Review or retry outgoing messages':'Outgoing messages';
+  if(manage.getAttribute('aria-label')!==title)manage.setAttribute('aria-label',title);
+  updateOutgoingDialog();
+}
+function clearOutgoing() {
+  outbox.clear();
+  outboxAgain=false;
+  clearTimeout(outboxTimer);
+  outboxTimer=0;
+  updateConnection();
+}
 function discardRoomQueue(id){for(const [key,item] of outbox)if(item.room===id)outbox.delete(key);}
 function reconcileOutbox(){for(const [key,item] of outbox){const room=state.rooms.find(r=>r.id===item.room);if(!room||room.expires<=serverNow()||room.messages.some(m=>m.requestId===key))outbox.delete(key);}updateConnection();}
 function canSendOutgoing() {
-  return online&&unlockToken&&!document.hidden&&!accessDue&&!termsPending&&!suspendedAccount;
+  return online&&navigator.onLine!==false&&unlockToken&&!document.hidden&&!accessDue&&!termsPending&&!suspendedAccount;
+}
+function sendOutgoingSoon() {
+  if(flushingOutbox)outboxAgain=true;
+  else void flushOutbox();
 }
 async function flushOutbox(){
-  if(flushingOutbox||!canSendOutgoing()||Date.now()<nextOutboxAttempt||!state.capabilities?.queuedSends)return;
+  if(flushingOutbox||!canSendOutgoing())return;
   if(![...outbox.values()].some(item=>!item.accepted&&!item.failed&&!item.sending))return;
+  clearTimeout(outboxTimer);outboxTimer=0;
   flushingOutbox=true;
-  const epoch=authEpoch;
+  const epoch=authEpoch, waitingRooms=new Set();
+  let wakeAt=Infinity;
   try{
     for(const [key,item] of outbox){
       if(epoch!==authEpoch||!canSendOutgoing())break;
-      if(item.failed||item.sending||item.accepted)continue;
+      if(item.accepted||waitingRooms.has(item.room))continue;
       const room=state.rooms.find(room=>room.id===item.room);
-      if(!room||room.expires<=serverNow()){outbox.delete(key);continue;}
-      if(!encryptionReady(room))continue;
-      if(roomKeys.get(room.id)?.context?.code!==item.binding){
+      if(!room||room.readOnly||room.expires<=serverNow()){outbox.delete(key);continue;}
+      waitingRooms.add(item.room);
+      if(item.failed||item.sending)continue;
+      if(item.attemptAfter>Date.now()){wakeAt=Math.min(wakeAt,item.attemptAfter);continue;}
+      if(item.binding&&!encryptionReady(room))continue;
+      if(item.binding&&roomKeys.get(room.id)?.context?.code!==item.binding){
         item.failed=true;
         item.retryable=false;
         item.error='Conversation key changed. Discard this message.';
         continue;
       }
+      if(!item.binding&&(room.encryption||encryptionRequired(room))){
+        item.failed=true;
+        item.retryable=false;
+        item.error='This conversation now requires encryption. Discard this message and compose it again.';
+        continue;
+      }
       item.sending=true;
+      item.waitingForConnection=false;
+      updateConnection();
       try{
-        await api('encryption/message',item.payload);
+        await api(item.binding?'encryption/message':'message',item.payload);
         if(epoch!==authEpoch)break;
         item.accepted=true;
+        waitingRooms.delete(item.room);
       }catch(error){
         if(epoch!==authEpoch)break;
         const retryable=!(error.status>=400&&error.status<500&&![408,429].includes(error.status));
@@ -164,13 +233,23 @@ async function flushOutbox(){
         item.attempts=(item.attempts||0)+1;
         item.failed=!retryable||item.attempts>=3;
         item.error=errorMessage(error);
-        if(retryable){nextOutboxAttempt=Date.now()+3000;break;}
-      }finally{item.sending=false;}
+        item.waitingForConnection=error.connectionUnavailable===true;
+        if(!item.failed){
+          item.attemptAfter=Date.now()+3000;
+          wakeAt=Math.min(wakeAt,item.attemptAfter);
+        }
+      }finally{item.sending=false;updateConnection();}
     }
   }finally{
     flushingOutbox=false;
     updateConnection();
     if(unlockToken&&page==='chat'&&!document.hidden)renderChat();
+    if(outboxAgain){
+      outboxAgain=false;
+      void flushOutbox();
+    }else if(epoch===authEpoch&&canSendOutgoing()&&Number.isFinite(wakeAt)){
+      outboxTimer=setTimeout(()=>{outboxTimer=0;void flushOutbox();},Math.max(0,wakeAt-Date.now()));
+    }
   }
 }
 function retryOutgoing(key) {
@@ -178,10 +257,10 @@ function retryOutgoing(key) {
   if(!pending?.failed||!pending.retryable||pending.sending)return;
   pending.failed=false;
   pending.attempts=0;
-  nextOutboxAttempt=0;
+  pending.attemptAfter=0;
+  pending.error='';
   updateConnection();
-  renderChat();
-  void flushOutbox();
+  sendOutgoingSoon();
 }
 function markDisconnected(){online=false;liveRevision='';updateConnection();}
 
@@ -377,9 +456,10 @@ async function api(path, data, quiet = false) {
   catch (error) {
     if (native) {
       console.error('[qzu] API startup/request error:', String(error?.message || error));
-      throw new Error(['Mobile server unavailable.', 'Native device plugin unavailable.', 'Device signing failed.', 'HTTPS connection unavailable.'].includes(error?.message) ? error.message : 'Mobile request failed. See Xcode console.');
+      const message=['Mobile server unavailable.', 'Native device plugin unavailable.', 'Device signing failed.', 'HTTPS connection unavailable.'].includes(error?.message) ? error.message : 'Mobile request failed. See Xcode console.';
+      throw Object.assign(Error(message),{connectionUnavailable:message==='HTTPS connection unavailable.'});
     }
-    throw new Error('Connection unavailable.');
+    throw Object.assign(Error('Connection unavailable.'),{connectionUnavailable:true});
   }
   const result = await res.json().catch(() => ({}));
   if (epoch !== authEpoch || (document.hidden && !publicPurchase)) {
@@ -728,7 +808,7 @@ function lock(reopen = true) {
   }
   stopCheckout();
   accessDue = false;termsPending=false;suspendedAccount=false;
-  drafts.clear();scrollMemory.clear();outbox.clear();nextOutboxAttempt=0;updateConnection();
+  drafts.clear();scrollMemory.clear();clearOutgoing();
   authEpoch++;
   sequence++;
   const old = unlockToken;
@@ -902,18 +982,63 @@ function canViewSellerCatalog(contact) {
 }
 
 const sellerCurrencyLabels = {CHF: 'Swiss franc', EUR: 'Euro', GBP: 'British pound', USD: 'US dollar'};
+const sellerFulfillmentLabels = {unspecified:'Ask seller', pickup:'Pickup', delivery:'Delivery', both:'Pickup or delivery'};
 const sellerPriceFormatters = new Map();
+let lastSellerStockNotice = null;
 
 function formatListingPrice({priceMinor, currency}) {
+  if (priceMinor === null) return 'Price not set';
   if (!sellerPriceFormatters.has(currency)) {
     sellerPriceFormatters.set(currency, new Intl.NumberFormat(undefined, {style:'currency', currency, currencyDisplay:'code'}));
   }
   return sellerPriceFormatters.get(currency).format(priceMinor / 100);
 }
 
-function sellerListingTable(items, editable) {
+async function askAboutSellerItem(contact, item, control, root, epoch) {
+  if (control.disabled) return;
+  control.disabled = true;
+  try {
+    const sellerRoom = room=>room.contact?.id===contact.id&&!room.group&&!room.support&&!room.readOnly&&room.expires>serverNow();
+    let room = state.rooms.find(sellerRoom);
+    if (!room) {
+      const {id} = await api('contacts/open',{id:contact.id});
+      if (!sellerDialogActive(root,epoch)) return;
+      await refresh();
+      if (!sellerDialogActive(root,epoch)) return;
+      room=state.rooms.find(item=>item.id===id&&sellerRoom(item));
+    }
+    if (!room) throw Error('The seller chat is unavailable.');
+    closeModal();
+    if (page !== 'chat') navigate('/chat');
+    selectRoom(room.id);
+    const inquiry = 'Hi, I’m interested in '+item.name+' ('+formatListingPrice(item)+' per item). Is it available?';
+    const field = $('message'), draft = field.value ? field.value+'\n\n'+inquiry : inquiry;
+    if (draft.length > field.maxLength) {
+      const copy = el('textarea','edit-input',inquiry);
+      copy.readOnly = true;
+      copy.setAttribute('aria-label','Item inquiry');
+      const action = button('Copy item inquiry',async()=>{
+        try {await navigator.clipboard.writeText(inquiry);action.textContent='Copied';}
+        catch {copy.focus();copy.select();}
+      },'secondary-button');
+      show('Item inquiry',[el('p','','Your draft is too long to add this inquiry. You can copy the inquiry and use it after editing your draft.'),copy,action,button('Back to chat',closeModal)]);
+      return;
+    }
+    field.value = draft;
+    rememberRoom();
+    updateSendButton();
+    if (!native) field.focus({preventScroll:true});
+  } catch (error) {
+    if (sellerDialogActive(root,epoch)) modalError(error);
+  } finally {
+    control.disabled = false;
+  }
+}
+
+function sellerListingTable(items, contact, root, epoch) {
+  const editable = !contact;
   const table = el('table','seller-catalog-table');
-  table.setAttribute('aria-label','Items for sale');
+  table.setAttribute('aria-label',items[0]?.published===false?'Private drafts':'Items for sale');
   const header = table.createTHead().insertRow();
   for (const label of ['Name', 'Quantity', 'Price']) {
     const column = el('th','',label);
@@ -924,11 +1049,41 @@ function sellerListingTable(items, editable) {
   for (const item of items) {
     const row = rows.insertRow(), title = el('th','seller-catalog-item');
     title.scope = 'row';
-    title.append(el('span','',item.name));
     if (editable) {
+      title.append(el('span','',item.name));
+      if (item.published!==false) title.append(el('small','seller-listing-method',sellerFulfillmentLabels[item.fulfillment]||sellerFulfillmentLabels.unspecified));
       const edit = button('Edit', () => editSellerListing(item), 'seller-catalog-edit');
       edit.setAttribute('aria-label','Edit ' + item.name);
       title.append(edit);
+    } else {
+      const ask = button(item.name, () => askAboutSellerItem(contact,item,ask,root,epoch),'seller-listing-name');
+      ask.setAttribute('aria-label','Ask about '+item.name);
+      title.append(ask,el('small','seller-listing-method',sellerFulfillmentLabels[item.fulfillment]||sellerFulfillmentLabels.unspecified));
+      if (state.capabilities?.sellerListingsV2 && !item.quantity) {
+        const status = el('small','seller-listing-alert-status');
+        status.setAttribute('role','status');
+        const toggle = button('',async()=>{
+          toggle.disabled=true;
+          status.textContent='';
+          try {
+            const result=await api('sellers/catalog/alerts/'+(item.watching?'dismiss':'watch'),{contactId:contact.id,itemId:item.id});
+            if (!sellerDialogActive(root,epoch)) return;
+            item.watching=result.watching;
+            renderToggle();
+            status.textContent=item.watching?'Alert set':'Alert cancelled';
+          } catch(error) {
+            if (sellerDialogActive(root,epoch)) status.textContent=errorMessage(error);
+          } finally {
+            toggle.disabled=false;
+          }
+        },'seller-catalog-edit');
+        function renderToggle() {
+          toggle.textContent=item.watching?'Cancel alert':'Notify me';
+          toggle.setAttribute('aria-label',item.watching?'Cancel stock alert for '+item.name:'Notify me when '+item.name+' is back in stock');
+        }
+        renderToggle();
+        title.append(toggle,status);
+      }
     }
     const quantity = el('td','seller-catalog-quantity',item.quantity.toLocaleString());
     if (item.quantity === 0) quantity.dataset.empty = 'true';
@@ -963,12 +1118,21 @@ function showSellerCatalog(contact = null, savedItems) {
 
   function display(items) {
     add.disabled = false;
-    if (items.length) content.replaceChildren(sellerListingTable(items, owner));
+    if (items.length) {
+      if (!owner || !state.capabilities?.sellerListingsV2) content.replaceChildren(sellerListingTable(items,contact,root,epoch));
+      else {
+        const live = items.filter(item=>item.published!==false), drafts = items.filter(item=>item.published===false);
+        content.replaceChildren();
+        for (const [label,list] of [['Published listings',live],['Private drafts',drafts]]) {
+          if (list.length) content.append(el('h4','seller-catalog-subtitle',label),sellerListingTable(list,contact,root,epoch));
+        }
+      }
+    }
     else {
       const empty = el('div','seller-catalog-empty');
       empty.setAttribute('role','status');
       empty.append(el('strong','','List is empty'));
-      if (owner) empty.append(el('p','','Add an item to show it on your seller profile.'));
+      if (owner) empty.append(el('p','','Add an item to prepare or publish it.'));
       content.replaceChildren(empty);
     }
   }
@@ -977,7 +1141,7 @@ function showSellerCatalog(contact = null, savedItems) {
     const loading = el('p','seller-catalog-message','Loading listings…');
     loading.setAttribute('role','status');
     content.replaceChildren(loading);
-    const route = owner ? 'sellers/catalog' : 'sellers/catalog/contact/' + encodeURIComponent(contact.id);
+    const route = owner ? 'sellers/catalog'+(state.capabilities?.sellerListingsV2?'/manage':'') : 'sellers/catalog/contact/' + encodeURIComponent(contact.id);
     try {
       const result = await api(route);
       if (!sellerDialogActive(root, epoch)) return;
@@ -1030,6 +1194,7 @@ function showOwnSellerProfile() {
 function editSellerListing(item) {
   if (!state.seller) return;
   const id = item?.id || crypto.randomUUID(), epoch = authEpoch;
+  const managed = Boolean(state.capabilities?.sellerListingsV2), alreadyPublished = item && item.published!==false;
   const form = el('form','seller-catalog-form');
   const title = el('input','nickname-input');
   title.name = 'name';
@@ -1050,8 +1215,8 @@ function editSellerListing(item) {
   price.inputMode = 'decimal';
   price.placeholder = '0.00';
   price.maxLength = 10;
-  price.value = item ? (item.priceMinor / 100).toFixed(2) : '';
-  price.required = true;
+  price.value = Number.isInteger(item?.priceMinor) ? (item.priceMinor / 100).toFixed(2) : '';
+  price.required = !managed || Boolean(alreadyPublished);
   const currency = el('select','nickname-input');
   currency.name = 'currency';
   for (const [code,label] of Object.entries(sellerCurrencyLabels)) {
@@ -1060,29 +1225,46 @@ function editSellerListing(item) {
     currency.append(option);
   }
   currency.value = item?.currency || 'CHF';
+  const fulfillment = el('select','nickname-input');
+  fulfillment.name = 'fulfillment';
+  for (const [value,label] of Object.entries({...sellerFulfillmentLabels,unspecified:'Choose a method'})) {
+    const option = el('option','',label);
+    option.value = value;
+    fulfillment.append(option);
+  }
+  fulfillment.value = item?.fulfillment || 'unspecified';
   const details = el('div','seller-catalog-fields');
   details.append(sellerField('Quantity',quantity),sellerField('Price per item',price),sellerField('Currency',currency));
+  if (managed) details.append(sellerField('How buyers receive it',fulfillment));
   const note = el('p','','Set quantity to 0 when an item is out of stock.');
   const error = el('p','seller-catalog-error');
   error.setAttribute('role','alert');
   const actions = el('div','seller-catalog-actions');
-  const submit = el('button','primary-button',item ? 'Save changes' : 'Add item');
-  submit.type = 'submit';
-  actions.append(submit,button('Cancel',() => showSellerCatalog(),'secondary-button'));
+  const publish = el('button','primary-button',managed ? (alreadyPublished?'Save changes':'Publish listing') : (item?'Save changes':'Add item'));
+  publish.type = 'submit';
+  const saveDraft = el('button','secondary-button','Save draft');
+  saveDraft.type = 'submit';
+  if (managed && !alreadyPublished) {
+    actions.append(saveDraft,publish);
+    note.textContent='Drafts are private. Choose a price and pickup or delivery before publishing.';
+  } else actions.append(publish);
+  actions.append(button('Cancel',() => showSellerCatalog(),'secondary-button'));
   if (item) actions.append(button('Remove item',() => confirmRemoveSellerListing(item),'secondary-button danger-button'));
   form.append(sellerField('Item name',title),details,note,error,actions);
   form.addEventListener('submit',async event => {
     event.preventDefault();
-    if (submit.disabled) return;
-    submit.disabled = true;
+    if (publish.disabled) return;
+    publish.disabled = saveDraft.disabled = true;
     error.textContent = '';
     try {
-      const result = await api('sellers/catalog',{id,name:title.value,quantity:quantity.valueAsNumber,price:price.value,currency:currency.value});
+      const payload = {id,name:title.value,quantity:quantity.valueAsNumber,price:price.value,currency:currency.value};
+      if (managed) Object.assign(payload,{fulfillment:fulfillment.value,published:Boolean(alreadyPublished)||event.submitter===publish});
+      const result = await api('sellers/catalog'+(managed?'/manage':''),payload);
       if (sellerDialogActive(form,epoch)) showSellerCatalog(null,result.items);
     } catch (failure) {
       if (!sellerDialogActive(form,epoch)) return;
       error.textContent = errorMessage(failure);
-      submit.disabled = false;
+      publish.disabled = saveDraft.disabled = false;
     }
   });
   show(item ? 'Edit item' : 'Add item',[form]);
@@ -1094,7 +1276,7 @@ function confirmRemoveSellerListing(item) {
   const remove = button('Remove item', async () => {
     remove.disabled = true;
     try {
-      const result = await api('sellers/catalog/remove',{id:item.id});
+      const result = await api('sellers/catalog'+(state.capabilities?.sellerListingsV2?'/manage':'')+'/remove',{id:item.id});
       if (sellerDialogActive(remove,epoch)) showSellerCatalog(null,result.items);
     } catch (error) {
       if (!sellerDialogActive(remove,epoch)) return;
@@ -1103,6 +1285,63 @@ function confirmRemoveSellerListing(item) {
     }
   },'primary-button danger-button');
   show('Remove listing?',[detail,remove,button('Cancel',() => editSellerListing(item),'secondary-button')]);
+}
+
+function showSellerStockAlerts() {
+  if (!unlockToken || state.seller || state.supportAgent || !state.capabilities?.sellerListingsV2) return;
+  const root = el('section','seller-catalog'), epoch = authEpoch;
+  const status = el('p','seller-catalog-message');
+  status.setAttribute('role','status');
+  const list = el('div','seller-stock-list');
+  root.append(status,list);
+  show('Seller stock alerts',[root]);
+
+  async function load() {
+    status.hidden=false;
+    status.textContent='Loading alerts…';
+    list.replaceChildren();
+    try {
+      const {alerts} = await api('sellers/catalog/alerts');
+      if (!sellerDialogActive(root,epoch)) return;
+      status.hidden=Boolean(alerts.length);
+      status.textContent='No seller stock alerts';
+      for (const item of alerts) {
+        const row = el('div','seller-stock-row');
+        const details = el('div','seller-stock-details');
+        const message = item.triggeredAt ? (item.quantity ? 'Back in stock' : 'Restocked earlier') : 'Waiting for stock';
+        details.append(el('strong','',item.name),el('small','',message+(item.seller?' · '+item.seller:'')));
+        const actions = el('div','seller-stock-actions');
+        const contact = state.contacts?.find(contact=>contact.id===item.contactId);
+        if (canViewSellerCatalog(contact)) actions.append(button('View list',()=>showSellerCatalog(contact),'seller-catalog-edit'));
+        const dismiss = button(item.triggeredAt?'Dismiss':'Cancel alert',async()=>{
+          dismiss.disabled=true;
+          try {
+            await api('sellers/catalog/alerts/dismiss',{contactId:item.contactId,itemId:item.itemId});
+            if(sellerDialogActive(root,epoch)) void load();
+          } catch(error) {
+            if(sellerDialogActive(root,epoch)) modalError(error);
+          } finally {
+            dismiss.disabled=false;
+          }
+        },'seller-catalog-edit');
+        actions.append(dismiss);
+        row.append(details,actions);
+        list.append(row);
+      }
+    } catch(error) {
+      if (!sellerDialogActive(root,epoch)) return;
+      status.textContent=errorMessage(error);
+      list.append(button('Retry',load,'secondary-button'));
+    }
+  }
+  void load();
+}
+
+function announceSellerStock(noticeId) {
+  if (!noticeId || noticeId===lastSellerStockNotice) return;
+  lastSellerStockNotice=noticeId;
+  showActivityBanner('Seller stock alert',showSellerStockAlerts);
+  void api('sellers/catalog/alerts/seen',{noticeId},true).catch(()=>{});
 }
 
 function showContactManagement(contact) {
@@ -1438,22 +1677,21 @@ function renderChat() {
   });
   for(const [key,item] of outbox){if(item.room!==current.id)continue;
     let row=oldRows.get('pending-'+key);const context=roomKeys.get(current.id)?.context;
-    const safe=Boolean(!privacyMode&&encryptionReady(current)&&context?.code===item.binding);
+    const safe=!privacyMode&&(!item.binding||encryptionReady(current)&&context?.code===item.binding);
     if(!row||row.dataset.previewAllowed!==String(safe)){
       const epoch=authEpoch;row=el('div','message-row mine pending-row');row.id='pending-'+key;row.dataset.previewAllowed=String(safe);
-      const bubble=el('div','bubble'),content=el('div','message-text',safe?'Encrypted message…':'Message hidden'),footer=el('div','message-footer');
-      footer.append(el('span','bubble-time',fmtTime(item.at)),el('span','pending-status'));bubble.append(content,footer);row.append(bubble);
-      if(safe)QzuCrypto.decrypt(context,item.payload.cipher,true).then(text=>{if(row.isConnected&&epoch===authEpoch&&unlockToken&&selected===current.id&&!privacyMode&&outbox.get(key)===item&&roomKeys.get(current.id)?.context===context)content.textContent=text;}).catch(()=>{});
+      const bubble=el('div','bubble'),content=el('div','message-text',safe?(item.binding?'Encrypted message…':item.payload.text):'Message hidden'),footer=el('div','message-footer');
+      const reason=el('p','pending-error');
+      reason.id='pending-error-'+key;
+      const retry=button('Retry',()=>retryOutgoing(key),'pending-retry');
+      retry.setAttribute('aria-label','Retry message');
+      retry.setAttribute('aria-describedby',reason.id);
+      footer.append(el('span','bubble-time',fmtTime(item.at)),el('span','pending-status'),retry);
+      bubble.append(content,footer,reason);row.append(bubble);
+      if(safe&&item.binding)QzuCrypto.decrypt(context,item.payload.cipher,true).then(text=>{if(row.isConnected&&epoch===authEpoch&&unlockToken&&selected===current.id&&!privacyMode&&outbox.get(key)===item&&roomKeys.get(current.id)?.context===context)content.textContent=text;}).catch(()=>{});
       if(sameRoom&&!oldRows.has(row.id)){motion(row,'motion-message');requestAnimationFrame(()=>animateFromComposer(row));}
     }
-    const status = row.querySelector('.pending-status'), retry = row.querySelector('.pending-retry');
-    status.textContent=item.failed?'Failed':item.accepted?'Sent':item.sending?'Sending…':'Waiting to send';
-    status.title=item.failed?item.error||'Message failed':'';
-    if (item.failed && item.retryable && !retry) {
-      const action = button('Retry', () => retryOutgoing(key), 'pending-retry');
-      action.title=item.error;
-      status.after(action);
-    } else if (!item.failed || !item.retryable) retry?.remove();
+    updatePendingRow(row,item);
     placeRow(row);
   }
   for(const node of [...container.children])if(!keep.has(node))node.remove();
@@ -1834,6 +2072,7 @@ $('retryInviteQR').addEventListener('click',()=>{
 });
 
 $('sellerProfileSettings').addEventListener('click',showOwnSellerProfile);
+$('sellerStockAlerts').addEventListener('click',showSellerStockAlerts);
 function openControlCenter(initialTab) {
  if(!unlockToken||!state.supportAgent)return;
  if(!native){location.assign('/control');return;}
@@ -1864,10 +2103,15 @@ function renderSettings() {
   $('pushStatus').textContent=pushOptedOut()?'Message notifications are off.':state.push?.registered?'Message notifications are enabled.':native&&window.Capacitor.getPlatform()==='ios'?'In-app alerts enabled. Remote delivery depends on Apple push configuration.':'Allow notifications in your device settings if prompted.';
   $('writeSupport').hidden = Boolean(state.supportAgent);
   $('writeSupport').disabled = !unlockToken;
+  const pendingReports=state.pendingReportFollowups||0;
+  $('myReports').hidden=!state.capabilities?.reportFollowups;
+  $('myReports').disabled=!unlockToken;
+  $('myReportPending').textContent=pendingReports?pendingReports+' waiting for you':'';
   updateAccessDisplay();
   $('supportRequestsLink').hidden = !state.supportAgent;
   $('recoverySettings').hidden=Boolean(state.supportAgent)||!native;
   $('sellerProfileSettings').hidden=!state.seller;$('sellerProfileStatus').textContent=state.sellerVerified?'Verified':'Unverified';
+  $('sellerStockAlerts').hidden=Boolean(state.seller||state.supportAgent||!state.capabilities?.sellerListingsV2);
   $('adminInterface').hidden=!state.supportAgent;$('adminLogout').hidden=!state.supportAgent;
   $('userInterfaceHeading').hidden=!state.supportAgent;
   $('adminInboxCount').textContent=state.supportAgent?String(new Set([...(state.supportRequests||[]),...(state.supportDeletions||[])].map(r=>r.id)).size):'';
@@ -1926,7 +2170,7 @@ function scrubRemovedRooms(previous,next,clearKeys=true){
   }
 }
 function clearVolatile() {
-  clearUserTicketUI();  drafts.clear();scrollMemory.clear();outbox.clear();nextOutboxAttempt=0;updateConnection();
+  clearUserTicketUI();drafts.clear();scrollMemory.clear();clearOutgoing();
   $('chatSearch').value='';
   unreadOnly=false;
   $('unreadFilter').setAttribute('aria-pressed','false');
@@ -2131,6 +2375,7 @@ async function refresh(live=false, {restoreAccess = false} = {}) {
   const previouslyKnown=new Set(state.rooms.flatMap(r=>r.messages.map(m=>m.id)));const newActivity=Boolean(state.now)&&data.rooms.some(r=>!r.contact?.muted&&!(r.mutedUntil>serverNow())&&(r.id!==selected||!canReadCurrent())&&r.messages.some(m=>m.unread&&!previouslyKnown.has(m.id)));state = data;reconcileOutbox();
   if(newActivity&&!document.hidden)showActivityBanner();
   showTicketReply(data.ticketUpdate);
+  announceSellerStock(data.sellerStockUpdate);
   liveRevision=data.revision||'';
   const keep=state.rooms.filter(directRoom).map(r=>r.id).sort();const sig=JSON.stringify(keep);if(native&&sig!==keyPruneSignature){keyPruneSignature=sig;roomVault('prune','',{rooms:keep}).catch(()=>{if(keyPruneSignature===sig)keyPruneSignature='';});}
   if (mediaRoom && !state.rooms.some(room => room.id === mediaRoom && (!mediaMessage || room.messages.some(message => message.id === mediaMessage && !message.deleted)))) closeModal();
@@ -2581,14 +2826,35 @@ function updateSendButton() {
   $('onceShortcut').disabled=sendingMessage;
   send.disabled = !unlockToken || sendingMessage || !room || room.readOnly ||
     room.expires <= serverNow() || (!$('message').value.trim() && !needsSetup);
-  send.setAttribute('aria-label', needsSetup ? 'Set up or verify encryption' : 'Send');
-  send.title = needsSetup ? 'Set up or verify encryption' : 'Send';
+  const sendLabel=needsSetup?'Set up or verify encryption':sendingMessage?'Sending':'Send';
+  send.setAttribute('aria-label',sendLabel);
+  send.title=sendLabel;
   send.classList.toggle('send-setup', needsSetup);
   const icon = needsSetup ? 'lock' : 'sendIcon';
   if (send.dataset.icon !== icon) {
     send.dataset.icon = icon;
     send.replaceChildren(svg(icon));
   }
+}
+
+function clearSentDraft(id,text) {
+  if(selected!==id||$('message').value.trim()!==text)return;
+  $('message').value='';
+  drafts.delete(id);
+  resetOnce();
+  clearReply();
+  stopTyping();
+}
+function queueMessage(id,payload,text,binding=null) {
+  if(outbox.size>=30)throw Error('Outgoing queue is full. Wait for messages to send.');
+  const requestId=crypto.randomUUID();
+  outbox.set(requestId,{room:id,payload:{...payload,id,requestId},binding,at:Date.now(),error:''});
+  clearSentDraft(id,text);
+  haptic();
+  updateConnection();
+  renderChat();
+  $('messages').scrollTop=$('messages').scrollHeight;
+  sendOutgoingSoon();
 }
 
 async function sendMessage() {
@@ -2614,36 +2880,34 @@ async function sendMessage() {
   try {
     if (room.encryption || (native && directRoom(room))) {
       if (!encryptionReady(room)) throw Error('Verify encryption before sending.');
-      const cipher = await QzuCrypto.encrypt(roomKeys.get(id).context, text);
+      const context=roomKeys.get(id).context;
+      const cipher = await QzuCrypto.encrypt(context, text);
       if (epoch !== authEpoch || document.hidden || !unlockToken || selected !== id || room.expires <= serverNow()) throw Error('Chat unavailable.');
-      const replyCipher=!once&&state.capabilities?.encryptedExtras&&replyTarget?.roomId===id?await QzuCrypto.encryptReply(roomKeys.get(id).context,cipher.iv,replyTarget.id):null;
-      if(epoch!==authEpoch||!unlockToken||document.hidden||selected!==id)throw Error('Chat unavailable.');
-      if(once){if(!state.capabilities?.encryptedOnce)throw Error('Update the server before sending view-once content.');if(!online)throw Error('Reconnect to send view-once content. Your draft is kept.');await api('encryption/once/send',{id,cipher});}
+      const replyCipher=!once&&state.capabilities?.encryptedExtras&&replyTarget?.roomId===id?await QzuCrypto.encryptReply(context,cipher.iv,replyTarget.id):null;
+      if(epoch!==authEpoch||!unlockToken||document.hidden||selected!==id||room.expires<=serverNow()||roomKeys.get(id)?.context!==context)throw Error('Chat unavailable.');
+      if(once){if(!state.capabilities?.encryptedOnce)throw Error('Update the server before sending view-once content.');if(!canSendOutgoing())throw Error('Reconnect to send view-once content. Your draft is kept.');await api('encryption/once/send',{id,cipher});}
       else if(state.capabilities?.queuedSends){
-        if(outbox.size>=30)throw Error('Outgoing queue is full. Wait for messages to send.');
-        const requestId=crypto.randomUUID(),payload={id,cipher,requestId,...(replyCipher?{replyCipher}:{})};
-        outbox.set(requestId,{room:id,payload,binding:roomKeys.get(id).context.code,at:Date.now(),failed:false,sending:false});
-        if(selected===id&&$('message').value.trim()===text){$('message').value='';drafts.delete(id);resetOnce();clearReply();stopTyping();}
-        haptic();updateConnection();renderChat();$('messages').scrollTop=$('messages').scrollHeight;void flushOutbox();return;
+        queueMessage(id,{cipher,...(replyCipher?{replyCipher}:{})},text,context.code);
+        return;
       }
-      else {if(!online)throw Error('Reconnect to send this message.');await api('encryption/message', { id, cipher,...(replyCipher?{replyCipher}:{}) });}
+      else {if(!canSendOutgoing())throw Error('Reconnect to send this message. Your draft is kept.');await api('encryption/message', { id, cipher,...(replyCipher?{replyCipher}:{}) });}
     } else {
-      if(!online)throw Error('Reconnect to send this message. Your draft is kept.');
-      await api('message', { id, text, once, burnSeconds, replyTo: once||burnSeconds ? null : replyTarget?.roomId === id ? replyTarget.id : null });
+      const replyTo=once||burnSeconds||replyTarget?.roomId!==id?null:replyTarget.id;
+      if(!once&&!burnSeconds&&state.capabilities?.queuedTextSends){
+        queueMessage(id,{text,replyTo},text);
+        return;
+      }
+      if(!canSendOutgoing())throw Error('Reconnect to send this message. Your draft is kept.');
+      await api('message', { id, text, once, burnSeconds, replyTo });
     }
 
     if (epoch !== authEpoch) return;
 
-    if (selected === id && $('message').value.trim() === text) {
-      $('message').value = '';drafts.delete(id);
-      resetOnce();haptic();
-      clearReply();
-      stopTyping();
-    }
-
-    await refresh();
+    clearSentDraft(id,text);
+    haptic();
+    await refresh().catch(()=>{});
   } catch (error) {
-    if (epoch === authEpoch) showError(error);
+    if (epoch === authEpoch) info('Message failed',error.connectionUnavailable?'The connection dropped. Your draft is kept. Check the chat before sending again.':errorMessage(error));
   } finally {
     if (epoch === authEpoch) {
       sendingMessage = false;
@@ -2652,7 +2916,41 @@ async function sendMessage() {
   }
 }
 
-$('manageOutbox').addEventListener('click',()=>{const entries=[...outbox.entries()].filter(([,item])=>item.room===selected&&!item.accepted);const controls=[el('p','','Encrypted outgoing messages are kept in memory until sent, locked or expired. Cancelling an already accepted message does not delete it from the chat.')];for(const [key,item] of entries){const row=el('div','request-item');row.append(el('span','',item.failed?item.error:'Waiting to send'));if(item.failed&&item.retryable)row.append(button('Retry',()=>{closeModal();retryOutgoing(key);},'secondary-button'));const cancel=button('Discard',()=>{if(item.sending||item.accepted)return;outbox.delete(key);closeModal();updateConnection();renderChat();},'secondary-button');cancel.disabled=item.sending||item.accepted;row.append(cancel);controls.push(row);}controls.push(button('Close',closeModal,'secondary-button'));show('Outgoing messages',controls);});
+function updateOutgoingDialog() {
+  const list=modal.open&&body.querySelector('.outgoing-list');
+  if(!list)return;
+  const entries=[...outbox].filter(([,item])=>item.room===selected&&!item.accepted);
+  const signature=JSON.stringify(entries.map(([key,item])=>[key,outgoingState(item),item.error,item.retryable]));
+  if(list.dataset.signature===signature)return;
+  list.dataset.signature=signature;
+  list.replaceChildren();
+  for (const [key,item] of entries) {
+    const row=el('div','request-item outgoing-list-item');
+    row.setAttribute('role','listitem');
+    row.append(el('strong','',outgoingLabels[outgoingState(item)]),el('time','',fmtTime(item.at)));
+    if(item.failed&&item.error)row.append(el('p','',item.error));
+    const actions=el('div','outgoing-actions');
+    if(item.failed&&item.retryable)actions.append(button('Retry',()=>retryOutgoing(key),'secondary-button'));
+    const discard=button('Discard',()=>{
+      if(item.sending||item.accepted)return;
+      outbox.delete(key);
+      updateConnection();
+      renderChat();
+      sendOutgoingSoon();
+    },'secondary-button');
+    discard.disabled=item.sending;
+    actions.append(discard);
+    row.append(actions);
+    list.append(row);
+  }
+  if(!entries.length)list.append(el('p','','No outgoing messages.'));
+}
+$('manageOutbox').addEventListener('click',()=>{
+  const list=el('div','outgoing-list');
+  list.setAttribute('role','list');
+  show('Outgoing messages',[el('p','','Queued messages are kept on this device until sent, the app locks, or the chat expires.'),list,button('Close',closeModal,'secondary-button')]);
+  updateOutgoingDialog();
+});
 $('message').addEventListener('input', () => {
   rememberRoom();updateSendButton();
   reportTyping();
@@ -3182,6 +3480,110 @@ async function reactTo(room, message, emoji) {
   } catch (error) { showError(error); }
 }
 
+const reportStatusLabels={received:'Received','in-review':'In review',closed:'Closed'};
+
+function myReportTimeline(report){
+  const list=el('ol','my-report-timeline');
+  list.setAttribute('aria-label','Report timeline');
+  for(const [key,label,at] of [
+    ['received','Received',report.receivedAt],['in-review','In review',report.reviewedAt],['closed','Closed',report.closedAt]
+  ]){
+    const step=el('li','my-report-step');
+    if(at!=null)step.classList.add('complete');
+    if(key===report.status)step.setAttribute('aria-current','step');
+    step.append(el('strong','',label));
+    if(at!=null){
+      const date=new Date(at),time=el('time','',date.toLocaleString());
+      time.dateTime=date.toISOString();
+      step.append(time);
+    }else step.append(el('span','','Pending'));
+    list.append(step);
+  }
+  return list;
+}
+
+function renderMyReport(report,panel,active){
+  const stateLabel=el('span','my-report-state',reportStatusLabels[report.status]);
+  const title=el('div','my-report-heading');
+  title.append(el('h3','',report.reason),stateLabel);
+  panel.replaceChildren(title,myReportTimeline(report));
+  if(!report.followUps.length)return;
+  const history=el('section','my-report-followups');
+  history.append(el('h3','','Evidence requests'));
+  for(const followUp of report.followUps){
+    const thread=el('article','my-report-thread');
+    thread.append(el('strong','','Support'),el('small','',new Date(followUp.requestedAt).toLocaleString()),el('p','',followUp.request));
+    if(followUp.repliedAt!=null){
+      const reply=el('div','my-report-reply');
+      reply.append(el('strong','','Your reply'),el('small','',new Date(followUp.repliedAt).toLocaleString()),el('p','',followUp.reply));
+      thread.append(reply);
+    }else if(report.awaitingReply){
+      const form=el('form','my-report-form'),label=el('label','','Additional evidence'),field=el('textarea','edit-input');
+      field.maxLength=2000;field.rows=3;field.required=true;
+      label.append(field);
+      const feedback=el('p','my-report-form-status');
+      feedback.setAttribute('role','status');
+      feedback.hidden=true;
+      const send=el('button','primary-button','Send evidence');
+      send.type='submit';
+      form.append(label,send,feedback);
+      form.addEventListener('submit',async event=>{
+        event.preventDefault();
+        if(send.disabled||!active())return;
+        const text=field.value.trim();
+        if(!text){
+          feedback.hidden=false;feedback.textContent='Enter additional evidence.';field.focus();return;
+        }
+        send.disabled=true;
+        try{
+          const updated=await api('reports/mine/'+encodeURIComponent(report.id)+'/reply',{requestId:followUp.id,text});
+          if(active()){
+            renderMyReport(updated,panel,active);
+            const sent=el('p','my-report-form-status','Evidence sent.');
+            sent.setAttribute('role','status');panel.append(sent);
+          }
+          void refresh().catch(()=>{});
+        }catch(error){
+          if(active()){feedback.hidden=false;feedback.textContent=errorMessage(error);}
+        }finally{send.disabled=false;}
+      });
+      thread.append(form);
+    }
+    history.append(thread);
+  }
+  panel.append(history);
+}
+
+async function openMyReports(id=null){
+  if(!unlockToken)return;
+  const epoch=authEpoch,panel=el('div','my-report-panel'),loading=el('p','support-help-notes','Loading reports…');
+  const active=()=>body.contains(panel)&&modal.open&&epoch===authEpoch&&Boolean(unlockToken);
+  loading.setAttribute('role','status');panel.append(loading);
+  const back=id?button('All reports',()=>openMyReports(),'secondary-button'):button('Done',closeModal,'secondary-button');
+  show(id?'Report status':'My reports',[panel,back,button('Refresh',()=>openMyReports(id),'secondary-button')]);
+  try{
+    if(id){
+      const report=await api('reports/mine/'+encodeURIComponent(id));
+      if(active())renderMyReport(report,panel,active);
+      return;
+    }
+    const {items}=await api('reports/mine');
+    if(!active())return;
+    const list=el('div','my-reports-list');
+    for(const report of items){
+      const item=button('',()=>openMyReports(report.id),'my-report-row');
+      const info=el('span','my-report-row-info');
+      info.append(el('strong','',report.reason),el('small','',new Date(report.receivedAt).toLocaleString()));
+      item.append(info,el('span','my-report-state',report.awaitingReply?'Reply needed':reportStatusLabels[report.status]));
+      list.append(item);
+    }
+    panel.replaceChildren(items.length?list:el('p','support-help-notes','You haven’t submitted any reports.'));
+  }catch(error){
+    if(active())loading.textContent=errorMessage(error);
+  }
+}
+$('myReports').addEventListener('click',()=>openMyReports());
+
 function showReport(room,selection={}){
   const reason=el('select','edit-input');reason.setAttribute('aria-label','Reason');for(const name of ['Harassment','Threats or violence','Sexual exploitation','Spam or scam','Other']){const option=el('option','',name);option.value=name;reason.append(option);}
   const evidence=el('textarea','edit-input');evidence.maxLength=2000;evidence.placeholder='Additional details (optional)';
@@ -3195,7 +3597,11 @@ function showReport(room,selection={}){
       attachment={mime:blob.type.split(';')[0],data:await blobData(blob)};
     }
     if(epoch!==authEpoch||!unlockToken||document.hidden||!body.contains(send))throw Error('Locked.');
-    await api('report',{id:room.id,...selection,reason:reason.value,evidence:evidence.value,context,...(attachment?{attachment}:{})});info('Report received','Your report has been submitted.');}catch(error){dialogError(error);send.disabled=false;}});
+    const result=await api('report',{id:room.id,...selection,reason:reason.value,evidence:evidence.value,context,...(attachment?{attachment}:{})});
+    if(epoch!==authEpoch||!unlockToken||!body.contains(send))return;
+    if(state.capabilities?.reportFollowups&&result.id)show('Report received',[el('p','','Track your report in Settings under Help.'),button('View report',()=>openMyReports(result.id)),button('Done',closeModal,'secondary-button')]);
+    else info('Report received','Your report has been submitted.');
+  }catch(error){if(body.contains(send))dialogError(error);send.disabled=false;}});
   show('Report abuse',[el('p','','Selected messages and details will be shared with authorized moderators, even if this chat is encrypted.'),reason,list,shareLabel,evidence,send,button('Cancel',closeModal,'secondary-button')]);mediaRoom=room.id;
 }
 function reportDetail(item){
@@ -3586,6 +3992,7 @@ function blobData(blob) {
 async function sendAttachment(room, kind, blob, once, cleaned=false) {
   const startEpoch=authEpoch;
   const request=mediaOpenSequence;
+  if(!canSendOutgoing())throw Object.assign(Error('Waiting for connection.'),{waitingForConnection:true});
   if(kind==='image'&&!cleaned)blob=await QzuMetadata.cleanImage(blob);
   if(startEpoch!==authEpoch||!unlockToken||selected!==room.id||document.hidden||room.expires<=serverNow())throw Error('Chat unavailable.');
   if (blob.size > 2 * 1024 * 1024 || !blob.size) throw new Error('Attachment must be under 2 MB.');
@@ -3605,7 +4012,13 @@ async function sendAttachment(room, kind, blob, once, cleaned=false) {
     if(!$('message').value.trim())resetOnce();
     closeModal();
   }
-  await refresh();
+  await refresh().catch(()=>{});
+}
+
+function attachmentSendStatus(error) {
+  if(error.waitingForConnection)return 'Waiting for connection. Send again after you reconnect.';
+  if(error.connectionUnavailable)return 'Failed. Check the chat before sending again.';
+  return 'Failed. '+errorMessage(error);
 }
 
 function choosePhoto(room, camera = false) {
@@ -3657,15 +4070,14 @@ function choosePhoto(room, camera = false) {
     if (!active() || !prepared || sending) return;
     sending = true;
     toggle.disabled = input.disabled = crop.disabled = rotate.disabled = send.disabled = true;
-    status.textContent = 'Sending…';
+    status.textContent = 'Sending';
     try {
       await sendAttachment(room, 'image', prepared, once, true);
     } catch (error) {
       if (!active()) return;
       sending = false;
       toggle.disabled = input.disabled = crop.disabled = rotate.disabled = send.disabled = false;
-      status.textContent = '';
-      modalError(error);
+      status.textContent = attachmentSendStatus(error);
     }
   });
   send.disabled = true;
@@ -3762,12 +4174,12 @@ function reviewVoice(room, blob, once, elapsed) {
   status.setAttribute('role','status');
   const send = button(once ? 'Send once' : 'Send recording', async () => {
     send.disabled = discard.disabled = true;
-    status.textContent = '';
+    status.textContent = 'Sending';
     try { await sendAttachment(room,'audio',blob,once); }
     catch(error) {
       if (send.isConnected && epoch === authEpoch) {
         send.disabled = discard.disabled = false;
-        status.textContent = errorMessage(error);
+        status.textContent = attachmentSendStatus(error);
       }
     }
   });
