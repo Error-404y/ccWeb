@@ -55,7 +55,7 @@ const unlocks = new Unlocks(), sendingResets = new Map();
 const controlSessions=createControlSessions(db);
 const sellers=sellerStore(db);chats.sellerInvites=sellers;chats.profileRole=id=>sellers.role(id);sellers.sync(chats);
 const isTicketAdmin=id=>Boolean(db.prepare("SELECT 1 FROM accounts a JOIN support_keys k ON k.account=a.id WHERE a.id=? AND a.access_plan='admin' AND a.access_revoked=0 AND (a.suspended=0 OR a.suspended_until<=?) AND k.expires>?").get(id,Date.now(),Date.now()));
-const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
+const desktopChats=desktopMessenger(db,chats,isTicketAdmin);chats.profileRole=id=>desktopChats.role(id)||sellers.role(id);chats.profileName=id=>chats.profileRole(id)==='admin'?'qzu-Support':sellers.name(id);chats.desktopPrincipal=id=>Boolean(desktopChats.principal(id));chats.validParticipant=id=>desktopChats.valid(id);
 const helpTickets=userTickets(db,{isSeller:id=>sellers.isActive(id),isAdmin:isTicketAdmin,role:id=>sellers.role(id)});helpTickets.sweep();setInterval(()=>{helpTickets.sweep();sellers.sync(chats);},60000).unref();
 const notifyHelp=(id,actor)=>push.notify(helpTickets.recipients(id).filter(x=>x!==actor));
 const production = process.env.NODE_ENV === 'production';
@@ -575,7 +575,7 @@ function stateData(a) {
     supportRequests: a.access_plan==='admin' ? chats.supportRequests(a.id,true) : [],
     ...(a.access_plan==='admin'?{feedbackCount:feedback.count(true)}:{}),
     rooms: chats.snapshot(a.id),
-    contacts: contacts.list(a.id).map(c=>({...c,peerRole:chats.profileRole(contacts.peer(a.id,c.id))})),
+    contacts: contacts.list(a.id).map(c=>({...c,peerRole:chats.profileRole(contacts.peer(a.id,c.id)),peerName:chats.profileName(contacts.peer(a.id,c.id))})),
     requests: chats.connectionRequests(a.id),
     invite: chats.ensureInvite(a.id),
     pinState: a.pin_state,
@@ -635,6 +635,7 @@ app.get('/api/qr', async(req, res) => {
   });
   res.json({ image, code: inv.code, expires: inv.expires });
 });
+app.post('/api/connect/preview',guard('connect-preview',10,60000),(req,res)=>{const code=typeof req.body?.code==='string'?req.body.code.trim().toUpperCase():'';sellers.sync(chats);chats.sweep();const invite=chats.codes.get(code);if(!invite||invite.user===req.account.id||!desktopChats.valid(invite.user))return res.status(404).json({error:'Connection unavailable.'});res.json({admin:!invite.group&&chats.profileRole(invite.user)==='admin',group:Boolean(invite.group)});});
 app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   const code = typeof req.body?.code === 'string' ? req.body.code.trim().toUpperCase(): '';
   if (!/^[A-Z0-9]{6}$/.test(code)) return res.status(400).json({
@@ -643,11 +644,6 @@ app.post('/api/connect', guard('connect', 10, 60_000), (req, res) => {
   sellers.sync(chats);chats.sweep();
   const invite=chats.codes.get(code);
   if(invite&&!desktopChats.valid(invite.user))return res.status(404).json({error:'Connection unavailable.'});
-  if(invite&&!invite.group&&!invite.seller&&!invite.desktop&&invite.user!==req.account.id){
-    const agents=activeSupportAccounts(),senderAdmin=agents.some(a=>a.id===req.account.id),targetAdmin=agents.some(a=>a.id===invite.user);
-    if(targetAdmin&&!senderAdmin)return res.json({id:chats.openMobileSupport(req.account.id,invite.user)});
-    if(senderAdmin&&!targetAdmin)return res.json({id:chats.openMobileSupport(invite.user,req.account.id,true)});
-  }
   res.json(chats.requestConnection(req.account.id, code, req.body?.nickname));
 });
 function notifyRoom(sender,id){
