@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -68,7 +68,7 @@ try {
   child = spawn(process.execPath, ['server.mjs'], {
     env: {
       ...process.env, NODE_ENV: 'test', PUBLIC_ORIGIN: '', HOST: '127.0.0.1', PORT: '0',
-      QZU_DB: database, QZU_ADMIN_DIR: join(dir, 'admin'), QZU_ACCESS_REQUIRED: 'false', QZU_MOBILE_ONLY: 'false'
+      QZU_DB: database, QZU_RELEASE_DIR: dir, QZU_ADMIN_DIR: join(dir, 'admin'), QZU_ACCESS_REQUIRED: 'false', QZU_MOBILE_ONLY: 'false'
     },
     stdio: ['ignore', 'pipe', 'inherit']
   });
@@ -92,6 +92,20 @@ try {
     channel: process.env.QZU_TEST_CHROME_PATH ? undefined : 'chromium',
     args: ['--use-fake-device-for-media-stream']
   });
+
+  const download=await browser.newPage({viewport:{width:390,height:844},isMobile:true});
+  await download.goto(origin+'/download');
+  await download.getByText('Download unavailable.',{exact:true}).waitFor();
+  assert.equal(await download.getByRole('link',{name:'Download for Android'}).count(),0);
+  const release=JSON.parse(readFileSync(new URL('../package.json',import.meta.url))).version;
+  writeFileSync(join(dir,'qzu-'+release+'.apk'),'APK fixture');
+  await download.reload();
+  const downloadLink=download.getByRole('link',{name:'Download for Android'});
+  await downloadLink.waitFor();
+  assert.equal(await downloadLink.getAttribute('href'),'/downloads/qzu-'+release+'.apk');
+  assert.equal(await (await download.request.get(origin+'/downloads/qzu-'+release+'.apk')).text(),'APK fixture');
+  await download.getByText('Already using qzu.?',{exact:true}).waitFor();
+  await download.context().close();
 
   let ticketCustomer;
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
@@ -386,6 +400,43 @@ try {
   assert.equal(activation, sellerKey);
   await play.context().close();
   console.log('Packaged Google Play client accepts seller activation keys.');
+
+  const direct=await browser.newPage({viewport:{width:390,height:844},isMobile:true,reducedMotion:'reduce'});
+  const directOrigin='https://direct.qzu.test';
+  await direct.addInitScript(origin=>{
+    window.QZU_API_ORIGIN=origin;
+    window.QZU_APP_VERSION='0.17.15';
+    window.QZU_DISTRIBUTION='direct';
+    window.Capacitor={
+      isNativePlatform:()=>true,getPlatform:()=>'android',isPluginAvailable:()=>true,
+      registerPlugin:()=>({
+        sign:async()=>({publicKey:'fixture',signature:'fixture'}),
+        addListener:async(name,listener)=>{if(name==='pushNotificationActionPerformed')window.tapUpdate=listener;},
+        openUpdate:async({url})=>{window.openedUpdate=url;}
+      })
+    };
+  },directOrigin);
+  await direct.route(directOrigin+'/**',async route=>{
+    const path=new URL(route.request().url()).pathname;
+    if(path==='/api/session')await route.fulfill({json:{accessRequired:true}});
+    else if(path==='/api/version')await route.fulfill({json:{latest:'0.17.16',downloads:{android:directOrigin+'/download'}}});
+    else await route.fulfill({response:await route.fetch({url:origin+path})});
+  });
+  await direct.goto(directOrigin);
+  await direct.locator('dialog .pay-shell').waitFor({timeout:8000});
+  await direct.evaluate(()=>{
+    unlockToken='fixture-unlock';
+    modalLocked=false;
+    accessDue=false;
+    closeModal();
+    deferUpdate('0.17.16');
+    window.tapUpdate({notification:{data:{kind:'app-update',version:'0.17.16'}}});
+  });
+  await direct.getByRole('heading',{name:'Update qzu.?',exact:true}).waitFor({timeout:8000});
+  await direct.getByRole('button',{name:'Update now',exact:true}).click();
+  assert.equal(await direct.evaluate(()=>window.openedUpdate),directOrigin+'/download');
+  await direct.context().close();
+  console.log('Android release notification opens the download page.');
 
   let sellerUnlock = '';
   function sellerDeviceHeaders(method, path, body, unlock) {

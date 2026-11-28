@@ -22,10 +22,15 @@ test('FCM uses scoped signed OAuth, cached token and generic notification only',
  assert.equal(message.data,undefined);
  assert.equal(message.android.ttl,'60s');
  assert.equal(calls[1].options.headers.Authorization,'Bearer test-token');
+ await deliver('token1',1,{version:'0.17.16'});
+ const update=JSON.parse(calls.at(-1).options.body).message;
+ assert.equal(update.notification.title,'New update available');
+ assert.deepEqual(update.data,{kind:'app-update',version:'0.17.16'});
+ assert.equal(update.android.notification.tag,'qzu_update');
 });
 test('Android-only push rejects iOS and removes invalid tokens',async()=>{
  const db=new DatabaseSync(':memory:');
- db.exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,pin_state TEXT,access_plan TEXT,paid_until INTEGER);INSERT INTO accounts VALUES('a','ready','lifetime',NULL)");
+ db.exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,pin_state TEXT,access_plan TEXT,paid_until INTEGER,access_revoked INTEGER DEFAULT 0,suspended INTEGER DEFAULT 0,suspended_until INTEGER);INSERT INTO accounts(id,pin_state,access_plan,paid_until) VALUES('a','ready','lifetime',NULL)");
  const service=privatePush(db,{firebase:async()=>({unregistered:true})});
  assert.deepEqual(service.platforms,['android']);
  assert.throws(()=>service.register('a','ios','a'.repeat(64)));
@@ -34,4 +39,24 @@ test('Android-only push rejects iOS and removes invalid tokens',async()=>{
  assert.equal(service.registered('a'),false);db.close();
 });
 
-test('push self test exposes only safe diagnostic result',async()=>{const db=new DatabaseSync(':memory:');db.exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,pin_state TEXT,access_plan TEXT,paid_until INTEGER);INSERT INTO accounts VALUES('a','ready','lifetime',NULL)");let count;const service=privatePush(db,{firebase:async(token,n)=>{count=n;return {ok:true};},unread:()=>5});assert.deepEqual(await service.test('a'),{result:'not-registered'});service.register('a','android','a'.repeat(64));assert.deepEqual(await service.test('a'),{result:'accepted'});assert.equal(count,5);assert.equal(service.diagnostic('a').result,'accepted');db.close();});
+test('push self test exposes only safe diagnostic result',async()=>{const db=new DatabaseSync(':memory:');db.exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,pin_state TEXT,access_plan TEXT,paid_until INTEGER,access_revoked INTEGER DEFAULT 0,suspended INTEGER DEFAULT 0,suspended_until INTEGER);INSERT INTO accounts(id,pin_state,access_plan,paid_until) VALUES('a','ready','lifetime',NULL)");let count;const service=privatePush(db,{firebase:async(token,n)=>{count=n;return {ok:true};},unread:()=>5});assert.deepEqual(await service.test('a'),{result:'not-registered'});service.register('a','android','a'.repeat(64));assert.deepEqual(await service.test('a'),{result:'accepted'});assert.equal(count,5);assert.equal(service.diagnostic('a').result,'accepted');db.close();});
+
+test('release alerts reach older direct Android builds once per version',async t=>{
+ const db=new DatabaseSync(':memory:');
+ t.after(()=>db.close());
+ db.exec(`CREATE TABLE accounts(id TEXT PRIMARY KEY,pin_state TEXT DEFAULT 'active',access_plan TEXT DEFAULT 'lifetime',
+   paid_until INTEGER,access_revoked INTEGER DEFAULT 0,suspended INTEGER DEFAULT 0,suspended_until INTEGER);
+   INSERT INTO accounts(id) VALUES ('direct'),('play'),('current'),('legacy'),('suspended');
+   UPDATE accounts SET suspended=1 WHERE id='suspended';`);
+ const deliveries=[];
+ const push=privatePush(db,{firebase:async(token,count,update)=>{deliveries.push({token,update});return {ok:true};}});
+ const direct={distribution:'direct',version:'0.17.15'};
+ push.register('direct','android','a'.repeat(64),direct);
+ push.register('play','android','b'.repeat(64),{...direct,distribution:'google-play'});
+ push.register('current','android','c'.repeat(64),{...direct,version:'0.17.16'});
+ push.register('legacy','android','d'.repeat(64));
+ push.register('suspended','android','e'.repeat(64),direct);
+ await push.announceRelease('0.17.16');
+ await push.announceRelease('0.17.16');
+ assert.deepEqual(deliveries,[{token:'a'.repeat(64),update:{version:'0.17.16'}}]);
+});

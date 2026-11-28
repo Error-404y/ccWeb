@@ -1,0 +1,16 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; --surface: #fff; --ink: #17181a; --muted: #595b60; --line: #dedfe2; --accent: #b81928; }
+* { box-sizing: border-box; }
+body { display: grid; min-height: 100svh; place-items: center; margin: 0; padding: 24px; background: var(--surface); color: var(--ink); }
+main { width: min(100%, 420px); text-align: center; }
+.logo { display: inline-flex; align-items: center; gap: 10px; font-size: 26px; font-weight: 750; letter-spacing: -.04em; }
+.logo span { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 11px; background: var(--accent); color: white; font: 700 21px ui-monospace, monospace; }
+h1 { margin: 22px 0 5px; font-size: clamp(24px, 7vw, 34px); letter-spacing: -.04em; }
+.version { margin: 0 0 23px; color: var(--muted); font-size: 14px; }
+.version:empty { display: none; }
+.download { display: block; padding: 14px 16px; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 700; text-decoration: none; }
+.download:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
+.instructions { display: grid; gap: 9px; margin-top: 20px; text-align: start; }
+.instructions p { margin: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.instructions strong { display: block; color: var(--ink); }
+main:not(:has(.download)) .instructions { display: none; }
+@media (prefers-color-scheme: dark) { :root { --surface:#151617; --ink:#f7f7f8; --muted:#c0c1c5; --line:#393b40; --accent:#c62132; } }
