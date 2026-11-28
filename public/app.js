@@ -2348,7 +2348,7 @@ async function loop() {
 }
 updatePages();
 const boot=$('bootSplash');
-const bootMinimum=bootPending?new Promise(resolve=>{document.documentElement.classList.add('booting');boot.classList.add('boot-running');setTimeout(resolve,5000);}):Promise.resolve();
+const bootMinimum=bootPending?new Promise(resolve=>{document.documentElement.classList.add('booting');boot.classList.add('boot-running');setTimeout(resolve,1150);}):Promise.resolve();
 async function finishBoot(){if(!bootPending)return;await bootMinimum;if(!bootPending)return;bootPending=false;boot.classList.add('boot-ready');await new Promise(resolve=>setTimeout(resolve,240));boot.remove();document.documentElement.classList.remove('booting');}
 if(!bootPending)boot.remove();getSession();
 loop();
