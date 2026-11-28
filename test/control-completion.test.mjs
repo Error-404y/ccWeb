@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {openAccounts,createAccount,setLogin,findAccount} from '../lib/accounts.mjs';
 import {initDevices,findDeviceAccount} from '../lib/devices.mjs';
-import {initAccess,createSupportKey,releaseSupportKey,invoiceRow,invoiceStatus,submitPayment,approvePayment,redeemAccess,applyRenewal} from '../lib/access.mjs';
+import {initAccess,createSupportKey,rotateSupportKey,releaseSupportKey,invoiceRow,invoiceStatus,submitPayment,approvePayment,redeemAccess,applyRenewal} from '../lib/access.mjs';
 import {initPayments,createCryptoInvoice,inspectTransaction,verifyCryptoInvoice,COINS} from '../lib/crypto-payments.mjs';
 import {initControl,issueRecovery,recoverAccount,createControlSessions,desktopControlAllowed,accountAction} from '../lib/control.mjs';
 import {complianceStore} from '../lib/compliance.mjs';
@@ -57,7 +57,7 @@ test('desktop admin keys do not consume or transfer mobile slots, and reject nor
  assert.equal(findDeviceAccount(db,'admin-device').id,id);
  releaseSupportKey(db,id);assert.equal(sessions.check(linked.token),null);
  const fresh=sessions.login(key,'');time+=15*60000;assert.equal(sessions.check(fresh.token),null);
- const again=sessions.login(key,'');db.prepare('DELETE FROM support_keys').run();assert.equal(sessions.check(again.token),null);
+ const again=sessions.login(key,'');const replacement=rotateSupportKey(db,key);assert.equal(sessions.check(again.token),null);assert.throws(()=>sessions.login(key,''));const updated=sessions.login(replacement,'');assert.equal(updated.id,id);db.prepare('DELETE FROM support_keys').run();assert.equal(sessions.check(updated.token),null);
  }finally{db.close();}
 });
 test('Control Center accepts desktop Windows and macOS browser identifiers and rejects mobile identifiers',()=>{
